@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>販売履歴モック</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #0f172a;
+        color: #e2e8f0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      h1 {
+        margin-top: 0;
+      }
+
+      .card {
+        max-width: 1100px;
+        margin: 0 auto 24px;
+        padding: 20px;
+        border: 1px solid #334155;
+        border-radius: 16px;
+        background: #111827;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 12px;
+        border-bottom: 1px solid #334155;
+        text-align: left;
+        font-size: 14px;
+      }
+
+      th {
+        color: #cbd5e1;
+        background: #1e293b;
+      }
+
+      a {
+        color: #a78bfa;
+      }
+
+      pre {
+        overflow: auto;
+        padding: 16px;
+        border-radius: 12px;
+        background: #020617;
+        color: #cbd5e1;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <h1>メルカリ販売履歴モック</h1>
+      <p>このページで 1ページ分の読み取り結果を事前確認できます。</p>
+
+      <div id="my-page-main-content">
+        <table>
+          <thead>
+            <tr>
+              <th>商品</th>
+              <th>売上金額</th>
+              <th>列3</th>
+              <th>列4</th>
+              <th>列5</th>
+              <th>列6</th>
+              <th>列7</th>
+              <th>列8</th>
+              <th>取引日時</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <a href="https://jp.mercari.com/transaction/m12345678">
+                  ナイキ スニーカー
+                </a>
+              </td>
+              <td>¥1,500</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>2026/04/01 21:15</td>
+            </tr>
+            <tr>
+              <td>
+                <a href="https://jp.mercari.com/transaction/m87654321">
+                  アウトドアジャケット
+                </a>
+              </td>
+              <td>15,000円</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>2026/03/29 09:40</td>
+            </tr>
+            <tr>
+              <td>
+                <a href="https://jp.mercari.com/transaction/m55550000">
+                  ハンドメイドバッグ
+                </a>
+              </td>
+              <td>¥980</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>2026/03/20 13:05</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>パース結果</h2>
+      <pre id="result">読み込み中...</pre>
+    </section>
+
+    <script src="parser.js"></script>
+    <script>
+      const items = window.FurimanagerParser.parseSoldItemsFromDocument(document);
+      console.log("[furimanager-extension] mock parse result", items);
+      document.getElementById("result").textContent = JSON.stringify(items, null, 2);
+    </script>
+  </body>
+</html>

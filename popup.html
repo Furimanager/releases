@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>フリマネージャー</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="hero-card">
+        <p class="hero-card__eyebrow">FURIMANAGER EXTENSION</p>
+        <h1 class="hero-card__title">
+          <span class="hero-card__brand">フリマネージャー</span>
+          <span class="hero-card__pro-badge">
+            <span class="hero-card__pro-text">PRO</span>
+          </span>
+        </h1>
+        <p class="hero-card__description">
+          メルカリ販売履歴の取得から送信までを、拡張パネル上でまとめて扱うための補助ツールです。
+        </p>
+      </header>
+
+      <section class="auth-card" aria-live="polite">
+        <div class="auth-card__header">
+          <div>
+            <p class="auth-card__eyebrow">Account</p>
+            <h2 class="auth-card__title">Supabase 認証</h2>
+          </div>
+          <p id="authStateText" class="auth-card__state auth-card__state--idle">未ログイン</p>
+        </div>
+
+        <form id="loginForm" class="auth-form">
+          <label class="field">
+            <span class="field__label">メールアドレス</span>
+            <input id="emailInput" class="field__input" type="email" autocomplete="username" />
+          </label>
+          <label class="field">
+            <span class="field__label">パスワード</span>
+            <input id="passwordInput" class="field__input" type="password" autocomplete="current-password" />
+          </label>
+          <button id="loginButton" class="action-button action-button--auth" type="submit">
+            ログイン
+          </button>
+        </form>
+
+        <div id="sessionPanel" class="account-panel" hidden>
+          <div class="account-panel__summary">
+            <p class="account-panel__label">ログイン中</p>
+            <p id="sessionText" class="account-panel__email">ログイン中</p>
+          </div>
+          <button id="logoutButton" class="action-button action-button--logout" type="button">
+            ログアウト
+          </button>
+        </div>
+
+        <p id="authMessage" class="auth-message auth-message--idle">設定待ち</p>
+      </section>
+
+      <section class="panel status-card" aria-live="polite">
+        <div class="panel__header">
+          <div>
+            <p class="panel__eyebrow">Status</p>
+            <h2 class="panel__title">動作状態</h2>
+          </div>
+        </div>
+        <p id="statusText" class="status-card__value status-card__value--idle">待機中</p>
+        <dl id="statusDetails" class="status-details"></dl>
+      </section>
+
+      <section class="panel actions-card">
+        <div class="panel__header">
+          <div>
+            <p class="panel__eyebrow">Actions</p>
+            <h2 class="panel__title">取得と同期</h2>
+          </div>
+          <p class="panel__caption">日常運用で使う3つの操作に整理しています。</p>
+        </div>
+
+        <div class="action-grid">
+          <button id="pingButton" class="action-button action-button--ghost" type="button">
+            接続確認
+          </button>
+          <button id="resetDeltaStateButton" class="action-button action-button--reset" type="button">
+            同期状態をリセット
+          </button>
+          <button id="scrapeAndSendButton" class="action-button action-button--send" type="button">
+            販売履歴を同期
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <script src="config.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

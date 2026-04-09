@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "フリマネージャー",
+  "description": "メルカリ販売履歴を取得するための拡張の土台",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "storage", "tabs"],
+  "host_permissions": ["https://jp.mercari.com/*", "https://*.supabase.co/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://jp.mercari.com/mypage/listings/sold*"],
+      "js": ["parser.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
