@@ -226,6 +226,26 @@ function parseSupabaseError(data, fallbackMessage) {
   return data.error_description || data.msg || data.message || data.error || fallbackMessage;
 }
 
+function isDuplicateSyncErrorMessage(message) {
+  const normalizedMessage = String(message || "").toLowerCase();
+
+  return (
+    normalizedMessage.includes("duplicate key value violates unique constraint") ||
+    normalizedMessage.includes("transactions_user_external_unique")
+  );
+}
+
+function getUserFacingSyncErrorMessage(error) {
+  const defaultMessage = "不明なエラーが発生しました";
+  const message = error instanceof Error ? error.message : defaultMessage;
+
+  if (isDuplicateSyncErrorMessage(message)) {
+    return "すでに全て取得済みです。これ以上取得できません。";
+  }
+
+  return message;
+}
+
 function applyAuthStateFromStorage(storageState) {
   const tokenExpiresAt =
     typeof storageState.supabaseTokenExpiresAt === "number"
@@ -331,6 +351,35 @@ function parseSoldAtTextToDate(soldAtText) {
   return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
+function resolveShippingCostForInsert(item) {
+  const shippingFee =
+    typeof item?.shippingFee === "number"
+      ? item.shippingFee
+      : typeof item?.shippingCost === "number"
+        ? item.shippingCost
+        : null;
+  const classification =
+    typeof item?.shippingFeeClassification === "string" && item.shippingFeeClassification
+      ? item.shippingFeeClassification
+      : shippingFee !== null
+        ? "unknown_numeric"
+        : "unknown";
+
+  if (classification === "buyer_paid" || classification === "buyer_cash_on_delivery") {
+    return 0;
+  }
+
+  if (
+    classification === "seller_paid" ||
+    classification === "seller_included" ||
+    classification === "unknown_numeric"
+  ) {
+    return shippingFee ?? 0;
+  }
+
+  return 0;
+}
+
 function convertItemToTransactionInsert(item) {
   if (typeof item?.soldPrice !== "number") {
     return null;
@@ -340,6 +389,7 @@ function convertItemToTransactionInsert(item) {
     platform: "mercari",
     item_name: item.itemName || "",
     sold_price: item.soldPrice,
+    shipping_cost: resolveShippingCostForInsert(item),
     platform_fee_rate: 0.1,
     sold_at: parseSoldAtTextToDate(item.soldAtText),
     external_id: item.mercariTransactionId || null
@@ -672,7 +722,7 @@ async function handleScrapeAndSend() {
     setStatus("error", "送信失敗", [
       {
         label: "詳細",
-        value: error instanceof Error ? error.message : "不明なエラーが発生しました"
+        value: getUserFacingSyncErrorMessage(error)
       }
     ]);
   } finally {
