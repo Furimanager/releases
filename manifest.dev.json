@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "フリマネージャー",
-  "description": "メルカリ販売履歴を取得するための拡張の土台",
+  "name": "Furimanager (Dev)",
+  "description": "Development manifest for local Furimanager testing",
   "version": "0.1.0",
   "permissions": ["activeTab", "storage", "tabs"],
   "background": {
@@ -9,9 +9,11 @@
   },
   "host_permissions": [
     "https://jp.mercari.com/*",
-    "https://api.mercari.jp/*",
     "https://*.mercdn.net/*",
-    "https://*.supabase.co/*"
+    "https://*.supabase.co/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.vercel.app/*"
   ],
   "content_scripts": [
     {
@@ -30,7 +32,10 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://jp.mercari.com/user/profile/*"],
+      "matches": [
+        "https://jp.mercari.com/user/profile/*",
+        "https://jp.mercari.com/shops/profile/*"
+      ],
       "css": ["src/research-overlay.css"],
       "js": [
         "config.js",
@@ -42,12 +47,15 @@
         "src/research-overlay.js"
       ],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
+    },
     {
-      "resources": ["src/research-page-fetcher.js"],
-      "matches": ["https://jp.mercari.com/*"]
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://*.vercel.app/*"
+      ],
+      "js": ["src/extension-installed-detector.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {
