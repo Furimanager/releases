@@ -24,6 +24,9 @@ type ResearchTableListing = {
   title: string;
   price: number;
   sold_at: string | null;
+  period_date?: string | null;
+  period_date_source?: string | null;
+  period_date_estimated?: boolean;
   thumbnail_url: string | null;
   item_url: string | null;
   status?: string;
@@ -72,6 +75,18 @@ type ResearchStats = {
   total: ResearchPeriodTotals;
 };
 
+type ResearchPeriodAnalysisSummary = {
+  stats: ResearchStats;
+  available: boolean;
+  usesEstimatedDates: boolean;
+  periodSourceField: string;
+  sourceCounts: Record<string, number>;
+  oldestItemDaysAgo: number | null;
+  reached90Days: boolean;
+  outOfRangeCount: number;
+  datedCount: number;
+};
+
 type PeriodDefinition = {
   key: PeriodKey;
   label: string;
@@ -98,6 +113,8 @@ type ResearchDashboardData = {
   fetchedAtLabel: string;
   totals: ResearchPeriodTotals;
   hasDatedListings: boolean;
+  usesEstimatedPeriodDates: boolean;
+  periodAnalysis: ResearchPeriodAnalysisSummary;
   periodCards: Array<PeriodDefinition & ResearchPeriodTotals>;
   rows: ResearchDisplayRow[];
 };
@@ -135,6 +152,7 @@ interface Window {
   FurimanagerResearchStats?: {
     calcPeriodStats: (listings: ResearchTableListing[]) => ResearchStats;
     getListingPeriodKey: (listing: ResearchTableListing) => PeriodKey | null;
+    summarizePeriodAnalysis?: (listings: ResearchTableListing[]) => ResearchPeriodAnalysisSummary;
   };
   FurimanagerResearchTable?: {
     renderTable: (
@@ -232,6 +250,20 @@ function createEmptyStats(): ResearchStats {
   };
 }
 
+function createEmptyPeriodAnalysis(): ResearchPeriodAnalysisSummary {
+  return {
+    stats: createEmptyStats(),
+    available: false,
+    usesEstimatedDates: false,
+    periodSourceField: "unavailable",
+    sourceCounts: {},
+    oldestItemDaysAgo: null,
+    reached90Days: false,
+    outOfRangeCount: 0,
+    datedCount: 0
+  };
+}
+
 function hasUsableSoldAt(listings: ResearchTableListing[]) {
   return listings.length > 0 && listings.every((listing) => {
     if (!listing.sold_at) {
@@ -262,8 +294,10 @@ function getListingPeriodStats(listing: ResearchTableListing) {
 }
 
 function getRepresentativeListing(current: ResearchTableListing, next: ResearchTableListing) {
-  const currentTime = current.sold_at ? new Date(current.sold_at).getTime() : 0;
-  const nextTime = next.sold_at ? new Date(next.sold_at).getTime() : 0;
+  const currentValue = current.period_date || current.sold_at;
+  const nextValue = next.period_date || next.sold_at;
+  const currentTime = currentValue ? new Date(currentValue).getTime() : 0;
+  const nextTime = nextValue ? new Date(nextValue).getTime() : 0;
 
   if (nextTime > currentTime) {
     return next;
@@ -326,9 +360,12 @@ function buildDashboardData(
     }),
     createEmptyTotals()
   );
-  const hasDatedListings = hasUsableSoldAt(listings);
-  const stats = hasDatedListings && window.FurimanagerResearchStats?.calcPeriodStats
-    ? window.FurimanagerResearchStats.calcPeriodStats(listings)
+  const periodAnalysis = window.FurimanagerResearchStats?.summarizePeriodAnalysis
+    ? window.FurimanagerResearchStats.summarizePeriodAnalysis(listings)
+    : createEmptyPeriodAnalysis();
+  const hasDatedListings = periodAnalysis.available || hasUsableSoldAt(listings);
+  const stats = hasDatedListings
+    ? periodAnalysis.stats
     : createEmptyStats();
 
   return {
@@ -338,6 +375,8 @@ function buildDashboardData(
     fetchedAtLabel,
     totals,
     hasDatedListings,
+    usesEstimatedPeriodDates: periodAnalysis.usesEstimatedDates,
+    periodAnalysis,
     periodCards: PERIOD_DEFINITIONS.map((period) => ({
       ...period,
       count: stats[period.key].count,
@@ -511,7 +550,8 @@ function createResearchHero(
     createMetaItem("状態", dashboard.sourceLabel),
     createMetaItem("最終取得", dashboard.fetchedAtLabel),
     createMetaItem("取得件数", `${dashboard.totals.count}件`),
-    createMetaItem("売上合計（取得分）", formatResearchPrice(dashboard.totals.revenue), true)
+    createMetaItem("売上合計（取得分）", formatResearchPrice(dashboard.totals.revenue), true),
+    createMetaItem("期間集計", dashboard.usesEstimatedPeriodDates ? "推定" : dashboard.hasDatedListings ? "確定" : "未取得")
   );
 
   eyebrow.append(brand, platformBadge);
@@ -608,6 +648,14 @@ function createStatsPendingNotice() {
     "div",
     "furimane-research-table__stats-note",
     "販売日時未取得のため、0〜30日 / 31〜60日 / 61〜90日の期間別集計はまだ確定表示していません。取得件数・売上合計・保存・シミュレーターは利用できます。"
+  );
+}
+
+function createStatsEstimatedNotice() {
+  return createElement(
+    "div",
+    "furimane-research-table__stats-note furimane-research-table__stats-note--estimated",
+    "API取得データの created / updated を使った推定集計です。売却日時が取れた場合は確定集計に切り替えます。"
   );
 }
 
@@ -873,6 +921,8 @@ async function renderResearchTable(
 
     if (!dashboard.hasDatedListings) {
       desktop.appendChild(createStatsPendingNotice());
+    } else if (dashboard.usesEstimatedPeriodDates) {
+      desktop.appendChild(createStatsEstimatedNotice());
     }
 
     desktop.appendChild(

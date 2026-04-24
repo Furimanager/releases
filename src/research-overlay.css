@@ -534,6 +534,12 @@
   line-height: 1.7;
 }
 
+.furimane-research-table__stats-note--estimated {
+  border-color: rgba(236, 72, 153, 0.38);
+  background: rgba(124, 58, 237, 0.12);
+  color: #f9a8d4;
+}
+
 .furimane-research-table__table-panel {
   border: 1px solid rgba(124, 58, 237, 0.18);
   border-radius: 8px;

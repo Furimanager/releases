@@ -13,6 +13,9 @@ type ResearchListingRecord = {
   title: string;
   price: number;
   sold_at: string | null;
+  period_date?: string | null;
+  period_date_source?: string | null;
+  period_date_estimated?: boolean;
   thumbnail_url: string | null;
   item_url: string | null;
   seller_id?: string;
@@ -42,6 +45,13 @@ type ResearchFetchResult = {
 };
 
 type ResearchApiRawListing = Record<string, unknown>;
+
+type ApiPeriodDateCandidate = {
+  source: string;
+  isoValue: string;
+  timeMs: number;
+  isEstimated: boolean;
+};
 
 type PageContextFetchResponse = {
   type: string;
@@ -201,6 +211,8 @@ function emitApiProgressFromPagePayload(
     seller.platform
   );
   const totalCount = typeof data.totalCount === "number" ? data.totalCount : listings.length;
+
+  logApiPeriodAnalysis(listings, data.partial ? "page_api_progress" : "page_api_done");
 
   options.onProgress?.(listings.length, {
     listings,
@@ -697,11 +709,16 @@ function collectListings(platform: ResearchPlatform | null, diagnostics?: DomCol
       diagnostics.acceptedCount += 1;
     }
 
+    const soldAt = parseSoldAt(text);
+
     listings.set(itemId, {
       item_id: itemId,
       title,
       price,
-      sold_at: parseSoldAt(text),
+      sold_at: soldAt,
+      period_date: soldAt,
+      period_date_source: soldAt ? "sold_at" : null,
+      period_date_estimated: false,
       thumbnail_url: getThumbnailUrl(link),
       item_url: itemUrl,
       status: getListingStatus(text, platform),
@@ -813,17 +830,19 @@ function getApiProgressRawListings(progress: Partial<PageContextFetchResponse>) 
   return payload["data"].filter(isResearchObject);
 }
 
-function getApiTemporaryDateCandidate(rawListing: ResearchApiRawListing) {
+function getApiPeriodDateCandidate(rawListing: ResearchApiRawListing): ApiPeriodDateCandidate | null {
   if (!isResearchObject(rawListing)) {
     return null;
   }
 
-  // API PoCの停止判定専用。created/updatedは売却日時としては扱わない。
-  const candidates: Array<[string, unknown]> = [
+  const confirmedCandidates: Array<[string, unknown]> = [
     ["sold_at", rawListing.sold_at],
     ["soldAt", rawListing.soldAt],
     ["purchased_at", rawListing.purchased_at],
-    ["purchasedAt", rawListing.purchasedAt],
+    ["purchasedAt", rawListing.purchasedAt]
+  ];
+  // API PoCの期間分類/停止判定専用。created/updatedは売却日時としては扱わない。
+  const estimatedCandidates: Array<[string, unknown]> = [
     ["updated", rawListing.updated],
     ["updated_at", rawListing.updated_at],
     ["updatedAt", rawListing.updatedAt],
@@ -832,14 +851,15 @@ function getApiTemporaryDateCandidate(rawListing: ResearchApiRawListing) {
     ["createdAt", rawListing.createdAt]
   ];
 
-  for (const [source, value] of candidates) {
+  for (const [source, value] of [...confirmedCandidates, ...estimatedCandidates]) {
+    const isEstimated = estimatedCandidates.some(([estimatedSource]) => estimatedSource === source);
     const isoValue = getIsoDateValue(value);
 
     if (isoValue) {
       const timeMs = new Date(isoValue).getTime();
 
       if (Number.isFinite(timeMs)) {
-        return { source, timeMs };
+        return { source, isoValue, timeMs, isEstimated };
       }
     }
 
@@ -847,7 +867,7 @@ function getApiTemporaryDateCandidate(rawListing: ResearchApiRawListing) {
       const timeMs = value > 100000000000 ? value : value * 1000;
 
       if (Number.isFinite(timeMs)) {
-        return { source, timeMs };
+        return { source, isoValue: new Date(timeMs).toISOString(), timeMs, isEstimated };
       }
     }
   }
@@ -865,7 +885,7 @@ function getApiAutoMorePeriodState(progress: Partial<PageContextFetchResponse>) 
   let oldestTimeMs: number | null = null;
 
   for (const rawListing of rawListings) {
-    const candidate = getApiTemporaryDateCandidate(rawListing);
+    const candidate = getApiPeriodDateCandidate(rawListing);
 
     if (!candidate) {
       missingDateCount += 1;
@@ -986,7 +1006,8 @@ async function runApiAutoMoreAssist(seller: ResearchSellerContext, signal?: Abor
 
   logApiFetch("info", "auto_more_assist_completed", {
     clickedCount,
-    handledPageLikeIndex
+    handledPageLikeIndex,
+    stop_reason: "safety_limit_clicks_exhausted"
   });
 }
 
@@ -1251,6 +1272,96 @@ function logApiFetch(_level: "info" | "warn" | "error", step: string, payload: R
   console.log(`${API_FETCH_LOG_PREFIX} ${step}`, payload);
 }
 
+function getListingPeriodDateMs(listing: ResearchListingRecord) {
+  const value = listing.period_date || listing.sold_at;
+
+  if (!value) {
+    return null;
+  }
+
+  const timeMs = new Date(value).getTime();
+  return Number.isFinite(timeMs) ? timeMs : null;
+}
+
+function getListingPeriodKeyForLog(listing: ResearchListingRecord) {
+  const timeMs = getListingPeriodDateMs(listing);
+
+  if (timeMs === null) {
+    return null;
+  }
+
+  const daysAgo = Math.floor((Date.now() - timeMs) / (24 * 60 * 60 * 1000));
+
+  if (daysAgo < 0 || daysAgo > 90) {
+    return null;
+  }
+
+  if (daysAgo <= 30) {
+    return "period_0_30_count";
+  }
+
+  if (daysAgo <= 60) {
+    return "period_31_60_count";
+  }
+
+  return "period_61_90_count";
+}
+
+function getPeriodAnalysisLogPayload(listings: ResearchListingRecord[], stopReason: string) {
+  const sourceCounts: Record<string, number> = {};
+  let oldestTimeMs: number | null = null;
+  let period030Count = 0;
+  let period3160Count = 0;
+  let period6190Count = 0;
+  let outOfRangeCount = 0;
+
+  for (const listing of listings) {
+    const timeMs = getListingPeriodDateMs(listing);
+
+    if (timeMs === null) {
+      continue;
+    }
+
+    const source = listing.period_date_source || (listing.sold_at ? "sold_at" : "unknown");
+    sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
+    oldestTimeMs = oldestTimeMs === null ? timeMs : Math.min(oldestTimeMs, timeMs);
+
+    const periodKey = getListingPeriodKeyForLog(listing);
+
+    if (periodKey === "period_0_30_count") {
+      period030Count += 1;
+    } else if (periodKey === "period_31_60_count") {
+      period3160Count += 1;
+    } else if (periodKey === "period_61_90_count") {
+      period6190Count += 1;
+    } else {
+      outOfRangeCount += 1;
+    }
+  }
+
+  const sourceEntries = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]);
+  const oldestItemDaysAgo = oldestTimeMs === null
+    ? null
+    : Math.floor((Date.now() - oldestTimeMs) / (24 * 60 * 60 * 1000));
+
+  return {
+    period_source_field: sourceEntries.length === 0 ? "unavailable" : sourceEntries.length === 1 ? sourceEntries[0][0] : "mixed",
+    sourceCounts,
+    oldest_item_days_ago: oldestItemDaysAgo,
+    reached_90_days: oldestItemDaysAgo !== null && oldestItemDaysAgo >= 90,
+    stop_reason: stopReason,
+    totalFetched: listings.length,
+    period_0_30_count: period030Count,
+    period_31_60_count: period3160Count,
+    period_61_90_count: period6190Count,
+    out_of_range_count: outOfRangeCount
+  };
+}
+
+function logApiPeriodAnalysis(listings: ResearchListingRecord[], stopReason: string) {
+  logApiFetch("info", "period_analysis", getPeriodAnalysisLogPayload(listings, stopReason));
+}
+
 function getApiListingStatus(rawListing: ResearchApiRawListing, soldAt: string | null) {
   const status = getStringValue(
     rawListing["status"],
@@ -1306,6 +1417,7 @@ function mapApiListingToResearchListing(
     rawListing["purchased_at"],
     rawListing["purchasedAt"]
   );
+  const periodDate = getApiPeriodDateCandidate(rawListing);
   const itemUrl = getHttpUrlValue(
     rawListing["item_url"],
     rawListing["itemUrl"],
@@ -1318,6 +1430,9 @@ function mapApiListingToResearchListing(
     title,
     price,
     sold_at: soldAt,
+    period_date: periodDate?.isoValue ?? soldAt,
+    period_date_source: periodDate?.source ?? (soldAt ? "sold_at" : null),
+    period_date_estimated: periodDate?.isEstimated ?? false,
     thumbnail_url: getApiThumbnailUrl(rawListing),
     item_url: itemUrl,
     seller_id: getStringValue(rawListing["seller_id"], rawListing["sellerId"], seller?.["id"]),
@@ -1426,21 +1541,23 @@ async function fetchSellerListingsByApiPoc(options: ResearchFetchOptions = {}) {
 
   const rawListings = apiPayload["data"].filter(isResearchObject);
   const listings = mapApiListingsToResearchListings(rawListings, seller.platform);
+  const normalizedListings = normalizeFetchedListings(listings, seller.platform);
 
   logApiPagerDiagnostic(apiPayload, rawListings);
-  options.onProgress?.(listings.length, {
-    listings: normalizeFetchedListings(listings, seller.platform),
-    totalCount: listings.length,
+  logApiPeriodAnalysis(normalizedListings, "page_api_payload_received");
+  options.onProgress?.(normalizedListings.length, {
+    listings: normalizedListings,
+    totalCount: normalizedListings.length,
     pageLikeIndex: null,
     partial: false,
     phase: "api_done"
   });
 
   logApiFetch("info", "mappedCount", {
-    mappedCount: listings.length
+    mappedCount: normalizedListings.length
   });
 
-  return normalizeFetchedListings(listings, seller.platform);
+  return normalizedListings;
 }
 
 async function fetchSellerResearchData(options: ResearchFetchOptions = {}): Promise<ResearchFetchResult> {

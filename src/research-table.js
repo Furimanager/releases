@@ -64,6 +64,19 @@ function createEmptyStats() {
         total: createEmptyTotals()
     };
 }
+function createEmptyPeriodAnalysis() {
+    return {
+        stats: createEmptyStats(),
+        available: false,
+        usesEstimatedDates: false,
+        periodSourceField: "unavailable",
+        sourceCounts: {},
+        oldestItemDaysAgo: null,
+        reached90Days: false,
+        outOfRangeCount: 0,
+        datedCount: 0
+    };
+}
 function hasUsableSoldAt(listings) {
     return listings.length > 0 && listings.every((listing) => {
         if (!listing.sold_at) {
@@ -88,8 +101,10 @@ function getListingPeriodStats(listing) {
     return periods;
 }
 function getRepresentativeListing(current, next) {
-    const currentTime = current.sold_at ? new Date(current.sold_at).getTime() : 0;
-    const nextTime = next.sold_at ? new Date(next.sold_at).getTime() : 0;
+    const currentValue = current.period_date || current.sold_at;
+    const nextValue = next.period_date || next.sold_at;
+    const currentTime = currentValue ? new Date(currentValue).getTime() : 0;
+    const nextTime = nextValue ? new Date(nextValue).getTime() : 0;
     if (nextTime > currentTime) {
         return next;
     }
@@ -136,9 +151,12 @@ function buildDashboardData(seller, listings, options) {
         count: result.count + 1,
         revenue: result.revenue + (Number.isFinite(listing.price) ? listing.price : 0)
     }), createEmptyTotals());
-    const hasDatedListings = hasUsableSoldAt(listings);
-    const stats = hasDatedListings && window.FurimanagerResearchStats?.calcPeriodStats
-        ? window.FurimanagerResearchStats.calcPeriodStats(listings)
+    const periodAnalysis = window.FurimanagerResearchStats?.summarizePeriodAnalysis
+        ? window.FurimanagerResearchStats.summarizePeriodAnalysis(listings)
+        : createEmptyPeriodAnalysis();
+    const hasDatedListings = periodAnalysis.available || hasUsableSoldAt(listings);
+    const stats = hasDatedListings
+        ? periodAnalysis.stats
         : createEmptyStats();
     return {
         platform,
@@ -147,6 +165,8 @@ function buildDashboardData(seller, listings, options) {
         fetchedAtLabel,
         totals,
         hasDatedListings,
+        usesEstimatedPeriodDates: periodAnalysis.usesEstimatedDates,
+        periodAnalysis,
         periodCards: PERIOD_DEFINITIONS.map((period) => ({
             ...period,
             count: stats[period.key].count,
@@ -276,7 +296,7 @@ function createResearchHero(seller, dashboard, options, bookmarkState) {
         : "furimane-research-table__platform-badge", getResearchPlatformLabel(dashboard.platform));
     const sellerName = createElement("h2", "furimane-research-table__seller-name", dashboard.sellerName);
     const meta = createElement("div", "furimane-research-table__meta-row");
-    meta.append(createMetaItem("状態", dashboard.sourceLabel), createMetaItem("最終取得", dashboard.fetchedAtLabel), createMetaItem("取得件数", `${dashboard.totals.count}件`), createMetaItem("売上合計（取得分）", formatResearchPrice(dashboard.totals.revenue), true));
+    meta.append(createMetaItem("状態", dashboard.sourceLabel), createMetaItem("最終取得", dashboard.fetchedAtLabel), createMetaItem("取得件数", `${dashboard.totals.count}件`), createMetaItem("売上合計（取得分）", formatResearchPrice(dashboard.totals.revenue), true), createMetaItem("期間集計", dashboard.usesEstimatedPeriodDates ? "推定" : dashboard.hasDatedListings ? "確定" : "未取得"));
     eyebrow.append(brand, platformBadge);
     main.append(eyebrow, sellerName, meta);
     const actions = createElement("div", "furimane-research-table__hero-actions");
@@ -342,6 +362,9 @@ function createPeriodCards(dashboard) {
 }
 function createStatsPendingNotice() {
     return createElement("div", "furimane-research-table__stats-note", "販売日時未取得のため、0〜30日 / 31〜60日 / 61〜90日の期間別集計はまだ確定表示していません。取得件数・売上合計・保存・シミュレーターは利用できます。");
+}
+function createStatsEstimatedNotice() {
+    return createElement("div", "furimane-research-table__stats-note furimane-research-table__stats-note--estimated", "API取得データの created / updated を使った推定集計です。売却日時が取れた場合は確定集計に切り替えます。");
 }
 function createBookmarkButton(row, bookmarkState, onUpdated) {
     const existingBookmark = findItemBookmark(bookmarkState, row.listing, row.platform);
@@ -519,6 +542,9 @@ async function renderResearchTable(container, seller, listings, options = {}) {
         desktop.append(createResearchHero(seller, dashboard, options, bookmarkState), createPeriodCards(dashboard));
         if (!dashboard.hasDatedListings) {
             desktop.appendChild(createStatsPendingNotice());
+        }
+        else if (dashboard.usesEstimatedPeriodDates) {
+            desktop.appendChild(createStatsEstimatedNotice());
         }
         desktop.appendChild(createResearchTable(dashboard.rows, dashboard, bookmarkState, purchasePrices, () => {
             void (async () => {
