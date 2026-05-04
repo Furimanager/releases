@@ -4,7 +4,7 @@ const FURIMANE_OVERLAY_ID = "furimane-research-overlay";
 const FURIMANE_OPEN_BUTTON_ID = "furimane-research-open-button";
 const FURIMANE_CLOSED_STORAGE_KEY = "furimane-research-closed";
 const FURIMANE_MAX_RETRY_COUNT = 3;
-const FURIMANE_DEFAULT_FETCH_STRATEGY = "dom";
+const FURIMANE_DEFAULT_FETCH_STRATEGY = "api";
 const FURIMANE_FETCH_STRATEGY_STORAGE_KEY = "furimane-research-fetch-strategy";
 
 type OverlayInsertTarget = {
@@ -19,6 +19,9 @@ type ResearchListing = {
   title: string;
   price: number;
   sold_at: string | null;
+  period_date?: string | null;
+  period_date_source?: string | null;
+  period_date_estimated?: boolean;
   thumbnail_url: string | null;
   item_url: string | null;
   status?: string;
@@ -36,6 +39,13 @@ type ResearchResultData = {
   listings: ResearchListing[];
 };
 
+type ResearchCacheResponse = {
+  cached?: boolean;
+  data?: ResearchResultData;
+  seller?: ResearchResultData["seller"];
+  listings?: ResearchListing[];
+} | null;
+
 type ResearchProgressDetails = {
   listings?: ResearchListing[];
   totalCount?: number | null;
@@ -51,11 +61,81 @@ type ResearchFlowOptions = {
 
 type ResearchErrorKind = "auth" | "plan" | "timeout" | "scraping" | "dom_changed" | "unknown";
 
+type ResearchOverlayWindow = Window & {
+  FurimanagerResearchApi?: {
+    getAppUrl?: () => string;
+    checkAccess: (options?: { signal?: AbortSignal }) => Promise<{ canUse?: boolean; canUseResearch?: boolean }>;
+    checkCache: (
+      sellerId: string,
+      platform: string,
+      options?: { signal?: AbortSignal }
+    ) => Promise<ResearchCacheResponse>;
+    saveResearchData: (
+      seller: ResearchResultData["seller"],
+      listings: ResearchListing[],
+      options?: { signal?: AbortSignal }
+    ) => Promise<unknown>;
+    saveSeller: (seller: {
+      platform: string;
+      seller_id: string;
+      seller_name: string | null;
+      seller_url: string;
+    }) => Promise<unknown>;
+  };
+  FurimanagerResearchScraper?: {
+    getSellerContextFromCurrentPage?: () => ResearchResultData["seller"] | null;
+    getPlatformFromCurrentUrl?: () => string | null;
+    fetchSellerResearchData: (options: {
+      strategy: "dom" | "api";
+      signal?: AbortSignal;
+      onProgress?: (count: number, details?: ResearchProgressDetails) => void;
+    }) => Promise<ResearchResultData & { strategy: "dom" | "api" }>;
+  };
+  FurimanagerResearchTable?: {
+    renderTable: (
+      container: HTMLElement,
+      seller: ResearchResultData["seller"],
+      listings: ResearchListing[],
+      options?: {
+        sourceLabel?: string;
+        onRefresh?: () => Promise<void>;
+        onSaveSeller?: (seller: ResearchResultData["seller"]) => Promise<void>;
+      }
+    ) => void | Promise<void>;
+  };
+};
+
 let currentAbortController: AbortController | null = null;
+
+function getOverlayWindow() {
+  return window as unknown as ResearchOverlayWindow;
+}
 
 function getResearchFetchStrategy() {
   const storedStrategy = localStorage.getItem(FURIMANE_FETCH_STRATEGY_STORAGE_KEY);
-  return storedStrategy === "api" ? "api" : FURIMANE_DEFAULT_FETCH_STRATEGY;
+  return storedStrategy === "dom" ? "dom" : FURIMANE_DEFAULT_FETCH_STRATEGY;
+}
+
+function getCachedResearchData(cache: ResearchCacheResponse) {
+  if (!cache?.cached) {
+    return null;
+  }
+
+  return cache.data ?? (cache.seller && cache.listings ? { seller: cache.seller, listings: cache.listings } : null);
+}
+
+function hasUsablePeriodDate(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  return !Number.isNaN(new Date(value).getTime());
+}
+
+function hasPeriodAnalysisData(listings: ResearchListing[] | undefined) {
+  return (listings ?? []).some((listing) => (
+    hasUsablePeriodDate(listing.period_date) || hasUsablePeriodDate(listing.sold_at)
+  ));
 }
 
 function getResearchPageSupportStatus() {
@@ -274,7 +354,7 @@ function renderAccessLocked(container: HTMLElement) {
 
   const link = document.createElement("a");
   link.className = "furimane-research-overlay__link-button";
-  link.href = `${window.FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000"}/dashboard/research`;
+  link.href = `${getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000"}/dashboard/research`;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
   link.textContent = "リサーチ追加プランを確認する";
@@ -372,7 +452,7 @@ function getResearchErrorCopy(kind: ResearchErrorKind) {
 function renderResearchError(container: HTMLElement, error: unknown, retry: () => void, retryCount = 0) {
   const kind = getResearchErrorKind(error);
   const copy = getResearchErrorCopy(kind);
-  const appUrl = window.FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
+  const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
   const wrapper = document.createElement("div");
   wrapper.className = "furimane-research-overlay__state furimane-research-overlay__state--error";
 
@@ -404,8 +484,8 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
 
 function renderResults(container: HTMLElement, data: ResearchResultData, sourceLabel: string) {
   const body = getOverlayBody(container);
-  const table = window.FurimanagerResearchTable;
-  const api = window.FurimanagerResearchApi;
+  const table = getOverlayWindow().FurimanagerResearchTable;
+  const api = getOverlayWindow().FurimanagerResearchApi;
 
   if (!body || !table) {
     setOverlayBody(container, [createParagraph("リサーチ結果の表示に失敗しました。")]);
@@ -423,7 +503,7 @@ function renderResults(container: HTMLElement, data: ResearchResultData, sourceL
       }
 
       await api.saveSeller({
-        platform: seller.platform || window.FurimanagerResearchScraper?.getPlatformFromCurrentUrl?.() || "mercari",
+        platform: seller.platform || getOverlayWindow().FurimanagerResearchScraper?.getPlatformFromCurrentUrl?.() || "mercari",
         seller_id: seller.seller_id ?? "",
         seller_name: seller.seller_name ?? null,
         seller_url: seller.seller_url ?? window.location.href
@@ -444,21 +524,21 @@ function renderResearchProgress(
   if (details?.phase === "dom_fallback" || mode === "dom_fallback") {
     renderLoading(container, count > 0
       ? `通常取得に切り替えて読み込み中... 現在 ${count}件`
-      : "API取得が安定しないため、通常取得に切り替えています...");
+      : "取得が安定しないため、通常取得に切り替えています...");
     return;
   }
 
   if (!progressListings || progressListings.length === 0) {
     renderLoading(container, mode === "api"
-      ? `API取得を待っています... 現在 ${count}件`
+      ? `リサーチデータを取得中... 現在 ${count}件`
       : `通常取得中... 現在 ${count}件`);
     return;
   }
 
   const totalCount = typeof details?.totalCount === "number" ? details.totalCount : progressListings.length;
   const sourceLabel = details?.phase === "api_done" || details?.partial === false
-    ? `API取得の反映完了：${totalCount}件`
-    : `API取得中：${totalCount}件を表示中`;
+    ? `取得完了：${totalCount}件`
+    : `取得中：${totalCount}件を表示中`;
 
   renderResults(container, {
     seller: {
@@ -473,8 +553,9 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
   currentAbortController?.abort();
   currentAbortController = new AbortController();
   const { signal } = currentAbortController;
-  const api = window.FurimanagerResearchApi;
-  const scraper = window.FurimanagerResearchScraper;
+  const api = getOverlayWindow().FurimanagerResearchApi;
+  const scraper = getOverlayWindow().FurimanagerResearchScraper;
+  let renderedCache = false;
 
   if (!api || !scraper) {
     renderError(container, "リサーチ機能の読み込みに失敗しました。", () => runResearchFlow(container));
@@ -501,16 +582,15 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
     renderLoading(container, "キャッシュ確認中...");
 
     const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
+    const cachedData = getCachedResearchData(cache);
 
-    if (cache?.cached) {
-      const cachedData = cache.data ?? (cache.seller && cache.listings ? { seller: cache.seller, listings: cache.listings } : null);
-
-      if (cachedData) {
-        renderResults(container, cachedData, "24時間以内のキャッシュ");
-        return;
+    if (cachedData) {
+      if (hasPeriodAnalysisData(cachedData.listings)) {
+        renderResults(container, cachedData, "24\u6642\u9593\u4ee5\u5185\u306e\u30ad\u30e3\u30c3\u30b7\u30e5");
+        renderedCache = true;
+      } else {
+        renderLoading(container, "\u4fdd\u5b58\u6e08\u307f\u30c7\u30fc\u30bf\u3092\u78ba\u8a8d\u3057\u307e\u3057\u305f\u3002\u6700\u65b0\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u4e2d...");
       }
-
-      return;
     }
 
     const strategy = getResearchFetchStrategy();
@@ -519,12 +599,14 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
       sellerId: seller.seller_id
     });
 
-    renderLoading(container, strategy === "api"
-      ? "API取得を待っています... メルカリ側の表示に合わせて反映します"
-      : "通常取得中... 現在 0件");
+    if (!renderedCache) {
+      renderLoading(container, strategy === "api"
+        ? "\u30ea\u30b5\u30fc\u30c1\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u4e2d... \u53d6\u5f97\u3067\u304d\u305f\u5206\u304b\u3089\u53cd\u6620\u3057\u307e\u3059"
+        : "\u901a\u5e38\u53d6\u5f97\u4e2d... \u73fe\u5728 0\u4ef6");
+    }
 
     let progressMode: "dom" | "api" | "dom_fallback" = strategy;
-    const scraped = await scraper.fetchSellerResearchData({
+    const scraped: ResearchResultData & { strategy: "dom" | "api" } = await scraper.fetchSellerResearchData({
       strategy,
       signal,
       onProgress: (count, details) => {
@@ -537,12 +619,12 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
     });
 
     const finalSourceLabel = strategy === "api" && scraped.strategy === "api"
-      ? "API取得完了"
+      ? "取得完了"
       : strategy === "api" && scraped.strategy === "dom"
         ? "通常取得で表示"
         : "新規取得";
 
-    renderLoading(container, scraped.strategy === "api" ? "API取得が完了しました。保存中..." : "保存中...");
+    renderLoading(container, scraped.strategy === "api" ? "取得が完了しました。保存中..." : "保存中...");
     await api.saveResearchData(scraped.seller, scraped.listings, { signal });
     scraped.seller.fetched_at = new Date().toISOString();
     renderResults(container, scraped, finalSourceLabel);
@@ -553,6 +635,10 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
 
     const message = error instanceof Error ? error.message : "取得に失敗しました。";
     console.error("[furimane-research] flow failed", error);
+    if (renderedCache) {
+      console.warn("[furimane-research] refresh failed; showing cached result");
+      return;
+    }
     renderError(container, message, () => runResearchFlow(container));
   }
 }
@@ -563,8 +649,9 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
   const { signal } = currentAbortController;
   const retryCount = options.retryCount ?? 0;
   const retry = () => runResearchFlowSafe(container, { ...options, retryCount: retryCount + 1 });
-  const api = window.FurimanagerResearchApi;
-  const scraper = window.FurimanagerResearchScraper;
+  const api = getOverlayWindow().FurimanagerResearchApi;
+  const scraper = getOverlayWindow().FurimanagerResearchScraper;
+  let renderedCache = false;
 
   if (!api || !scraper) {
     const error = new Error("scraping_failed");
@@ -595,13 +682,14 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
     renderLoading(container, options.forceRefresh ? "最新データを取得中..." : "キャッシュ確認中...");
 
     const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
+    const cachedData = getCachedResearchData(cache);
 
-    if (cache?.cached) {
-      const cachedData = cache.data ?? (cache.seller && cache.listings ? { seller: cache.seller, listings: cache.listings } : null);
-
-      if (cachedData) {
-        renderResults(container, cachedData, "24時間以内のキャッシュ");
-        return;
+    if (cachedData) {
+      if (hasPeriodAnalysisData(cachedData.listings)) {
+        renderResults(container, cachedData, "24\u6642\u9593\u4ee5\u5185\u306e\u30ad\u30e3\u30c3\u30b7\u30e5");
+        renderedCache = true;
+      } else {
+        renderLoading(container, "\u4fdd\u5b58\u6e08\u307f\u30c7\u30fc\u30bf\u3092\u78ba\u8a8d\u3057\u307e\u3057\u305f\u3002\u6700\u65b0\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u4e2d...");
       }
     }
 
@@ -611,12 +699,14 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
       sellerId: seller.seller_id
     });
 
-    renderLoading(container, strategy === "api"
-      ? "API取得を待っています... メルカリ側の表示に合わせて反映します"
-      : "通常取得中... 現在 0件");
+    if (!renderedCache) {
+      renderLoading(container, strategy === "api"
+        ? "\u30ea\u30b5\u30fc\u30c1\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u4e2d... \u53d6\u5f97\u3067\u304d\u305f\u5206\u304b\u3089\u53cd\u6620\u3057\u307e\u3059"
+        : "\u901a\u5e38\u53d6\u5f97\u4e2d... \u73fe\u5728 0\u4ef6");
+    }
 
     let progressMode: "dom" | "api" | "dom_fallback" = strategy;
-    const scraped = await scraper.fetchSellerResearchData({
+    const scraped: ResearchResultData & { strategy: "dom" | "api" } = await scraper.fetchSellerResearchData({
       strategy,
       signal,
       onProgress: (count, details) => {
@@ -629,12 +719,12 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
     });
 
     const finalSourceLabel = strategy === "api" && scraped.strategy === "api"
-      ? "API取得完了"
+      ? "取得完了"
       : strategy === "api" && scraped.strategy === "dom"
         ? "通常取得で表示"
         : "新規取得";
 
-    renderLoading(container, scraped.strategy === "api" ? "API取得が完了しました。保存中..." : "保存中...");
+    renderLoading(container, scraped.strategy === "api" ? "取得が完了しました。保存中..." : "保存中...");
     await api.saveResearchData(scraped.seller, scraped.listings, { signal });
     scraped.seller.fetched_at = new Date().toISOString();
     renderResults(container, scraped, finalSourceLabel);
@@ -644,6 +734,10 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
     }
 
     console.error("[furimane-research] flow failed", error);
+    if (renderedCache) {
+      console.warn("[furimane-research] refresh failed; showing cached result");
+      return;
+    }
     renderResearchError(container, error, retry, retryCount);
   }
 }

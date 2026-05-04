@@ -293,17 +293,21 @@ function getListingPeriodStats(listing: ResearchTableListing) {
   return periods;
 }
 
-function getRepresentativeListing(current: ResearchTableListing, next: ResearchTableListing) {
-  const currentValue = current.period_date || current.sold_at;
-  const nextValue = next.period_date || next.sold_at;
-  const currentTime = currentValue ? new Date(currentValue).getTime() : 0;
-  const nextTime = nextValue ? new Date(nextValue).getTime() : 0;
+function normalizeProductTitle(title: string) {
+  return title
+    .normalize("NFKC")
+    .replace(/[\u00a0\u3000]/g, " ")
+    .replace(/[‐‑‒–—―]/g, "-")
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
 
-  if (nextTime > currentTime) {
-    return next;
-  }
-
-  return current;
+function getProductGroupKey(listing: ResearchTableListing, platform: ResearchPlatform) {
+  const normalizedTitle = normalizeProductTitle(listing.title);
+  return `${platform}::${normalizedTitle || `item:${listing.item_id}`}`;
 }
 
 function buildDisplayRows(listings: ResearchTableListing[]) {
@@ -311,7 +315,7 @@ function buildDisplayRows(listings: ResearchTableListing[]) {
 
   for (const listing of listings) {
     const platform = normalizeResearchPlatform(listing.platform);
-    const key = `${platform}::${listing.title.trim()}::${listing.price}`;
+    const key = getProductGroupKey(listing, platform);
     const itemPeriods = getListingPeriodStats(listing);
     const existing = groups.get(key);
 
@@ -330,7 +334,6 @@ function buildDisplayRows(listings: ResearchTableListing[]) {
       continue;
     }
 
-    existing.listing = getRepresentativeListing(existing.listing, listing);
     existing.thumbnailUrl = existing.thumbnailUrl ?? listing.thumbnail_url;
     existing.totalCount += 1;
     existing.totalSales += Number.isFinite(listing.price) ? listing.price : 0;
@@ -342,6 +345,22 @@ function buildDisplayRows(listings: ResearchTableListing[]) {
   }
 
   return Array.from(groups.values());
+}
+
+function getDisplayedPeriodSales(row: ResearchDisplayRow) {
+  return PERIOD_DEFINITIONS.reduce((total, period) => total + row.periods[period.key].revenue, 0);
+}
+
+function sortRowsByDisplayedSales(rows: ResearchDisplayRow[]) {
+  return [...rows].sort((a, b) => {
+    const periodSalesDiff = getDisplayedPeriodSales(b) - getDisplayedPeriodSales(a);
+
+    if (periodSalesDiff !== 0) {
+      return periodSalesDiff;
+    }
+
+    return b.totalSales - a.totalSales;
+  });
 }
 
 function buildDashboardData(
@@ -382,7 +401,7 @@ function buildDashboardData(
       count: stats[period.key].count,
       revenue: stats[period.key].revenue
     })),
-    rows: buildDisplayRows(listings)
+    rows: sortRowsByDisplayedSales(buildDisplayRows(listings))
   };
 }
 

@@ -100,21 +100,26 @@ function getListingPeriodStats(listing) {
     }
     return periods;
 }
-function getRepresentativeListing(current, next) {
-    const currentValue = current.period_date || current.sold_at;
-    const nextValue = next.period_date || next.sold_at;
-    const currentTime = currentValue ? new Date(currentValue).getTime() : 0;
-    const nextTime = nextValue ? new Date(nextValue).getTime() : 0;
-    if (nextTime > currentTime) {
-        return next;
-    }
-    return current;
+function normalizeProductTitle(title) {
+    return title
+        .normalize("NFKC")
+        .replace(/[\u00a0\u3000]/g, " ")
+        .replace(/[‐‑‒–—―]/g, "-")
+        .replace(/[“”]/g, "\"")
+        .replace(/[‘’]/g, "'")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+}
+function getProductGroupKey(listing, platform) {
+    const normalizedTitle = normalizeProductTitle(listing.title);
+    return `${platform}::${normalizedTitle || `item:${listing.item_id}`}`;
 }
 function buildDisplayRows(listings) {
     const groups = new Map();
     for (const listing of listings) {
         const platform = normalizeResearchPlatform(listing.platform);
-        const key = `${platform}::${listing.title.trim()}::${listing.price}`;
+        const key = getProductGroupKey(listing, platform);
         const itemPeriods = getListingPeriodStats(listing);
         const existing = groups.get(key);
         if (!existing) {
@@ -131,7 +136,6 @@ function buildDisplayRows(listings) {
             });
             continue;
         }
-        existing.listing = getRepresentativeListing(existing.listing, listing);
         existing.thumbnailUrl = existing.thumbnailUrl ?? listing.thumbnail_url;
         existing.totalCount += 1;
         existing.totalSales += Number.isFinite(listing.price) ? listing.price : 0;
@@ -141,6 +145,18 @@ function buildDisplayRows(listings) {
         }
     }
     return Array.from(groups.values());
+}
+function getDisplayedPeriodSales(row) {
+    return PERIOD_DEFINITIONS.reduce((total, period) => total + row.periods[period.key].revenue, 0);
+}
+function sortRowsByDisplayedSales(rows) {
+    return [...rows].sort((a, b) => {
+        const periodSalesDiff = getDisplayedPeriodSales(b) - getDisplayedPeriodSales(a);
+        if (periodSalesDiff !== 0) {
+            return periodSalesDiff;
+        }
+        return b.totalSales - a.totalSales;
+    });
 }
 function buildDashboardData(seller, listings, options) {
     const platform = getResearchPlatform(seller);
@@ -172,7 +188,7 @@ function buildDashboardData(seller, listings, options) {
             count: stats[period.key].count,
             revenue: stats[period.key].revenue
         })),
-        rows: buildDisplayRows(listings)
+        rows: sortRowsByDisplayedSales(buildDisplayRows(listings))
     };
 }
 function getSortValue(row, sortKey) {

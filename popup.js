@@ -5,6 +5,7 @@ const AUTH_STORAGE_KEYS = [
   "supabaseUser",
   "supabaseTokenExpiresAt"
 ];
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 const statusText = document.getElementById("statusText");
 const statusDetails = document.getElementById("statusDetails");
@@ -246,20 +247,68 @@ function getUserFacingSyncErrorMessage(error) {
   return message;
 }
 
+function getTokenExpiresAt(expiresIn) {
+  return typeof expiresIn === "number" ? Date.now() + expiresIn * 1000 : null;
+}
+
+function shouldRefreshAuthToken(expiresAt) {
+  return typeof expiresAt === "number" && Date.now() >= expiresAt - TOKEN_REFRESH_MARGIN_MS;
+}
+
+async function persistAuthSession(data, fallbackRefreshToken = null, fallbackUser = null) {
+  const tokenExpiresAt = getTokenExpiresAt(data.expires_in);
+
+  authState.accessToken = data.access_token;
+  authState.refreshToken = data.refresh_token || fallbackRefreshToken || null;
+  authState.user = data.user || fallbackUser || null;
+  authState.tokenExpiresAt = tokenExpiresAt;
+
+  await setLocalStorage({
+    supabaseAccessToken: authState.accessToken,
+    supabaseRefreshToken: authState.refreshToken,
+    supabaseUser: authState.user,
+    supabaseTokenExpiresAt: authState.tokenExpiresAt
+  });
+}
+
+async function refreshSupabaseSession() {
+  if (!authState.refreshToken) {
+    return false;
+  }
+
+  const { url, anonKey } = getConfig();
+  const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: {
+      apikey: anonKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ refresh_token: authState.refreshToken })
+  });
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok || !data?.access_token) {
+    return false;
+  }
+
+  await persistAuthSession(data, authState.refreshToken, authState.user);
+
+  return isLoggedIn();
+}
+
+async function ensureFreshAuthSession() {
+  if (authState.refreshToken && shouldRefreshAuthToken(authState.tokenExpiresAt)) {
+    return refreshSupabaseSession();
+  }
+
+  return isLoggedIn();
+}
+
 function applyAuthStateFromStorage(storageState) {
   const tokenExpiresAt =
     typeof storageState.supabaseTokenExpiresAt === "number"
       ? storageState.supabaseTokenExpiresAt
       : null;
-  const hasExpired = tokenExpiresAt ? Date.now() >= tokenExpiresAt : false;
-
-  if (hasExpired) {
-    authState.accessToken = null;
-    authState.refreshToken = null;
-    authState.user = null;
-    authState.tokenExpiresAt = null;
-    return false;
-  }
 
   authState.accessToken =
     typeof storageState.supabaseAccessToken === "string" ? storageState.supabaseAccessToken : null;
@@ -275,10 +324,21 @@ function applyAuthStateFromStorage(storageState) {
 
 async function restoreAuthState() {
   const storageState = await getLocalStorage(AUTH_STORAGE_KEYS);
-  const hasSession = applyAuthStateFromStorage(storageState);
+  let hasSession = applyAuthStateFromStorage(storageState);
 
-  if (!hasSession && storageState.supabaseAccessToken) {
+  if (
+    authState.refreshToken &&
+    (!authState.accessToken || shouldRefreshAuthToken(authState.tokenExpiresAt))
+  ) {
+    hasSession = await refreshSupabaseSession();
+  }
+
+  if (!hasSession && (storageState.supabaseAccessToken || storageState.supabaseRefreshToken)) {
     await removeLocalStorage(AUTH_STORAGE_KEYS);
+    authState.accessToken = null;
+    authState.refreshToken = null;
+    authState.user = null;
+    authState.tokenExpiresAt = null;
   }
 
   updateAuthUi();
@@ -310,20 +370,7 @@ async function loginToSupabase(email, password) {
     throw new Error("ログイン結果の取得に失敗しました");
   }
 
-  const tokenExpiresAt =
-    typeof data.expires_in === "number" ? Date.now() + data.expires_in * 1000 : null;
-
-  authState.accessToken = data.access_token;
-  authState.refreshToken = data.refresh_token || null;
-  authState.user = data.user;
-  authState.tokenExpiresAt = tokenExpiresAt;
-
-  await setLocalStorage({
-    supabaseAccessToken: authState.accessToken,
-    supabaseRefreshToken: authState.refreshToken,
-    supabaseUser: authState.user,
-    supabaseTokenExpiresAt: authState.tokenExpiresAt
-  });
+  await persistAuthSession(data);
 }
 
 async function logoutFromSupabase() {
@@ -410,6 +457,10 @@ function buildInsertPayload(items) {
 
 async function insertTransactions(records) {
   const { url, anonKey } = getConfig();
+
+  if (!(await ensureFreshAuthSession())) {
+    authState.accessToken = null;
+  }
 
   if (!authState.accessToken) {
     throw new Error("ログインしてから送信してください");

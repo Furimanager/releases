@@ -100,12 +100,16 @@ type ResearchPurchasePricePayload = {
 
 type FurimanagerConfig = {
   APP_URL?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_ANON_KEY?: string;
 };
 
 type MinimalChromeApi = {
   storage?: {
     local?: {
       get: (keys: string[], callback: (result: Record<string, unknown>) => void) => void;
+      set: (values: Record<string, unknown>, callback: () => void) => void;
+      remove: (keys: string[], callback: () => void) => void;
     };
   };
   runtime?: {
@@ -157,8 +161,9 @@ declare global {
   }
 }
 
-const DEFAULT_APP_URL = "http://localhost:3000";
+const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_API_TIMEOUT_MS = 30000;
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 function getAppUrl() {
   return (window.FurimanagerConfig?.APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, "");
@@ -182,15 +187,121 @@ function getChromeStorage(keys: string[]) {
   });
 }
 
+function setChromeStorage(values: Record<string, unknown>) {
+  return new Promise<void>((resolve, reject) => {
+    if (!window.chrome?.storage?.local) {
+      resolve();
+      return;
+    }
+
+    window.chrome.storage.local.set(values, () => {
+      if (window.chrome?.runtime?.lastError) {
+        reject(new Error(window.chrome.runtime.lastError.message));
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function removeChromeStorage(keys: string[]) {
+  return new Promise<void>((resolve, reject) => {
+    if (!window.chrome?.storage?.local) {
+      resolve();
+      return;
+    }
+
+    window.chrome.storage.local.remove(keys, () => {
+      if (window.chrome?.runtime?.lastError) {
+        reject(new Error(window.chrome.runtime.lastError.message));
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function getSupabaseConfig() {
+  const supabaseUrl = String(window.FurimanagerConfig?.SUPABASE_URL || "").trim().replace(/\/+$/, "");
+  const supabaseAnonKey = String(window.FurimanagerConfig?.SUPABASE_ANON_KEY || "").trim();
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("auth_required");
+  }
+
+  return { supabaseUrl, supabaseAnonKey };
+}
+
+function shouldRefreshToken(expiresAt: unknown) {
+  return typeof expiresAt === "number" && Date.now() >= expiresAt - TOKEN_REFRESH_MARGIN_MS;
+}
+
+async function refreshAccessToken(storage: Record<string, unknown>) {
+  const refreshToken = typeof storage.supabaseRefreshToken === "string" ? storage.supabaseRefreshToken : null;
+
+  if (!refreshToken) {
+    return null;
+  }
+
+  const { supabaseUrl, supabaseAnonKey } = getSupabaseConfig();
+  const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: {
+      apikey: supabaseAnonKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ refresh_token: refreshToken })
+  });
+  const data = (await response.json().catch(() => null)) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    user?: unknown;
+  } | null;
+
+  if (!response.ok || !data?.access_token) {
+    await removeChromeStorage([
+      "supabaseAccessToken",
+      "supabaseRefreshToken",
+      "supabaseUser",
+      "supabaseTokenExpiresAt"
+    ]);
+    return null;
+  }
+
+  const tokenExpiresAt =
+    typeof data.expires_in === "number" ? Date.now() + data.expires_in * 1000 : null;
+
+  await setChromeStorage({
+    supabaseAccessToken: data.access_token,
+    supabaseRefreshToken: data.refresh_token || refreshToken,
+    supabaseUser: data.user || storage.supabaseUser || null,
+    supabaseTokenExpiresAt: tokenExpiresAt
+  });
+
+  return data.access_token;
+}
+
 async function getAccessToken() {
-  const storage = await getChromeStorage(["supabaseAccessToken"]);
+  const storage = await getChromeStorage([
+    "supabaseAccessToken",
+    "supabaseRefreshToken",
+    "supabaseUser",
+    "supabaseTokenExpiresAt"
+  ]);
   const accessToken = storage.supabaseAccessToken;
+
+  if (shouldRefreshToken(storage.supabaseTokenExpiresAt)) {
+    return refreshAccessToken(storage);
+  }
 
   if (typeof accessToken === "string" && accessToken.trim()) {
     return accessToken.trim();
   }
 
-  return null;
+  return refreshAccessToken(storage);
 }
 
 async function requestJson<T>(path: string, options: RequestInit & ResearchRequestOptions = {}) {

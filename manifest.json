@@ -11,6 +11,8 @@
     "https://jp.mercari.com/*",
     "https://api.mercari.jp/*",
     "https://*.mercdn.net/*",
+    "https://furimanager.com/*",
+    "https://www.furimanager.com/*",
     "https://*.supabase.co/*"
   ],
   "content_scripts": [
