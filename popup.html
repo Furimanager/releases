@@ -68,6 +68,41 @@
         <dl id="statusDetails" class="status-details"></dl>
       </section>
 
+      <section class="panel rakuraku-card" aria-live="polite">
+        <div class="panel__header">
+          <div>
+            <p class="panel__eyebrow">Rakuraku</p>
+            <h2 class="panel__title">らくらく運用アシスト</h2>
+          </div>
+          <p id="rakurakuTaskState" class="rakuraku-card__state">未確認</p>
+        </div>
+        <p class="rakuraku-card__description">
+          承認済みの再出品タスクを確認できます。今回は開始状態にするところまでです。
+        </p>
+        <button id="rakurakuTaskCheckButton" class="action-button action-button--ghost rakuraku-card__button" type="button">
+          タスクを確認
+        </button>
+        <div id="rakurakuTaskPanel" class="rakuraku-task" hidden>
+          <dl class="status-details">
+            <div class="status-details__row">
+              <dt>商品名</dt>
+              <dd id="rakurakuTaskTitle">-</dd>
+            </div>
+            <div class="status-details__row">
+              <dt>価格</dt>
+              <dd id="rakurakuTaskPrice">-</dd>
+            </div>
+            <div class="status-details__row">
+              <dt>状態</dt>
+              <dd id="rakurakuTaskStatus">-</dd>
+            </div>
+          </dl>
+          <button id="rakurakuTaskStartButton" class="action-button action-button--send rakuraku-card__button" type="button">
+            このタスクを開始
+          </button>
+        </div>
+      </section>
+
       <section class="panel actions-card">
         <div class="panel__header">
           <div>

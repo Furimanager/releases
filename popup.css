@@ -365,6 +365,41 @@ body {
   word-break: break-word;
 }
 
+.rakuraku-card__state {
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.14);
+  color: #ddd6fe;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.rakuraku-card__description {
+  position: relative;
+  z-index: 1;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.rakuraku-card__button {
+  position: relative;
+  z-index: 1;
+  margin-top: 12px;
+  min-height: 48px;
+}
+
+.rakuraku-task {
+  position: relative;
+  z-index: 1;
+  margin-top: 12px;
+}
+
 .action-grid {
   margin-top: 16px;
   position: relative;

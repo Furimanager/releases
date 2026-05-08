@@ -23,6 +23,13 @@ const sessionPanel = document.getElementById("sessionPanel");
 const sessionText = document.getElementById("sessionText");
 const authStateText = document.getElementById("authStateText");
 const authMessage = document.getElementById("authMessage");
+const rakurakuTaskState = document.getElementById("rakurakuTaskState");
+const rakurakuTaskCheckButton = document.getElementById("rakurakuTaskCheckButton");
+const rakurakuTaskPanel = document.getElementById("rakurakuTaskPanel");
+const rakurakuTaskTitle = document.getElementById("rakurakuTaskTitle");
+const rakurakuTaskPrice = document.getElementById("rakurakuTaskPrice");
+const rakurakuTaskStatus = document.getElementById("rakurakuTaskStatus");
+const rakurakuTaskStartButton = document.getElementById("rakurakuTaskStartButton");
 
 const authState = {
   accessToken: null,
@@ -30,6 +37,7 @@ const authState = {
   user: null,
   tokenExpiresAt: null
 };
+let currentRakurakuTask = null;
 
 function escapeHtml(value) {
   return String(value)
@@ -77,6 +85,12 @@ function updateAuthUi() {
   loginForm.hidden = loggedIn;
   sessionPanel.hidden = !loggedIn;
   scrapeAndSendButton.disabled = !loggedIn;
+  if (rakurakuTaskCheckButton) {
+    rakurakuTaskCheckButton.disabled = !loggedIn;
+  }
+  if (rakurakuTaskStartButton) {
+    rakurakuTaskStartButton.disabled = !loggedIn || !currentRakurakuTask;
+  }
 
   authStateText.textContent = loggedIn ? "ログイン中" : "未ログイン";
   authStateText.className = loggedIn
@@ -100,6 +114,14 @@ function setActionButtonsDisabled(disabled) {
 
   if (scrapeAndSendButton) {
     scrapeAndSendButton.disabled = disabled || !isLoggedIn();
+  }
+
+  if (rakurakuTaskCheckButton) {
+    rakurakuTaskCheckButton.disabled = disabled || !isLoggedIn();
+  }
+
+  if (rakurakuTaskStartButton) {
+    rakurakuTaskStartButton.disabled = disabled || !isLoggedIn() || !currentRakurakuTask;
   }
 }
 
@@ -203,6 +225,124 @@ function getConfig() {
     url,
     anonKey
   };
+}
+
+function getAppBaseUrl() {
+  const appUrl = String(window.FurimanagerConfig?.APP_URL || "").trim().replace(/\/+$/, "");
+
+  if (!appUrl) {
+    throw new Error("config.js の APP_URL が未設定です");
+  }
+
+  return appUrl;
+}
+
+function formatYen(value) {
+  if (typeof value !== "number") {
+    return "金額未取得";
+  }
+
+  return new Intl.NumberFormat("ja-JP", {
+    style: "currency",
+    currency: "JPY",
+    maximumFractionDigits: 0
+  }).format(value);
+}
+
+function renderRakurakuTask(task) {
+  currentRakurakuTask = task || null;
+
+  if (!rakurakuTaskState || !rakurakuTaskPanel) {
+    return;
+  }
+
+  if (!task) {
+    rakurakuTaskState.textContent = "待機中 0件";
+    rakurakuTaskPanel.hidden = true;
+    if (rakurakuTaskStartButton) {
+      rakurakuTaskStartButton.disabled = true;
+    }
+    return;
+  }
+
+  const payload = task.payload || {};
+  rakurakuTaskState.textContent = "待機中 1件";
+  rakurakuTaskPanel.hidden = false;
+
+  if (rakurakuTaskTitle) {
+    rakurakuTaskTitle.textContent = payload.title || "商品名未取得";
+  }
+
+  if (rakurakuTaskPrice) {
+    rakurakuTaskPrice.textContent = formatYen(payload.soldPrice);
+  }
+
+  if (rakurakuTaskStatus) {
+    rakurakuTaskStatus.textContent = task.status || "pending";
+  }
+
+  if (rakurakuTaskStartButton) {
+    rakurakuTaskStartButton.disabled = !isLoggedIn();
+  }
+}
+
+async function fetchAppApi(path, options = {}) {
+  if (!(await ensureFreshAuthSession())) {
+    authState.accessToken = null;
+  }
+
+  if (!authState.accessToken) {
+    throw new Error("ログインしてから操作してください");
+  }
+
+  const requestUrl = `${getAppBaseUrl()}${path}`;
+  const credentialsMode = "include";
+  let response;
+
+  try {
+    response = await fetch(requestUrl, {
+      ...options,
+      credentials: credentialsMode,
+      headers: {
+        Authorization: `Bearer ${authState.accessToken}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {})
+      }
+    });
+  } catch (error) {
+    console.error("[furimane-rakuraku] api request exception", {
+      requestUrl,
+      credentials: credentialsMode,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : null
+    });
+    throw error;
+  }
+
+  const responseText = await response.text();
+  let data = null;
+
+  if (responseText.trim()) {
+    try {
+      data = JSON.parse(responseText);
+    } catch (_error) {
+      data = null;
+    }
+  }
+
+  console.log("[furimane-rakuraku] api response", {
+    requestUrl,
+    status: response.status,
+    ok: response.ok,
+    credentials: credentialsMode,
+    responseText
+  });
+
+  if (!response.ok || data?.success === false) {
+    throw new Error(`API failed: ${response.status} ${responseText || data?.error || "empty response"}`);
+  }
+
+  return data;
 }
 
 async function runTabAction(action, extraMessage = {}) {
@@ -781,6 +921,65 @@ async function handleScrapeAndSend() {
   }
 }
 
+async function handleRakurakuTaskCheck() {
+  setActionButtonsDisabled(true);
+
+  if (rakurakuTaskState) {
+    rakurakuTaskState.textContent = "確認中";
+  }
+
+  try {
+    const data = await fetchAppApi("/api/automation/tasks/next");
+    renderRakurakuTask(data.task || null);
+
+    if (data.task) {
+      const payload = data.task.payload || {};
+      console.log("[furimane-rakuraku] pending task", {
+        id: data.task.id,
+        title: payload.title,
+        soldPrice: payload.soldPrice,
+        status: data.task.status
+      });
+    }
+  } catch (error) {
+    renderRakurakuTask(null);
+    if (rakurakuTaskState) {
+      rakurakuTaskState.textContent = "取得失敗";
+    }
+    setStatus("error", "タスク取得に失敗", [
+      { label: "詳細", value: error instanceof Error ? error.message : "不明なエラーが発生しました" }
+    ]);
+  } finally {
+    setActionButtonsDisabled(false);
+  }
+}
+
+async function handleRakurakuTaskStart() {
+  if (!currentRakurakuTask?.id) {
+    return;
+  }
+
+  setActionButtonsDisabled(true);
+
+  try {
+    const data = await fetchAppApi(`/api/automation/tasks/${currentRakurakuTask.id}/start`, { method: "POST" });
+    renderRakurakuTask({
+      ...currentRakurakuTask,
+      status: data.task?.status || "running"
+    });
+    setStatus("success", "タスクを開始しました", [
+      { label: "タスクID", value: currentRakurakuTask.id },
+      { label: "次フェーズ", value: "メルカリ画面操作はまだ実行しません" }
+    ]);
+  } catch (error) {
+    setStatus("error", "タスク開始に失敗", [
+      { label: "詳細", value: error instanceof Error ? error.message : "不明なエラーが発生しました" }
+    ]);
+  } finally {
+    setActionButtonsDisabled(false);
+  }
+}
+
 async function initializePopup() {
   setStatus("idle", "待機中");
   updateAuthUi();
@@ -817,6 +1016,12 @@ resetDeltaStateButton?.addEventListener("click", () => {
 });
 scrapeAndSendButton?.addEventListener("click", () => {
   void handleScrapeAndSend();
+});
+rakurakuTaskCheckButton?.addEventListener("click", () => {
+  void handleRakurakuTaskCheck();
+});
+rakurakuTaskStartButton?.addEventListener("click", () => {
+  void handleRakurakuTaskStart();
 });
 
 void initializePopup();
