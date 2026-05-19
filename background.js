@@ -262,13 +262,6 @@
         if (authState.refreshToken && (!authState.accessToken || shouldRefreshAuthToken(authState.tokenExpiresAt))) {
             hasSession = await refreshSupabaseSession();
         }
-        if (!hasSession && (storageState.supabaseAccessToken || storageState.supabaseRefreshToken)) {
-            await removeLocalStorage(AUTH_STORAGE_KEYS);
-            authState.accessToken = null;
-            authState.refreshToken = null;
-            authState.user = null;
-            authState.tokenExpiresAt = null;
-        }
         return hasSession;
     }
     function applyAuthStateFromStorage(storageState) {
@@ -282,6 +275,17 @@
         if (!authState.refreshToken) {
             return false;
         }
+        const latestStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
+        const latestRefreshToken = typeof latestStorage.supabaseRefreshToken === "string" ? latestStorage.supabaseRefreshToken : null;
+        if (latestRefreshToken &&
+            latestRefreshToken !== authState.refreshToken &&
+            applyAuthStateFromStorage(latestStorage) &&
+            !shouldRefreshAuthToken(authState.tokenExpiresAt)) {
+            return true;
+        }
+        if (latestRefreshToken && latestRefreshToken !== authState.refreshToken) {
+            applyAuthStateFromStorage(latestStorage);
+        }
         const { url, anonKey } = getConfig();
         const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
             method: "POST",
@@ -293,6 +297,15 @@
         });
         const data = await response.json().catch(() => null);
         if (!response.ok || !data?.access_token) {
+            const fallbackStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
+            if (fallbackStorage.supabaseRefreshToken &&
+                fallbackStorage.supabaseRefreshToken !== authState.refreshToken &&
+                applyAuthStateFromStorage(fallbackStorage)) {
+                if (!shouldRefreshAuthToken(authState.tokenExpiresAt)) {
+                    return true;
+                }
+                return refreshSupabaseSession();
+            }
             return false;
         }
         await persistAuthSession(data, authState.refreshToken, authState.user);
@@ -309,6 +322,12 @@
             supabaseUser: authState.user,
             supabaseTokenExpiresAt: authState.tokenExpiresAt
         });
+    }
+    async function ensureFreshAuthSession() {
+        if (authState.refreshToken && (!authState.accessToken || shouldRefreshAuthToken(authState.tokenExpiresAt))) {
+            return refreshSupabaseSession();
+        }
+        return Boolean(authState.accessToken && authState.user);
     }
     function shouldRefreshAuthToken(expiresAt) {
         return typeof expiresAt === "number" && Date.now() >= expiresAt - TOKEN_REFRESH_MARGIN_MS;

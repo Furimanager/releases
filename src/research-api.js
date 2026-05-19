@@ -42,24 +42,6 @@ function setFurimaneChromeStorage(values) {
   });
 }
 
-function removeFurimaneChromeStorage(keys) {
-  return new Promise((resolve, reject) => {
-    if (!window.chrome?.storage?.local) {
-      resolve();
-      return;
-    }
-
-    window.chrome.storage.local.remove(keys, () => {
-      if (window.chrome?.runtime?.lastError) {
-        reject(new Error(window.chrome.runtime.lastError.message));
-        return;
-      }
-
-      resolve();
-    });
-  });
-}
-
 function getFurimaneSupabaseConfig() {
   const supabaseUrl = String(window.FurimanagerConfig?.SUPABASE_URL || "").trim().replace(/\/+$/, "");
   const supabaseAnonKey = String(window.FurimanagerConfig?.SUPABASE_ANON_KEY || "").trim();
@@ -94,12 +76,25 @@ async function refreshFurimaneAccessToken(storage) {
   const data = await response.json().catch(() => null);
 
   if (!response.ok || !data?.access_token) {
-    await removeFurimaneChromeStorage([
+    const latestStorage = await getFurimaneChromeStorage([
       "supabaseAccessToken",
       "supabaseRefreshToken",
       "supabaseUser",
       "supabaseTokenExpiresAt"
     ]);
+    const latestAccessToken =
+      typeof latestStorage.supabaseAccessToken === "string" ? latestStorage.supabaseAccessToken.trim() : "";
+    const latestRefreshToken =
+      typeof latestStorage.supabaseRefreshToken === "string" ? latestStorage.supabaseRefreshToken : null;
+
+    if (latestAccessToken && !shouldRefreshFurimaneToken(latestStorage.supabaseTokenExpiresAt)) {
+      return latestAccessToken;
+    }
+
+    if (latestRefreshToken && latestRefreshToken !== refreshToken) {
+      return refreshFurimaneAccessToken(latestStorage);
+    }
+
     return null;
   }
 

@@ -205,24 +205,6 @@ function setChromeStorage(values: Record<string, unknown>) {
   });
 }
 
-function removeChromeStorage(keys: string[]) {
-  return new Promise<void>((resolve, reject) => {
-    if (!window.chrome?.storage?.local) {
-      resolve();
-      return;
-    }
-
-    window.chrome.storage.local.remove(keys, () => {
-      if (window.chrome?.runtime?.lastError) {
-        reject(new Error(window.chrome.runtime.lastError.message));
-        return;
-      }
-
-      resolve();
-    });
-  });
-}
-
 function getSupabaseConfig() {
   const supabaseUrl = String(window.FurimanagerConfig?.SUPABASE_URL || "").trim().replace(/\/+$/, "");
   const supabaseAnonKey = String(window.FurimanagerConfig?.SUPABASE_ANON_KEY || "").trim();
@@ -262,12 +244,25 @@ async function refreshAccessToken(storage: Record<string, unknown>) {
   } | null;
 
   if (!response.ok || !data?.access_token) {
-    await removeChromeStorage([
+    const latestStorage = await getChromeStorage([
       "supabaseAccessToken",
       "supabaseRefreshToken",
       "supabaseUser",
       "supabaseTokenExpiresAt"
     ]);
+    const latestAccessToken =
+      typeof latestStorage.supabaseAccessToken === "string" ? latestStorage.supabaseAccessToken.trim() : "";
+    const latestRefreshToken =
+      typeof latestStorage.supabaseRefreshToken === "string" ? latestStorage.supabaseRefreshToken : null;
+
+    if (latestAccessToken && !shouldRefreshToken(latestStorage.supabaseTokenExpiresAt)) {
+      return latestAccessToken;
+    }
+
+    if (latestRefreshToken && latestRefreshToken !== refreshToken) {
+      return refreshAccessToken(latestStorage);
+    }
+
     return null;
   }
 
