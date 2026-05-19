@@ -24,6 +24,9 @@ const sessionText = document.getElementById("sessionText");
 const authStateText = document.getElementById("authStateText");
 const authMessage = document.getElementById("authMessage");
 const rakurakuTaskState = document.getElementById("rakurakuTaskState");
+const rakurakuAutoPollState = document.getElementById("rakurakuAutoPollState");
+const rakurakuAutoPollToggleButton = document.getElementById("rakurakuAutoPollToggleButton");
+const rakurakuExecutionModeSelect = document.getElementById("rakurakuExecutionModeSelect");
 const rakurakuTaskCheckButton = document.getElementById("rakurakuTaskCheckButton");
 const rakurakuTaskPanel = document.getElementById("rakurakuTaskPanel");
 const rakurakuTaskTitle = document.getElementById("rakurakuTaskTitle");
@@ -38,6 +41,8 @@ const authState = {
   tokenExpiresAt: null
 };
 let currentRakurakuTask = null;
+let rakurakuAutoPollEnabled = true;
+const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 
 function escapeHtml(value) {
   return String(value)
@@ -284,6 +289,91 @@ function renderRakurakuTask(task) {
   if (rakurakuTaskStartButton) {
     rakurakuTaskStartButton.disabled = !isLoggedIn();
   }
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+
+      resolve(response);
+    });
+  });
+}
+
+function renderRakurakuAutoPollState(enabled, isRunningTask = false) {
+  rakurakuAutoPollEnabled = enabled !== false;
+
+  if (rakurakuAutoPollState) {
+    rakurakuAutoPollState.textContent = isRunningTask
+      ? "自動チェック：実行中"
+      : `自動チェック：${rakurakuAutoPollEnabled ? "ON" : "OFF"}`;
+  }
+
+  if (rakurakuAutoPollToggleButton) {
+    rakurakuAutoPollToggleButton.textContent = rakurakuAutoPollEnabled ? "OFFにする" : "ONにする";
+    rakurakuAutoPollToggleButton.disabled = false;
+  }
+}
+
+async function loadRakurakuAutoPollState() {
+  try {
+    const response = await sendRuntimeMessage({ type: "GET_RAKURAKU_AUTO_POLL_STATE" });
+    renderRakurakuAutoPollState(response?.enabled !== false, response?.isRunningTask === true);
+  } catch (error) {
+    if (rakurakuAutoPollState) {
+      rakurakuAutoPollState.textContent = "自動チェック：確認失敗";
+    }
+    console.warn("[furimane-rakuraku] auto poll state failed", error);
+  }
+}
+
+async function handleRakurakuAutoPollToggle() {
+  if (rakurakuAutoPollToggleButton) {
+    rakurakuAutoPollToggleButton.disabled = true;
+  }
+
+  try {
+    const response = await sendRuntimeMessage({
+      type: "SET_RAKURAKU_AUTO_POLL_ENABLED",
+      enabled: !rakurakuAutoPollEnabled
+    });
+    renderRakurakuAutoPollState(response?.enabled !== false, response?.isRunningTask === true);
+  } catch (error) {
+    if (rakurakuAutoPollState) {
+      rakurakuAutoPollState.textContent = "自動チェック：切替失敗";
+    }
+    console.warn("[furimane-rakuraku] auto poll toggle failed", error);
+  } finally {
+    if (rakurakuAutoPollToggleButton) {
+      rakurakuAutoPollToggleButton.disabled = false;
+    }
+  }
+}
+
+async function loadRakurakuExecutionMode() {
+  try {
+    const storageState = await getLocalStorage([RAKURAKU_EXECUTION_MODE_KEY]);
+    const mode = storageState[RAKURAKU_EXECUTION_MODE_KEY] === "real" ? "real" : "dry-run";
+
+    if (rakurakuExecutionModeSelect) {
+      rakurakuExecutionModeSelect.value = mode;
+    }
+
+    if (!storageState[RAKURAKU_EXECUTION_MODE_KEY]) {
+      await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: "dry-run" });
+    }
+  } catch (error) {
+    console.warn("[furimane-rakuraku] execution mode load failed", error);
+  }
+}
+
+async function handleRakurakuExecutionModeChange() {
+  const mode = rakurakuExecutionModeSelect?.value === "real" ? "real" : "dry-run";
+  await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: mode });
 }
 
 async function fetchAppApi(path, options = {}) {
@@ -929,16 +1019,22 @@ async function handleRakurakuTaskCheck() {
   }
 
   try {
-    const data = await fetchAppApi("/api/automation/tasks/next");
-    renderRakurakuTask(data.task || null);
+    const backgroundResult = await sendRuntimeMessage({ type: "POLL_RAKURAKU_NOW" });
 
-    if (data.task) {
-      const payload = data.task.payload || {};
+    if (!backgroundResult?.success) {
+      throw new Error(backgroundResult?.message || "background poll failed");
+    }
+
+    renderRakurakuAutoPollState(rakurakuAutoPollEnabled, backgroundResult?.isRunningTask === true);
+    renderRakurakuTask(backgroundResult.task || null);
+
+    if (backgroundResult.task) {
+      const payload = backgroundResult.task.payload || {};
       console.log("[furimane-rakuraku] pending task", {
-        id: data.task.id,
+        id: backgroundResult.task.id,
         title: payload.title,
         soldPrice: payload.soldPrice,
-        status: data.task.status
+        status: backgroundResult.task.status
       });
     }
   } catch (error) {
@@ -962,14 +1058,19 @@ async function handleRakurakuTaskStart() {
   setActionButtonsDisabled(true);
 
   try {
-    const data = await fetchAppApi(`/api/automation/tasks/${currentRakurakuTask.id}/start`, { method: "POST" });
-    renderRakurakuTask({
+    const backgroundResult = await sendRuntimeMessage({ type: "POLL_RAKURAKU_NOW" });
+
+    if (!backgroundResult?.success) {
+      throw new Error(backgroundResult?.message || "background poll failed");
+    }
+
+    renderRakurakuTask(backgroundResult.task || {
       ...currentRakurakuTask,
-      status: data.task?.status || "running"
+      status: "running"
     });
-    setStatus("success", "タスクを開始しました", [
+    setStatus("success", "タスクを実行しました", [
       { label: "タスクID", value: currentRakurakuTask.id },
-      { label: "次フェーズ", value: "メルカリ画面操作はまだ実行しません" }
+      { label: "実行モード", value: rakurakuExecutionModeSelect?.value || "dry-run" }
     ]);
   } catch (error) {
     setStatus("error", "タスク開始に失敗", [
@@ -993,6 +1094,8 @@ async function initializePopup() {
 
   try {
     await restoreAuthState();
+    await loadRakurakuAutoPollState();
+    await loadRakurakuExecutionMode();
   } catch (error) {
     updateAuthUi();
     setAuthMessage("error", error instanceof Error ? error.message : "ログイン状態の復元に失敗しました");
@@ -1022,6 +1125,12 @@ rakurakuTaskCheckButton?.addEventListener("click", () => {
 });
 rakurakuTaskStartButton?.addEventListener("click", () => {
   void handleRakurakuTaskStart();
+});
+rakurakuAutoPollToggleButton?.addEventListener("click", () => {
+  void handleRakurakuAutoPollToggle();
+});
+rakurakuExecutionModeSelect?.addEventListener("change", () => {
+  void handleRakurakuExecutionModeChange();
 });
 
 void initializePopup();

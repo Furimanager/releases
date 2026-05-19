@@ -3,7 +3,7 @@
   "name": "Furimanager (Dev)",
   "description": "Development manifest for local Furimanager testing",
   "version": "0.1.0",
-  "permissions": ["activeTab", "storage", "tabs"],
+  "permissions": ["activeTab", "alarms", "storage", "tabs"],
   "background": {
     "service_worker": "background.js"
   },
@@ -11,6 +11,8 @@
     "https://jp.mercari.com/*",
     "https://*.mercdn.net/*",
     "https://*.supabase.co/*",
+    "https://furimanager.com/*",
+    "https://www.furimanager.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "https://*.vercel.app/*"

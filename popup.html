@@ -77,10 +77,21 @@
           <p id="rakurakuTaskState" class="rakuraku-card__state">未確認</p>
         </div>
         <p class="rakuraku-card__description">
-          承認済みの再出品タスクを確認できます。今回は開始状態にするところまでです。
+          承認済みの再出品タスクを、Chrome起動中に自動で確認します。今回は開始状態にするところまでです。
         </p>
+        <div class="rakuraku-auto-row">
+          <span id="rakurakuAutoPollState">自動チェック：確認中</span>
+          <button id="rakurakuAutoPollToggleButton" class="mini-button" type="button">切り替え</button>
+        </div>
+        <label class="rakuraku-mode-row">
+          <span>実行モード</span>
+          <select id="rakurakuExecutionModeSelect">
+            <option value="dry-run">dry-run（テスト）</option>
+            <option value="real">real（次フェーズ）</option>
+          </select>
+        </label>
         <button id="rakurakuTaskCheckButton" class="action-button action-button--ghost rakuraku-card__button" type="button">
-          タスクを確認
+          今すぐ確認
         </button>
         <div id="rakurakuTaskPanel" class="rakuraku-task" hidden>
           <dl class="status-details">

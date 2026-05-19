@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>メルカリ再出品テストページ</title>
+    <link rel="stylesheet" href="./mercari-relist.css" />
+  </head>
+  <body>
+    <main class="mock-page">
+      <section class="mock-card">
+        <p class="mock-eyebrow">dry-run mock</p>
+        <h1>メルカリ再出品テストページ</h1>
+        <p class="mock-description">
+          実メルカリ画面を操作せず、Chrome拡張の再出品実行フローだけを確認するためのページです。
+        </p>
+        <div class="mock-item" data-item-id="m12345678901">
+          <span class="mock-label">対象商品</span>
+          <strong id="mockTaskTitle">テスト商品</strong>
+        </div>
+        <button data-testid="relist-button" class="mock-button" type="button">
+          再出品する
+        </button>
+        <p class="mock-note">
+          dry-runではこのボタンを検出するだけで、クリックはしません。
+        </p>
+      </section>
+    </main>
+    <script src="./mercari-relist.js"></script>
+  </body>
+</html>

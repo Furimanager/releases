@@ -3,7 +3,7 @@
   "name": "フリマネージャー",
   "description": "メルカリ販売履歴を取得するための拡張の土台",
   "version": "0.1.0",
-  "permissions": ["activeTab", "storage", "tabs"],
+  "permissions": ["activeTab", "alarms", "storage", "tabs"],
   "background": {
     "service_worker": "background.js"
   },
@@ -13,6 +13,7 @@
     "https://*.mercdn.net/*",
     "https://furimanager.com/*",
     "https://www.furimanager.com/*",
+    "http://localhost:3000/*",
     "https://*.supabase.co/*"
   ],
   "content_scripts": [
