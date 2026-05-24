@@ -42,6 +42,7 @@ const authState = {
   tokenExpiresAt: null
 };
 let currentRakurakuTask = null;
+let currentRakurakuApprovalCandidate = null;
 let rakurakuAutoPollEnabled = true;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 
@@ -87,6 +88,7 @@ function isLoggedIn() {
 function updateAuthUi() {
   const loggedIn = isLoggedIn();
   const userEmail = authState.user?.email || "メール不明";
+  const hasRakurakuAction = Boolean(currentRakurakuTask || currentRakurakuApprovalCandidate);
 
   loginForm.hidden = loggedIn;
   sessionPanel.hidden = !loggedIn;
@@ -95,7 +97,7 @@ function updateAuthUi() {
     rakurakuTaskCheckButton.disabled = !loggedIn;
   }
   if (rakurakuTaskStartButton) {
-    rakurakuTaskStartButton.disabled = !loggedIn || !currentRakurakuTask;
+    rakurakuTaskStartButton.disabled = !loggedIn || !hasRakurakuAction;
   }
 
   authStateText.textContent = loggedIn ? "ログイン中" : "未ログイン";
@@ -127,7 +129,7 @@ function setActionButtonsDisabled(disabled) {
   }
 
   if (rakurakuTaskStartButton) {
-    rakurakuTaskStartButton.disabled = disabled || !isLoggedIn() || !currentRakurakuTask;
+    rakurakuTaskStartButton.disabled = disabled || !isLoggedIn() || !(currentRakurakuTask || currentRakurakuApprovalCandidate);
   }
 }
 
@@ -252,6 +254,7 @@ function formatYen(value) {
 
 function renderRakurakuTask(task) {
   currentRakurakuTask = task || null;
+  currentRakurakuApprovalCandidate = null;
 
   if (!rakurakuTaskState || !rakurakuTaskPanel) {
     return;
@@ -261,6 +264,7 @@ function renderRakurakuTask(task) {
     rakurakuTaskState.textContent = "待機中 0件";
     rakurakuTaskPanel.hidden = true;
     if (rakurakuTaskStartButton) {
+      rakurakuTaskStartButton.hidden = true;
       rakurakuTaskStartButton.disabled = true;
     }
     return;
@@ -283,6 +287,42 @@ function renderRakurakuTask(task) {
   }
 
   if (rakurakuTaskStartButton) {
+    rakurakuTaskStartButton.hidden = true;
+    rakurakuTaskStartButton.disabled = !isLoggedIn();
+  }
+}
+
+function renderRakurakuApprovalCandidate(candidate) {
+  currentRakurakuTask = null;
+  currentRakurakuApprovalCandidate = candidate || null;
+
+  if (!rakurakuTaskState || !rakurakuTaskPanel) {
+    return;
+  }
+
+  if (!candidate) {
+    renderRakurakuTask(null);
+    return;
+  }
+
+  rakurakuTaskState.textContent = "承認待ち 1件";
+  rakurakuTaskPanel.hidden = false;
+
+  if (rakurakuTaskTitle) {
+    rakurakuTaskTitle.textContent = candidate.title || "商品名未取得";
+  }
+
+  if (rakurakuTaskPrice) {
+    rakurakuTaskPrice.textContent = formatYen(candidate.sold_price);
+  }
+
+  if (rakurakuTaskStatus) {
+    rakurakuTaskStatus.textContent = "承認待ち";
+  }
+
+  if (rakurakuTaskStartButton) {
+    rakurakuTaskStartButton.hidden = false;
+    rakurakuTaskStartButton.textContent = "許可して開始";
     rakurakuTaskStartButton.disabled = !isLoggedIn();
   }
 }
@@ -1028,10 +1068,22 @@ async function loadRakurakuPendingTaskPreview() {
 
   try {
     const data = await fetchAppApi("/api/automation/tasks/next");
-    renderRakurakuTask(data?.task || null);
+    if (data?.task) {
+      renderRakurakuTask(data.task);
+      return;
+    }
+
+    await loadRakurakuApprovalCandidatePreview();
   } catch (error) {
     console.warn("[furimane-rakuraku] pending task preview failed", error);
   }
+}
+
+async function loadRakurakuApprovalCandidatePreview() {
+  const data = await fetchAppApi("/api/rakuraku/relist-candidates?status=pending");
+  const candidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+  renderRakurakuApprovalCandidate(candidate || null);
+  return candidate || null;
 }
 
 async function handleRakurakuTaskCheck() {
@@ -1062,6 +1114,17 @@ async function handleRakurakuTaskCheck() {
         status: backgroundResult.task.status
       });
     } else {
+      const approvalCandidate = await loadRakurakuApprovalCandidatePreview();
+
+      if (approvalCandidate) {
+        setStatus("success", "承認待ち候補あり", [
+          { label: "商品名", value: approvalCandidate.title || "商品名未取得" },
+          { label: "価格", value: formatYen(approvalCandidate.sold_price) },
+          { label: "操作", value: "許可して開始を押すと再出品タスクを作成します" }
+        ]);
+        return;
+      }
+
       const diagnostics = backgroundResult.diagnostics || {};
       const latestTask = diagnostics.latestTask || null;
       const statusCounts = Object.entries(diagnostics.statusCounts || {})
@@ -1089,13 +1152,31 @@ async function handleRakurakuTaskCheck() {
 }
 
 async function handleRakurakuTaskStart() {
-  if (!currentRakurakuTask?.id) {
+  if (!currentRakurakuTask?.id && !currentRakurakuApprovalCandidate?.id) {
     return;
   }
 
   setActionButtonsDisabled(true);
 
   try {
+    if (currentRakurakuApprovalCandidate?.id) {
+      const candidate = currentRakurakuApprovalCandidate;
+      await fetchAppApi(`/api/rakuraku/relist-candidates/${candidate.id}/approve`, { method: "POST" });
+
+      const backgroundResult = await sendRuntimeMessage({ type: "POLL_RAKURAKU_NOW" });
+
+      if (!backgroundResult?.success) {
+        throw new Error(backgroundResult?.message || "background poll failed");
+      }
+
+      renderRakurakuTask(backgroundResult.task || null);
+      setStatus("success", "許可して実行しました", [
+        { label: "候補ID", value: candidate.id },
+        { label: "結果", value: backgroundResult.reason || "started" }
+      ]);
+      return;
+    }
+
     const backgroundResult = await sendRuntimeMessage({ type: "POLL_RAKURAKU_NOW" });
 
     if (!backgroundResult?.success) {
