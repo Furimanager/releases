@@ -83,20 +83,17 @@
         respond(await setRelistPending(payload));
     }
     async function handleGetRakurakuAutoPollState(respond) {
-        const enabled = await isRakurakuAutoPollEnabled();
         respond({
             success: true,
-            enabled,
+            enabled: true,
             isRunningTask: isRunningRakurakuTask
         });
     }
     async function handleSetRakurakuAutoPollEnabled(enabled, respond) {
-        await setLocalStorage({ [RAKURAKU_AUTO_POLL_KEY]: enabled });
-        if (enabled) {
-            setupRakurakuAlarm();
-            void pollNextRelistTask("toggle_on").catch((error) => console.warn("[rakuraku] toggle poll skipped", error));
-        }
-        respond({ success: true, enabled, isRunningTask: isRunningRakurakuTask });
+        await setLocalStorage({ [RAKURAKU_AUTO_POLL_KEY]: true });
+        setupRakurakuAlarm();
+        void pollNextRelistTask("toggle_on").catch((error) => console.warn("[rakuraku] toggle poll skipped", error));
+        respond({ success: true, enabled: true, isRunningTask: isRunningRakurakuTask });
     }
     async function handlePollRakurakuNow(respond) {
         try {
@@ -131,21 +128,33 @@
         }
     });
     async function pollNextRelistTask(reason, options = {}) {
-        if (!options.ignoreAutoPollDisabled && !(await isRakurakuAutoPollEnabled())) {
-            return { task: null, started: false, reason: "auto_poll_disabled" };
-        }
         if (isRunningRakurakuTask) {
             return { task: null, started: false, reason: "task_already_running" };
         }
         const hasSession = await restoreAuthState();
         if (!hasSession) {
+            console.log("[rakuraku] poll skipped", { reason, result: "auth_required" });
             return { task: null, started: false, reason: "auth_required" };
         }
         const next = await fetchAppApi("/api/automation/tasks/next");
         const task = next?.task || null;
         if (!task) {
-            return { task: null, started: false, reason: "no_pending_task" };
+            console.log("[rakuraku] no pending task", {
+                reason,
+                apiReason: next?.reason || "no_pending_task",
+                diagnostics: next?.diagnostics || null
+            });
+            return { task: null, started: false, reason: next?.reason || "no_pending_task", diagnostics: next?.diagnostics || null };
         }
+        console.log("[rakuraku] pending task found", {
+            reason,
+            taskId: task.id,
+            status: task.status,
+            targetType: task.targetType,
+            targetId: task.targetId,
+            title: task.payload?.title,
+            mercariItemId: task.payload?.mercariItemId
+        });
         isRunningRakurakuTask = true;
         try {
             const started = await fetchAppApi(`/api/automation/tasks/${task.id}/start`, { method: "POST" });
@@ -161,7 +170,7 @@
         }
         catch (error) {
             try {
-                await completeTask(task.id, false, error instanceof Error ? error.message : "dry-run failed");
+                await completeTask(task.id, false, error instanceof Error ? error.message : "relist failed");
             }
             catch (completeError) {
                 console.warn("[rakuraku] failed to mark task as failed", completeError);
@@ -216,19 +225,20 @@
             taskId: task.id,
             mercariItemId
         });
-        console.log("[rakuraku] real copy listing result", {
+        console.log("[rakuraku] real relist action result", {
             taskId: task.id,
             mercariItemId,
             itemUrl,
             detected: result?.detected === true,
             clicked: result?.clicked === true,
+            action: result?.action,
             reason: result?.reason
         });
         if (result?.clicked === true) {
-            const completed = await completeTask(task.id, true, "real-copy-listing: copy listing button clicked; final publish not executed");
+            const completed = await completeTask(task.id, true, "real-relist-action: Furimane relist action button clicked; final publish not executed");
             return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
         }
-        throw new Error(`real-copy-listing: ${result?.reason || "copy listing button not found on item page"}`);
+        throw new Error(`real-relist-action: ${result?.reason || "relist action button not found on item page"}`);
     }
     async function completeTask(taskId, success, message) {
         return fetchAppApi(`/api/automation/tasks/${taskId}/complete`, {
@@ -314,7 +324,7 @@
         for (let attempt = 0; attempt < 10; attempt += 1) {
             try {
                 const response = await sendTabMessage(tabId, message);
-                if (response?.success) {
+                if (response?.success && (message.type !== "CLICK_FURIMANE_COPY_LISTING_BUTTON" || response.clicked === true)) {
                     return response;
                 }
                 lastError = new Error(response?.message || "content script returned empty response");
@@ -366,6 +376,13 @@
         });
         const responseText = await response.text();
         const data = responseText.trim() ? safeJsonParse(responseText) : null;
+        console.log("[rakuraku] app api response", {
+            requestUrl,
+            method: options.method || "GET",
+            status: response.status,
+            ok: response.ok,
+            responseText
+        });
         if (!response.ok || data?.success === false) {
             throw new Error(`API failed: ${response.status} ${responseText || data?.error || "empty response"}`);
         }
@@ -469,12 +486,10 @@
         return appUrl;
     }
     async function isRakurakuAutoPollEnabled() {
-        const storageState = await getLocalStorage([RAKURAKU_AUTO_POLL_KEY]);
-        return storageState[RAKURAKU_AUTO_POLL_KEY] !== false;
+        return true;
     }
     async function getRakurakuExecutionMode() {
-        const storageState = await getLocalStorage([RAKURAKU_EXECUTION_MODE_KEY]);
-        return storageState[RAKURAKU_EXECUTION_MODE_KEY] === "real" ? "real" : "dry-run";
+        return "real";
     }
     async function setRelistPending(payload) {
         if (!payload || typeof payload !== "object") {

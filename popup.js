@@ -267,7 +267,7 @@ function renderRakurakuTask(task) {
   }
 
   const payload = task.payload || {};
-  rakurakuTaskState.textContent = "待機中 1件";
+  rakurakuTaskState.textContent = task.status === "pending" ? "待機中 1件" : `最新タスク：${task.status || "状態不明"}`;
   rakurakuTaskPanel.hidden = false;
 
   if (rakurakuTaskTitle) {
@@ -352,24 +352,17 @@ async function handleRakurakuAutoPollToggle() {
 
 async function loadRakurakuExecutionMode() {
   try {
-    const storageState = await getLocalStorage([RAKURAKU_EXECUTION_MODE_KEY]);
-    const mode = storageState[RAKURAKU_EXECUTION_MODE_KEY] === "real" ? "real" : "dry-run";
-
     if (rakurakuExecutionModeSelect) {
-      rakurakuExecutionModeSelect.value = mode;
+      rakurakuExecutionModeSelect.value = "real";
     }
-
-    if (!storageState[RAKURAKU_EXECUTION_MODE_KEY]) {
-      await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: "dry-run" });
-    }
+    await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: "real" });
   } catch (error) {
     console.warn("[furimane-rakuraku] execution mode load failed", error);
   }
 }
 
 async function handleRakurakuExecutionModeChange() {
-  const mode = rakurakuExecutionModeSelect?.value === "real" ? "real" : "dry-run";
-  await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: mode });
+  await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: "real" });
 }
 
 async function fetchAppApi(path, options = {}) {
@@ -1051,6 +1044,8 @@ async function handleRakurakuTaskCheck() {
   try {
     const backgroundResult = await sendRuntimeMessage({ type: "POLL_RAKURAKU_NOW" });
 
+    console.log("[furimane-rakuraku] background poll result", backgroundResult);
+
     if (!backgroundResult?.success) {
       throw new Error(backgroundResult?.message || "background poll failed");
     }
@@ -1066,6 +1061,19 @@ async function handleRakurakuTaskCheck() {
         soldPrice: payload.soldPrice,
         status: backgroundResult.task.status
       });
+    } else {
+      const diagnostics = backgroundResult.diagnostics || {};
+      const latestTask = diagnostics.latestTask || null;
+      const statusCounts = Object.entries(diagnostics.statusCounts || {})
+        .map(([status, count]) => `${status}:${count}`)
+        .join(", ");
+
+      setStatus("success", "待機中タスクなし", [
+        { label: "理由", value: backgroundResult.reason || "no_pending_task" },
+        { label: "認証ユーザー", value: diagnostics.authenticatedUserId || authState.user?.id || "不明" },
+        { label: "状態別件数", value: statusCounts || "relistタスクなし" },
+        { label: "最新タスク", value: latestTask ? `${latestTask.status || "状態不明"} / ${latestTask.id}` : "なし" }
+      ]);
     }
   } catch (error) {
     renderRakurakuTask(null);

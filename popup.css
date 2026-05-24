@@ -394,6 +394,53 @@ body {
   min-height: 48px;
 }
 
+.rakuraku-sync-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(124, 58, 237, 0.26);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(249, 115, 22, 0.08)),
+    rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.rakuraku-sync-row__label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.rakuraku-sync-row strong {
+  display: block;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.rakuraku-sync-row__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  padding: 7px 10px;
+  border: 1px solid rgba(249, 115, 22, 0.28);
+  border-radius: 999px;
+  background: rgba(249, 115, 22, 0.12);
+  color: #fed7aa;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .rakuraku-auto-row {
   position: relative;
   z-index: 1;

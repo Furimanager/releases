@@ -8,6 +8,8 @@
     const TOOLBAR_ATTRIBUTE = "data-furimanager-action-toolbar";
     const TOOLBAR_KIND_ATTRIBUTE = "data-furimanager-action-kind";
     const TOOLBAR_BUTTONS_ATTRIBUTE = "data-furimanager-action-buttons";
+    const COPY_LISTING_BUTTON_WAIT_TIMEOUT_MS = 10000;
+    const COPY_LISTING_BUTTON_WAIT_INTERVAL_MS = 300;
     const OBSERVER_DEBOUNCE_MS = 250;
     const PRODUCT_PATH_PATTERN = /^\/item\//;
     const HISTORY_PATH_MARKERS = [
@@ -90,11 +92,20 @@
                 return false;
             }
             if (message?.type === "CLICK_FURIMANE_COPY_LISTING_BUTTON") {
-                sendResponse({
-                    success: true,
-                    ...clickFurimaneCopyListingButton(message.mercariItemId ?? null),
+                void clickFurimaneCopyListingButton(message.mercariItemId ?? null)
+                    .then((result) => {
+                    sendResponse({
+                        success: true,
+                        ...result,
+                    });
+                })
+                    .catch((error) => {
+                    sendResponse({
+                        success: false,
+                        message: error instanceof Error ? error.message : "copy listing action failed",
+                    });
                 });
-                return false;
+                return true;
             }
         }
         catch (error) {
@@ -878,8 +889,8 @@
             candidates,
         };
     }
-    function clickFurimaneCopyListingButton(expectedItemId) {
-        const detection = detectFurimaneCopyListingButton(expectedItemId);
+    async function clickFurimaneCopyListingButton(expectedItemId) {
+        const detection = await waitForFurimaneCopyListingButton(expectedItemId);
         if (!detection.detected || !detection.button) {
             return {
                 clicked: false,
@@ -892,15 +903,17 @@
             };
         }
         detection.button.click();
-        console.log("[furimanager-extension] copy listing button clicked", {
+        console.log("[furimanager-extension] relist action button clicked", {
             expectedItemId: detection.expectedItemId,
             currentItemId: detection.currentItemId,
             pageUrl: detection.pageUrl,
+            action: detection.action,
         });
         return {
             clicked: true,
             detected: true,
-            reason: "copy_listing_button_clicked",
+            action: detection.action,
+            reason: `${detection.action || "relist_action"}_button_clicked`,
             itemIdMatch: detection.itemIdMatch,
             expectedItemId: detection.expectedItemId,
             currentItemId: detection.currentItemId,
@@ -921,17 +934,29 @@
                 button: null,
             };
         }
-        const button = safeQuerySelectorAll(document, '[data-furimanager-action="copy-listing"]')
-            .find((element) => element instanceof HTMLButtonElement && isVisible(element)) ?? null;
+        const buttons = safeQuerySelectorAll(document, '[data-furimanager-action="relist"], [data-furimanager-action="copy-listing"]')
+            .filter((element) => element instanceof HTMLButtonElement && isVisible(element));
+        const button = buttons.find((element) => element.dataset.furimanagerAction === "relist") ?? buttons[0] ?? null;
+        const action = button?.dataset.furimanagerAction ?? null;
         return {
             detected: Boolean(button),
-            reason: button ? "copy_listing_button_found" : "copy_listing_button_not_found",
+            action,
+            reason: button ? `${action}_button_found` : "relist_action_button_not_found",
             itemIdMatch,
             expectedItemId,
             currentItemId,
             pageUrl: window.location.href,
             button,
         };
+    }
+    async function waitForFurimaneCopyListingButton(expectedItemId) {
+        const startedAt = Date.now();
+        let detection = detectFurimaneCopyListingButton(expectedItemId);
+        while (!detection.detected && detection.reason !== "item_id_mismatch" && Date.now() - startedAt < COPY_LISTING_BUTTON_WAIT_TIMEOUT_MS) {
+            await sleep(COPY_LISTING_BUTTON_WAIT_INTERVAL_MS);
+            detection = detectFurimaneCopyListingButton(expectedItemId);
+        }
+        return detection;
     }
     function getSelectorHint(element) {
         const parts = [element.tagName.toLowerCase()];
