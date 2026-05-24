@@ -7,12 +7,16 @@
 
   const chromeApi = (globalThis as any).chrome;
     const RELIST_PENDING_KEY = "relist_pending";
-    const RAKURAKU_AUTO_POLL_KEY = "rakurakuAutoPollEnabled";
-    const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
-    const RAKURAKU_ALARM_NAME = "rakurakuPoll";
-    const MERCARI_SELL_URL = "https://jp.mercari.com/sell";
-    const MOCK_RELIST_PATH = "mock/mercari-relist.html";
-  const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+  const RAKURAKU_AUTO_POLL_KEY = "rakurakuAutoPollEnabled";
+  const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
+  const RAKURAKU_ALARM_NAME = "rakurakuPoll";
+  const DEFAULT_APP_URL = "https://furimanager.com";
+  const MERCARI_SELL_URL = "https://jp.mercari.com/sell";
+  const MERCARI_ITEM_URL_BASE = "https://jp.mercari.com/item/";
+  const MOCK_RELIST_PATH = "mock/mercari-relist.html";
+  const REAL_RELIST_DETECTION_TIMEOUT_MS = 15000;
+  const REAL_RELIST_DETECTION_RETRY_MS = 700;
+  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   const AUTH_STORAGE_KEYS = [
     "supabaseAccessToken",
     "supabaseRefreshToken",
@@ -110,7 +114,7 @@
 
   async function handlePollRakurakuNow(respond: (response: any) => void) {
     try {
-      const result = await pollNextRelistTask("manual");
+      const result = await pollNextRelistTask("manual", { ignoreAutoPollDisabled: true });
       respond({ success: true, ...result, isRunningTask: isRunningRakurakuTask });
     } catch (error) {
       respond({
@@ -143,8 +147,8 @@
     }
   });
 
-  async function pollNextRelistTask(reason: string) {
-    if (!(await isRakurakuAutoPollEnabled())) {
+  async function pollNextRelistTask(reason: string, options: { ignoreAutoPollDisabled?: boolean } = {}) {
+    if (!options.ignoreAutoPollDisabled && !(await isRakurakuAutoPollEnabled())) {
       return { task: null, started: false, reason: "auto_poll_disabled" };
     }
 
@@ -199,10 +203,16 @@
       mercariItemId: task.payload?.mercariItemId
     });
 
-    if (executionMode !== "dry-run") {
-      throw new Error("real mode is not implemented yet");
+    if (executionMode === "real") {
+      return executeRealCopyListingTask(task);
     }
+    if (executionMode !== "dry-run") {
+      throw new Error("unknown relist execution mode");
+    }
+    return executeDryRunRelistTask(task);
+  }
 
+  async function executeDryRunRelistTask(task: any) {
     const mockUrl = buildMockRelistUrl(task);
     const detectionPromise = waitForMockRelistDetection(task.id);
     await createTab({ url: mockUrl, active: true });
@@ -214,6 +224,37 @@
 
     const completed = await completeTask(task.id, true, "dry-run: relist button detected on mock page");
     return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
+  }
+  async function executeRealCopyListingTask(task: any) {
+    const mercariItemId = normalizeMercariItemId(task.payload?.mercariItemId || task.payload?.itemId || task.target_item_id || task.targetItemId);
+    if (!mercariItemId) {
+      throw new Error("real-copy-listing: mercari item id is missing");
+    }
+    const itemUrl = buildMercariItemUrl(mercariItemId);
+    const tab = await createTab({ url: itemUrl, active: true });
+    if (typeof tab?.id !== "number") {
+      throw new Error("real-copy-listing: item page tab could not be opened");
+    }
+    await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
+    await sleep(1200);
+    const result = await sendTabMessageWithRetry(tab.id, {
+      type: "CLICK_FURIMANE_COPY_LISTING_BUTTON",
+      taskId: task.id,
+      mercariItemId
+    });
+    console.log("[rakuraku] real copy listing result", {
+      taskId: task.id,
+      mercariItemId,
+      itemUrl,
+      detected: result?.detected === true,
+      clicked: result?.clicked === true,
+      reason: result?.reason
+    });
+    if (result?.clicked === true) {
+      const completed = await completeTask(task.id, true, "real-copy-listing: copy listing button clicked; final publish not executed");
+      return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
+    }
+    throw new Error(`real-copy-listing: ${result?.reason || "copy listing button not found on item page"}`);
   }
 
   async function completeTask(taskId: string, success: boolean, message: string) {
@@ -237,6 +278,15 @@
 
     return url.toString();
   }
+  function buildMercariItemUrl(itemId: string) {
+    return `${MERCARI_ITEM_URL_BASE}${encodeURIComponent(itemId)}`;
+  }
+
+  function normalizeMercariItemId(value: unknown) {
+    const text = String(value || "").trim();
+    const matched = text.match(/m\d{6,}/i);
+    return matched?.[0] ?? null;
+  }
 
   function waitForMockRelistDetection(taskId: string) {
     return new Promise<boolean>((resolve, reject) => {
@@ -257,6 +307,81 @@
       };
 
       chromeApi.runtime.onMessage.addListener(listener);
+    });
+  }
+  function waitForTabComplete(tabId: number, timeoutMs: number) {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutId);
+        chromeApi.tabs.onUpdated?.removeListener(listener);
+        resolve();
+      };
+      const timeoutId = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        chromeApi.tabs.onUpdated?.removeListener(listener);
+        reject(new Error("real-copy-listing: item page load timed out"));
+      }, timeoutMs);
+      const listener = (updatedTabId: number, changeInfo: { status?: string }) => {
+        if (updatedTabId === tabId && changeInfo?.status === "complete") {
+          finish();
+        }
+      };
+      chromeApi.tabs.onUpdated?.addListener(listener);
+      chromeApi.tabs.get?.(tabId, (tab: { status?: string }) => {
+        if (chromeApi.runtime.lastError) {
+          return;
+        }
+        if (tab?.status === "complete") {
+          finish();
+        }
+      });
+    });
+  }
+
+  async function sendTabMessageWithRetry(tabId: number, message: Record<string, unknown>) {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        const response = await sendTabMessage(tabId, message);
+        if (response?.success) {
+          return response;
+        }
+        lastError = new Error(response?.message || "content script returned empty response");
+      } catch (error) {
+        lastError = error;
+      }
+      await sleep(REAL_RELIST_DETECTION_RETRY_MS);
+    }
+    throw lastError instanceof Error ? lastError : new Error("real-copy-listing: content script did not respond");
+  }
+
+  function sendTabMessage(tabId: number, message: Record<string, unknown>) {
+    return new Promise<any>((resolve, reject) => {
+      try {
+        chromeApi.tabs.sendMessage(tabId, message, (response: any) => {
+          if (chromeApi.runtime.lastError) {
+            reject(new Error(chromeApi.runtime.lastError.message || "tab message failed"));
+            return;
+          }
+          resolve(response);
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function sleep(ms: number) {
+    return new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
     });
   }
 
@@ -407,12 +532,7 @@
   }
 
   function getAppBaseUrl() {
-    const appUrl = String((globalThis as any).FurimanagerConfig?.APP_URL || "").trim().replace(/\/+$/, "");
-
-    if (!appUrl) {
-      throw new Error("config.js の APP_URL が未設定です");
-    }
-
+    const appUrl = String((globalThis as any).FurimanagerConfig?.APP_URL || DEFAULT_APP_URL).trim().replace(/\/+$/, "");
     return appUrl;
   }
 

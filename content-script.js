@@ -7,6 +7,7 @@
     mountedWindow.__furimanagerMercariActionButtonsMounted = true;
     const TOOLBAR_ATTRIBUTE = "data-furimanager-action-toolbar";
     const TOOLBAR_KIND_ATTRIBUTE = "data-furimanager-action-kind";
+    const TOOLBAR_BUTTONS_ATTRIBUTE = "data-furimanager-action-buttons";
     const OBSERVER_DEBOUNCE_MS = 250;
     const PRODUCT_PATH_PATTERN = /^\/item\//;
     const HISTORY_PATH_MARKERS = [
@@ -39,6 +40,15 @@
         "出品した商品",
         "販売中",
     ];
+    const SOLD_PRODUCT_TEXT_MARKERS = [
+        "SOLD",
+        "取引画面を表示する",
+        "売却済み",
+        "売れた商品",
+    ];
+    const RELIST_ONLY_BUTTONS = [
+        { id: "relist", label: "再出品", action: "relist" },
+    ];
     const BUTTONS_BY_KIND = {
         otherProduct: [
             { id: "copy-listing", label: "コピー出品", action: "copyListing" },
@@ -54,7 +64,6 @@
         ],
         history: [
             { id: "relist", label: "再出品", action: "relist" },
-            { id: "save-draft", label: "下書き", action: "saveDraft" },
         ],
         activeListings: [
             { id: "relist", label: "再出品", action: "relist" },
@@ -64,6 +73,39 @@
         ],
     };
     BUTTONS_BY_KIND.otherProduct = BUTTONS_BY_KIND.otherProduct.filter((definition) => definition.action === "copyListing");
+    const RELIST_DETECTION_TEXT_MARKERS = [
+        "\u518d\u51fa\u54c1",
+        "\u518d\u51fa\u54c1\u3059\u308b",
+        "\u3082\u3046\u4e00\u5ea6\u51fa\u54c1",
+        "\u30b3\u30d4\u30fc\u51fa\u54c1",
+        "\u30b3\u30d4\u30fc\u3057\u3066\u51fa\u54c1",
+    ];
+    chromeApi?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+        try {
+            if (message?.type === "DETECT_MERCARI_RELIST_BUTTON") {
+                sendResponse({
+                    success: true,
+                    ...detectRelistButtonCandidate(message.mercariItemId ?? null),
+                });
+                return false;
+            }
+            if (message?.type === "CLICK_FURIMANE_COPY_LISTING_BUTTON") {
+                sendResponse({
+                    success: true,
+                    ...clickFurimaneCopyListingButton(message.mercariItemId ?? null),
+                });
+                return false;
+            }
+        }
+        catch (error) {
+            sendResponse({
+                success: false,
+                message: error instanceof Error ? error.message : "relist button action failed",
+            });
+            return false;
+        }
+        return false;
+    });
     let injectionTimer = null;
     let retryTimer = null;
     let retryCount = 0;
@@ -121,11 +163,13 @@
         const editLink = document.querySelector('a[href*="/sell/edit"], a[href*="/items/edit"], a[href*="/item/edit"]');
         return editLink !== null;
     }
+    function isSoldProductPage() {
+        const bodyText = document.body?.innerText ?? "";
+        return SOLD_PRODUCT_TEXT_MARKERS.some((marker) => bodyText.includes(marker));
+    }
     function injectStyles() {
-        if (document.getElementById("furimanager-action-button-style")) {
-            return;
-        }
-        const style = document.createElement("style");
+        const existingStyle = document.getElementById("furimanager-action-button-style");
+        const style = existingStyle ?? document.createElement("style");
         style.id = "furimanager-action-button-style";
         style.textContent = `
       .furimanager-action-toolbar {
@@ -140,12 +184,19 @@
       }
 
       .furimanager-action-toolbar--media {
-        width: fit-content;
-        margin-top: 64px;
-        margin-bottom: 34px;
-        padding: 0;
+        width: 100%;
+        max-width: 100%;
+        margin-top: 0;
+        margin-left: 0;
+        margin-bottom: 0;
+        box-sizing: border-box;
+        padding: 8px 14px 8px 104px;
         position: relative;
-        z-index: 20;
+        z-index: 0;
+        background: #ffd8eb !important;
+        border-radius: 0 !important;
+        overflow: hidden;
+        pointer-events: none;
       }
 
       .furimanager-action-toolbar--inline-end {
@@ -163,19 +214,20 @@
         padding: 0 10px;
         border: 0;
         border-radius: 10px;
-        background: #5B5FE8;
+        background: #ff4fa3;
         color: #FFFFFF;
         font-size: 12px;
         font-weight: 600;
         line-height: 34px;
-        box-shadow: 0 4px 12px rgba(79, 70, 229, 0.22);
+        box-shadow: 0 4px 12px rgba(255, 79, 163, 0.24);
         cursor: pointer;
+        pointer-events: auto;
         white-space: nowrap;
         transition: background-color 140ms ease, transform 140ms ease;
       }
 
       .furimanager-action-button:hover {
-        background: #4F46E5;
+        background: #f13d94;
       }
 
       .furimanager-action-button:active {
@@ -208,7 +260,9 @@
         box-shadow: 0 12px 28px rgba(17, 24, 39, 0.28);
       }
     `;
-        document.documentElement.appendChild(style);
+        if (!existingStyle) {
+            document.documentElement.appendChild(style);
+        }
     }
     function injectButtons() {
         const pageKind = detectPageKind();
@@ -217,7 +271,7 @@
             clearScheduledInjections();
             return;
         }
-        const buttonDefinitions = BUTTONS_BY_KIND[pageKind];
+        const buttonDefinitions = getButtonDefinitions(pageKind);
         const targets = getInjectionTargets(pageKind);
         if (targets.length === 0) {
             scheduleRetryInjection();
@@ -238,6 +292,15 @@
             return getListingTargets(pageKind);
         }
         return [];
+    }
+    function getButtonDefinitions(pageKind) {
+        if (pageKind === "history") {
+            return RELIST_ONLY_BUTTONS;
+        }
+        if (pageKind === "ownProduct" && isSoldProductPage()) {
+            return RELIST_ONLY_BUTTONS;
+        }
+        return BUTTONS_BY_KIND[pageKind];
     }
     function getProductPageTarget(pageKind) {
         const imageContainer = findProductImageContainer();
@@ -458,7 +521,9 @@
     }
     function ensureToolbar(context, buttonDefinitions, pageKind) {
         const existingToolbar = context.root.querySelector(`[${TOOLBAR_ATTRIBUTE}="true"]`);
-        if (existingToolbar?.getAttribute(TOOLBAR_KIND_ATTRIBUTE) === pageKind) {
+        const buttonSignature = buttonDefinitions.map((definition) => definition.id).join(",");
+        if (existingToolbar?.getAttribute(TOOLBAR_KIND_ATTRIBUTE) === pageKind &&
+            existingToolbar.getAttribute(TOOLBAR_BUTTONS_ATTRIBUTE) === buttonSignature) {
             return;
         }
         existingToolbar?.remove();
@@ -467,6 +532,7 @@
         applyToolbarPlacementClass(toolbar, context.placement);
         toolbar.setAttribute(TOOLBAR_ATTRIBUTE, "true");
         toolbar.setAttribute(TOOLBAR_KIND_ATTRIBUTE, pageKind);
+        toolbar.setAttribute(TOOLBAR_BUTTONS_ATTRIBUTE, buttonSignature);
         buttonDefinitions.forEach((definition) => {
             toolbar.appendChild(createActionButton(definition, context));
         });
@@ -597,17 +663,20 @@
     }
     function extractItemDataFromElement(source, fallbackUrl, mode) {
         const itemUrl = normalizeItemUrl(getItemLink(source)?.href ?? fallbackUrl ?? window.location.href);
+        const itemId = extractMercariItemId(itemUrl);
         const detailSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : source;
-        const imageSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? findProductImageContainer() ?? source : source;
+        const imageSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : source;
+        const jsonItem = itemId && detailSource instanceof Document ? findCurrentItemJsonObject(detailSource, itemId) : null;
         const title = extractTitle(source);
         const price = extractPrice(source);
-        const imageUrls = extractImageUrls(imageSource);
+        const imageUrls = extractImageUrls(imageSource, itemId);
         const thumbnailUrl = imageUrls[0] ?? extractThumbnail(source);
         const description = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? extractDescription(document) : null;
-        const categoryPath = extractCategoryPath(detailSource);
+        const textCategoryPath = extractCategoryPath(detailSource);
+        const categoryPath = textCategoryPath.length > 0 ? textCategoryPath : extractCategoryPathFromJson(jsonItem) ?? [];
         // TODO: メルカリ側のフォーム仕様が変わった場合は、カテゴリ・配送方法の取得候補をここで増やす。
         return {
-            itemId: extractMercariItemId(itemUrl),
+            itemId,
             title,
             price,
             itemUrl,
@@ -615,13 +684,13 @@
             imageUrls,
             description,
             categoryPath,
-            condition: extractInfoValue(detailSource, ["商品の状態"]),
-            brand: extractInfoValue(detailSource, ["ブランド"]),
-            size: extractInfoValue(detailSource, ["商品のサイズ", "サイズ"]),
-            shippingPayer: extractInfoValue(detailSource, ["配送料の負担"]),
-            shippingMethod: extractInfoValue(detailSource, ["配送の方法"]),
-            shippingFrom: extractInfoValue(detailSource, ["発送元の地域"]),
-            shippingDays: extractInfoValue(detailSource, ["発送までの日数"]),
+            condition: extractCondition(detailSource, jsonItem),
+            brand: extractNamedJsonValue(jsonItem, ["brand"]) ?? extractInfoValue(detailSource, ["ブランド"]),
+            size: extractNamedJsonValue(jsonItem, ["size"]) ?? extractInfoValue(detailSource, ["商品のサイズ", "サイズ"]),
+            shippingPayer: extractNamedJsonValue(jsonItem, ["shippingPayer", "shipping_payer", "shippingFeePayer", "shipping_fee_payer"]) ?? extractInfoValue(detailSource, ["配送料の負担"]),
+            shippingMethod: extractNamedJsonValue(jsonItem, ["shippingMethod", "shipping_method", "deliveryMethod", "delivery_method"]) ?? extractInfoValue(detailSource, ["配送の方法"]),
+            shippingFrom: extractNamedJsonValue(jsonItem, ["shippingFrom", "shipping_from", "shippingFromArea", "shipping_from_area"]) ?? extractInfoValue(detailSource, ["発送元の地域", "発送元地域"]),
+            shippingDays: extractNamedJsonValue(jsonItem, ["shippingDays", "shipping_days", "shippingDuration", "shipping_duration"]) ?? extractInfoValue(detailSource, ["発送までの日数"]),
             mode,
         };
     }
@@ -635,22 +704,26 @@
             }
             const html = await response.text();
             const parsedDocument = new DOMParser().parseFromString(html, "text/html");
+            const itemId = extractMercariItemId(itemUrl);
+            const jsonItem = itemId ? findCurrentItemJsonObject(parsedDocument, itemId) : null;
+            const imageUrls = extractImageUrls(parsedDocument, itemId);
+            const textCategoryPath = extractCategoryPath(parsedDocument);
             return {
-                itemId: extractMercariItemId(itemUrl),
+                itemId,
                 title: extractTitle(parsedDocument),
                 price: extractPrice(parsedDocument),
                 itemUrl,
-                thumbnailUrl: extractThumbnail(parsedDocument),
-                imageUrls: extractImageUrls(parsedDocument),
+                thumbnailUrl: imageUrls[0] ?? extractThumbnail(parsedDocument),
+                imageUrls,
                 description: extractDescription(parsedDocument),
-                categoryPath: extractCategoryPath(parsedDocument),
-                condition: extractInfoValue(parsedDocument, ["商品の状態"]),
-                brand: extractInfoValue(parsedDocument, ["ブランド"]),
-                size: extractInfoValue(parsedDocument, ["商品のサイズ", "サイズ"]),
-                shippingPayer: extractInfoValue(parsedDocument, ["配送料の負担"]),
-                shippingMethod: extractInfoValue(parsedDocument, ["配送の方法"]),
-                shippingFrom: extractInfoValue(parsedDocument, ["発送元の地域"]),
-                shippingDays: extractInfoValue(parsedDocument, ["発送までの日数"]),
+                categoryPath: textCategoryPath.length > 0 ? textCategoryPath : extractCategoryPathFromJson(jsonItem) ?? [],
+                condition: extractCondition(parsedDocument, jsonItem),
+                brand: extractNamedJsonValue(jsonItem, ["brand"]) ?? extractInfoValue(parsedDocument, ["ブランド"]),
+                size: extractNamedJsonValue(jsonItem, ["size"]) ?? extractInfoValue(parsedDocument, ["商品のサイズ", "サイズ"]),
+                shippingPayer: extractNamedJsonValue(jsonItem, ["shippingPayer", "shipping_payer", "shippingFeePayer", "shipping_fee_payer"]) ?? extractInfoValue(parsedDocument, ["配送料の負担"]),
+                shippingMethod: extractNamedJsonValue(jsonItem, ["shippingMethod", "shipping_method", "deliveryMethod", "delivery_method"]) ?? extractInfoValue(parsedDocument, ["配送の方法"]),
+                shippingFrom: extractNamedJsonValue(jsonItem, ["shippingFrom", "shipping_from", "shippingFromArea", "shipping_from_area"]) ?? extractInfoValue(parsedDocument, ["発送元の地域", "発送元地域"]),
+                shippingDays: extractNamedJsonValue(jsonItem, ["shippingDays", "shipping_days", "shippingDuration", "shipping_duration"]) ?? extractInfoValue(parsedDocument, ["発送までの日数"]),
                 mode,
             };
         }
@@ -736,6 +809,154 @@
         }
         deleteTarget.click();
         showToast("削除確認画面を開きました。内容を確認してください");
+    }
+    function detectRelistButtonCandidate(expectedItemId) {
+        const currentItemId = extractMercariItemId(window.location.href);
+        const itemIdMatch = !expectedItemId || !currentItemId || expectedItemId === currentItemId;
+        if (expectedItemId && currentItemId && expectedItemId !== currentItemId) {
+            console.log("[furimanager-extension] relist detection", {
+                item_id_match: false,
+                relist_button_candidate_count: 0,
+                candidate_text: [],
+                candidate_selector_hint: [],
+                detected: false,
+                reason: "item_id_mismatch",
+                expectedItemId,
+                currentItemId,
+            });
+            return {
+                detected: false,
+                reason: "item_id_mismatch",
+                itemIdMatch,
+                expectedItemId,
+                currentItemId,
+                pageUrl: window.location.href,
+                candidates: [],
+            };
+        }
+        const selectors = [
+            "button",
+            "a",
+            '[role="button"]',
+            'input[type="button"]',
+            'input[type="submit"]',
+            "[aria-label]",
+            "[data-testid]",
+        ];
+        const candidates = safeQuerySelectorAll(document, selectors.join(","))
+            .filter((element) => {
+            if (element.closest(`[${TOOLBAR_ATTRIBUTE}="true"]`) || !isVisible(element)) {
+                return false;
+            }
+            const text = getRelistDetectionText(element);
+            return RELIST_DETECTION_TEXT_MARKERS.some((marker) => text.includes(marker));
+        })
+            .slice(0, 5)
+            .map((element) => ({
+            tagName: element.tagName.toLowerCase(),
+            text: getRelistDetectionText(element).slice(0, 120),
+            selectorHint: getSelectorHint(element),
+            href: element instanceof HTMLAnchorElement ? element.href : null,
+            ariaLabel: element.getAttribute("aria-label"),
+            testId: element.getAttribute("data-testid"),
+        }));
+        const detected = candidates.length === 1;
+        console.log("[furimanager-extension] relist detection", {
+            item_id_match: itemIdMatch,
+            relist_button_candidate_count: candidates.length,
+            candidate_text: candidates.map((candidate) => candidate.text),
+            candidate_selector_hint: candidates.map((candidate) => candidate.selectorHint),
+            detected,
+        });
+        return {
+            detected,
+            reason: candidates.length === 1 ? "candidate_found" : candidates.length > 1 ? "multiple_candidates_found" : "candidate_not_found",
+            itemIdMatch,
+            expectedItemId,
+            currentItemId,
+            pageUrl: window.location.href,
+            candidates,
+        };
+    }
+    function clickFurimaneCopyListingButton(expectedItemId) {
+        const detection = detectFurimaneCopyListingButton(expectedItemId);
+        if (!detection.detected || !detection.button) {
+            return {
+                clicked: false,
+                detected: false,
+                reason: detection.reason,
+                itemIdMatch: detection.itemIdMatch,
+                expectedItemId: detection.expectedItemId,
+                currentItemId: detection.currentItemId,
+                pageUrl: detection.pageUrl,
+            };
+        }
+        detection.button.click();
+        console.log("[furimanager-extension] copy listing button clicked", {
+            expectedItemId: detection.expectedItemId,
+            currentItemId: detection.currentItemId,
+            pageUrl: detection.pageUrl,
+        });
+        return {
+            clicked: true,
+            detected: true,
+            reason: "copy_listing_button_clicked",
+            itemIdMatch: detection.itemIdMatch,
+            expectedItemId: detection.expectedItemId,
+            currentItemId: detection.currentItemId,
+            pageUrl: detection.pageUrl,
+        };
+    }
+    function detectFurimaneCopyListingButton(expectedItemId) {
+        const currentItemId = extractMercariItemId(window.location.href);
+        const itemIdMatch = !expectedItemId || !currentItemId || expectedItemId === currentItemId;
+        if (expectedItemId && currentItemId && expectedItemId !== currentItemId) {
+            return {
+                detected: false,
+                reason: "item_id_mismatch",
+                itemIdMatch,
+                expectedItemId,
+                currentItemId,
+                pageUrl: window.location.href,
+                button: null,
+            };
+        }
+        const button = safeQuerySelectorAll(document, '[data-furimanager-action="copy-listing"]')
+            .find((element) => element instanceof HTMLButtonElement && isVisible(element)) ?? null;
+        return {
+            detected: Boolean(button),
+            reason: button ? "copy_listing_button_found" : "copy_listing_button_not_found",
+            itemIdMatch,
+            expectedItemId,
+            currentItemId,
+            pageUrl: window.location.href,
+            button,
+        };
+    }
+    function getSelectorHint(element) {
+        const parts = [element.tagName.toLowerCase()];
+        const testId = element.getAttribute("data-testid");
+        const ariaLabel = element.getAttribute("aria-label");
+        if (element.id) {
+            parts.push(`#${element.id}`);
+        }
+        if (testId) {
+            parts.push(`[data-testid="${testId}"]`);
+        }
+        if (ariaLabel) {
+            parts.push(`[aria-label="${ariaLabel.slice(0, 40)}"]`);
+        }
+        return parts.join("");
+    }
+    function getRelistDetectionText(element) {
+        const value = element instanceof HTMLInputElement ? element.value : "";
+        return normalizeText([
+            element.textContent,
+            element.getAttribute("aria-label"),
+            element.getAttribute("title"),
+            element.getAttribute("data-testid"),
+            value,
+        ].filter(Boolean).join(" "));
     }
     async function findActionElement(source, labels, includeDocumentFallback) {
         const directTarget = findVisibleActionElement(source, labels, includeDocumentFallback);
@@ -941,24 +1162,351 @@
         }
         return null;
     }
-    function extractImageUrls(source) {
+    function extractImageUrls(source, itemId = null) {
         const urls = new Set();
-        const metaImage = source.querySelector('meta[property="og:image"]');
-        if (metaImage instanceof HTMLMetaElement && metaImage.content) {
-            urls.add(metaImage.content);
+        const seenImageKeys = new Set();
+        const addUrl = (url) => {
+            const normalizedUrl = normalizeImageUrl(url);
+            if (!normalizedUrl || urls.size >= 10 || !isLikelyProductImageUrl(normalizedUrl)) {
+                return;
+            }
+            const imageKey = getImageDedupeKey(normalizedUrl);
+            if (seenImageKeys.has(imageKey)) {
+                return;
+            }
+            seenImageKeys.add(imageKey);
+            urls.add(normalizedUrl);
+        };
+        if (source instanceof Document) {
+            collectImageUrlsFromMercariThumbnails(source, addUrl);
+            if (urls.size === 0) {
+                const productMedia = source === document ? findProductImageGalleryScope() : findStaticProductImageContainer(source);
+                if (productMedia) {
+                    collectImageUrlsFromDom(productMedia, addUrl, true);
+                }
+            }
+            if (urls.size === 0 && itemId) {
+                collectImageUrlsFromCurrentItemJson(source, itemId, addUrl);
+            }
+            if (urls.size === 0) {
+                const metaImage = source.querySelector('meta[property="og:image"]');
+                if (metaImage instanceof HTMLMetaElement && metaImage.content) {
+                    addUrl(metaImage.content);
+                }
+            }
+            return Array.from(urls).slice(0, 10);
         }
-        const allowUnknownImageSize = source instanceof Document;
-        safeQuerySelectorAll(source, 'img[src*="mercdn"], img[src*="mercari"], img[src]').forEach((image) => {
-            if (!(image instanceof HTMLImageElement)) {
-                return;
-            }
-            const src = image.currentSrc || image.src;
-            if (!src || (!allowUnknownImageSize && (image.width < 48 || image.height < 48))) {
-                return;
-            }
-            urls.add(src);
-        });
+        collectImageUrlsFromDom(source, addUrl, false);
         return Array.from(urls).slice(0, 10);
+    }
+    function collectImageUrlsFromMercariThumbnails(source, addUrl) {
+        const roots = safeQuerySelectorAll(source, `
+      .sticky-inner-wrapper,
+      [data-testid="vertical-thumbnail-scroll"] .slick-track,
+      [data-testid="carousel"] .slick-track
+    `);
+        const imageSelector = `
+      mer-item-thumbnail [class*="imageContainer"] img,
+      .merItemThumbnail [class*="imageContainer"] img,
+      [data-index] mer-item-thumbnail [class*="imageContainer"] img,
+      [data-index] .merItemThumbnail [class*="imageContainer"] img
+    `;
+        roots.forEach((root) => {
+            safeQuerySelectorAll(root, imageSelector).forEach((image) => {
+                if (image instanceof HTMLImageElement) {
+                    addUrl(image.getAttribute("src") || image.getAttribute("data-src") || image.currentSrc || image.src);
+                }
+            });
+        });
+    }
+    function findProductImageGalleryScope() {
+        const imageContainer = findProductImageContainer();
+        if (!imageContainer) {
+            return null;
+        }
+        return findProductImageToolbarMount(imageContainer);
+    }
+    function collectImageUrlsFromDom(source, addUrl, allowUnknownImageSize) {
+        safeQuerySelectorAll(source, 'picture source[srcset], source[srcset], img[src], img[data-src], img[data-lazy-src], img[srcset]').forEach((element) => {
+            if (element instanceof HTMLSourceElement) {
+                collectSrcSetUrls(element.srcset, addUrl);
+                return;
+            }
+            if (!(element instanceof HTMLImageElement)) {
+                return;
+            }
+            if (!allowUnknownImageSize && !isUsableImageElement(element)) {
+                return;
+            }
+            [
+                element.currentSrc,
+                element.src,
+                element.getAttribute("data-src"),
+                element.getAttribute("data-lazy-src"),
+                element.getAttribute("data-original"),
+            ].forEach(addUrl);
+            collectSrcSetUrls(element.srcset, addUrl);
+        });
+    }
+    function findStaticProductImageContainer(source) {
+        return safeQuerySelectorAll(source, `
+      main [data-testid*="carousel"],
+      main [class*="swiper"],
+      main [class*="carousel"],
+      main [class*="slick"],
+      #item-photo,
+      #item-photo-container
+    `)[0] ?? null;
+    }
+    function collectSrcSetUrls(srcset, addUrl) {
+        if (!srcset) {
+            return;
+        }
+        srcset.split(",").forEach((entry) => {
+            const url = entry.trim().split(/\s+/)[0];
+            addUrl(url);
+        });
+    }
+    function isUsableImageElement(image) {
+        const rect = image.getBoundingClientRect();
+        const width = Math.max(image.width, image.naturalWidth, rect.width);
+        const height = Math.max(image.height, image.naturalHeight, rect.height);
+        return width >= 48 && height >= 48;
+    }
+    function normalizeImageUrl(url) {
+        const trimmedUrl = normalizeText(url);
+        if (!trimmedUrl || trimmedUrl.startsWith("data:")) {
+            return null;
+        }
+        try {
+            return new URL(trimmedUrl, window.location.href).href;
+        }
+        catch {
+            return null;
+        }
+    }
+    function getImageDedupeKey(url) {
+        try {
+            const parsedUrl = new URL(url);
+            const photoMatch = parsedUrl.pathname.match(/\/photos\/([^/?#]+)/i);
+            if (photoMatch?.[1]) {
+                return `photo:${photoMatch[1].replace(/\.(?:jpe?g|png|webp)$/i, "")}`;
+            }
+            return `${parsedUrl.origin}${parsedUrl.pathname}`;
+        }
+        catch {
+            return url;
+        }
+    }
+    function collectImageUrlsFromCurrentItemJson(source, itemId, addUrl) {
+        safeQuerySelectorAll(source, 'script[type="application/json"], script:not([src])').forEach((script) => {
+            const text = script.textContent?.trim();
+            if (!text || (!text.startsWith("{") && !text.startsWith("["))) {
+                return;
+            }
+            try {
+                collectImageUrlsFromCurrentItemJsonValue(JSON.parse(text), itemId, addUrl);
+            }
+            catch {
+                // JSON以外のscriptは無視する。
+            }
+        });
+    }
+    function findCurrentItemJsonObject(source, itemId) {
+        for (const script of safeQuerySelectorAll(source, 'script[type="application/json"], script:not([src])')) {
+            const text = script.textContent?.trim();
+            if (!text || (!text.startsWith("{") && !text.startsWith("["))) {
+                continue;
+            }
+            try {
+                const item = findCurrentItemJsonValue(JSON.parse(text), itemId);
+                if (item) {
+                    return item;
+                }
+            }
+            catch {
+                // JSON以外のscriptは無視する。
+            }
+        }
+        return null;
+    }
+    function findCurrentItemJsonValue(value, itemId, depth = 0) {
+        if (depth > 10 || value === null || value === undefined) {
+            return null;
+        }
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                const matched = findCurrentItemJsonValue(item, itemId, depth + 1);
+                if (matched) {
+                    return matched;
+                }
+            }
+            return null;
+        }
+        if (typeof value !== "object") {
+            return null;
+        }
+        const objectValue = value;
+        if (hasDirectItemId(objectValue, itemId)) {
+            return objectValue;
+        }
+        for (const childValue of Object.values(objectValue)) {
+            const matched = findCurrentItemJsonValue(childValue, itemId, depth + 1);
+            if (matched) {
+                return matched;
+            }
+        }
+        return null;
+    }
+    function extractNamedJsonValue(source, keys) {
+        if (!source) {
+            return null;
+        }
+        for (const key of keys) {
+            const value = findJsonValueByKey(source, key);
+            const name = getJsonDisplayName(value);
+            if (name) {
+                return name;
+            }
+        }
+        return null;
+    }
+    function findJsonValueByKey(source, key, depth = 0) {
+        if (depth > 5 || source === null || source === undefined || typeof source !== "object") {
+            return null;
+        }
+        if (!Array.isArray(source)) {
+            const objectValue = source;
+            if (Object.prototype.hasOwnProperty.call(objectValue, key)) {
+                return objectValue[key];
+            }
+        }
+        const children = Array.isArray(source) ? source : Object.values(source);
+        for (const child of children) {
+            const matched = findJsonValueByKey(child, key, depth + 1);
+            if (matched !== null && matched !== undefined) {
+                return matched;
+            }
+        }
+        return null;
+    }
+    function getJsonDisplayName(value) {
+        if (typeof value === "string") {
+            return normalizeText(value) || null;
+        }
+        if (value === null || value === undefined || typeof value !== "object") {
+            return null;
+        }
+        const objectValue = value;
+        for (const key of ["name", "label", "displayName", "display_name", "text"]) {
+            if (typeof objectValue[key] === "string") {
+                return normalizeText(objectValue[key]) || null;
+            }
+        }
+        return null;
+    }
+    function extractCategoryPathFromJson(source) {
+        if (!source) {
+            return null;
+        }
+        for (const key of ["categoryPath", "category_path", "categories", "category", "itemCategory", "item_category"]) {
+            const path = getCategoryPathFromJsonValue(findJsonValueByKey(source, key));
+            if (path.length > 0) {
+                return path;
+            }
+        }
+        return null;
+    }
+    function getCategoryPathFromJsonValue(value) {
+        if (typeof value === "string") {
+            return [normalizeText(value)].filter(Boolean);
+        }
+        if (Array.isArray(value)) {
+            return value.flatMap((item) => getCategoryPathFromJsonValue(item)).filter((item, index, items) => item && items.indexOf(item) === index);
+        }
+        if (value === null || value === undefined || typeof value !== "object") {
+            return [];
+        }
+        const objectValue = value;
+        for (const key of ["path", "breadcrumbs", "parents", "parentCategories", "parent_categories"]) {
+            const path = getCategoryPathFromJsonValue(objectValue[key]);
+            if (path.length > 0) {
+                const ownName = getJsonDisplayName(objectValue);
+                return ownName && !path.includes(ownName) ? [...path, ownName] : path;
+            }
+        }
+        const parent = objectValue.parentCategory ?? objectValue.parent_category ?? objectValue.parent;
+        const parentPath = getCategoryPathFromJsonValue(parent);
+        const ownName = getJsonDisplayName(objectValue);
+        return ownName ? [...parentPath, ownName].filter((item, index, items) => items.indexOf(item) === index) : parentPath;
+    }
+    function collectImageUrlsFromCurrentItemJsonValue(value, itemId, addUrl, depth = 0) {
+        if (depth > 10 || value === null || value === undefined) {
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((item) => collectImageUrlsFromCurrentItemJsonValue(item, itemId, addUrl, depth + 1));
+            return;
+        }
+        if (typeof value !== "object") {
+            return;
+        }
+        const objectValue = value;
+        if (hasDirectItemId(objectValue, itemId)) {
+            collectImageUrlsFromCurrentItemObject(objectValue, addUrl);
+            return;
+        }
+        Object.values(objectValue).forEach((childValue) => {
+            collectImageUrlsFromCurrentItemJsonValue(childValue, itemId, addUrl, depth + 1);
+        });
+    }
+    function hasDirectItemId(value, itemId) {
+        return ["id", "itemId", "item_id", "productId", "product_id"].some((key) => value[key] === itemId);
+    }
+    function collectImageUrlsFromCurrentItemObject(value, addUrl) {
+        Object.entries(value).forEach(([key, childValue]) => {
+            if (isCurrentItemImageKey(key)) {
+                collectImageUrlsFromJsonValue(childValue, addUrl, key);
+            }
+        });
+        ["item", "product", "itemData", "itemInfo", "itemDetail", "itemDetails", "productInfo"].forEach((key) => {
+            const childValue = value[key];
+            if (childValue && typeof childValue === "object" && !Array.isArray(childValue)) {
+                collectImageUrlsFromCurrentItemObject(childValue, addUrl);
+            }
+        });
+    }
+    function collectImageUrlsFromJsonValue(value, addUrl, key = "", depth = 0) {
+        if (depth > 10 || value === null || value === undefined) {
+            return;
+        }
+        if (typeof value === "string") {
+            if (isLikelyImageUrl(value) && (isImageKey(key) || value.includes("mercdn"))) {
+                addUrl(value);
+            }
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((item) => collectImageUrlsFromJsonValue(item, addUrl, key, depth + 1));
+            return;
+        }
+        if (typeof value === "object") {
+            Object.entries(value).forEach(([childKey, childValue]) => {
+                collectImageUrlsFromJsonValue(childValue, addUrl, key ? `${key}.${childKey}` : childKey, depth + 1);
+            });
+        }
+    }
+    function isImageKey(key) {
+        return /image|photo|thumbnail|picture/i.test(key);
+    }
+    function isCurrentItemImageKey(key) {
+        return isImageKey(key) && !/related|recommend|seller|similar|avatar|profile|icon|logo/i.test(key);
+    }
+    function isLikelyImageUrl(value) {
+        return isLikelyProductImageUrl(value);
+    }
+    function isLikelyProductImageUrl(value) {
+        return /^https?:\/\//.test(value) && /mercdn|mercari|\.(?:jpe?g|png|webp)(?:\?|$)/i.test(value) && !/logo|icon|avatar|profile|badge|app-store|google-play/i.test(value);
     }
     function extractDescription(source) {
         const selectors = [
@@ -984,6 +1532,15 @@
         return null;
     }
     function extractCategoryPath(source) {
+        const body = findMercariDetailBody(source, "カテゴリー");
+        if (body) {
+            const breadcrumbItems = safeQuerySelectorAll(body, "mer-breadcrumb-item a, .merBreadcrumbItem a")
+                .map((item) => normalizeText(item.textContent))
+                .filter(Boolean);
+            if (breadcrumbItems.length > 0) {
+                return breadcrumbItems.slice(0, 6);
+            }
+        }
         const lines = getTextLines(source);
         const start = lines.findIndex((line) => line === "カテゴリー");
         if (start === -1) {
@@ -1014,6 +1571,18 @@
         return categoryLines.slice(0, 5);
     }
     function extractInfoValue(source, labels) {
+        const displayRowValue = extractMercariDetailBodyText(source, labels);
+        if (displayRowValue) {
+            return displayRowValue;
+        }
+        const labeledValue = extractLabeledInfoValue(source, labels);
+        if (labeledValue) {
+            return labeledValue;
+        }
+        const nearbyValue = extractNearbyInfoValue(source, labels);
+        if (nearbyValue) {
+            return nearbyValue;
+        }
         const lines = getTextLines(source);
         for (const label of labels) {
             const index = lines.findIndex((line) => line === label);
@@ -1027,8 +1596,113 @@
         }
         return null;
     }
+    function extractCondition(source, jsonItem) {
+        const values = [
+            extractInfoValue(source, ["商品の状態"]),
+            extractInfoValue(source, ["状態"]),
+            extractTextNearLabel(source, "商品の状態"),
+            extractNamedJsonValue(jsonItem, ["condition", "itemCondition", "item_condition", "itemStatus", "item_status"]),
+        ];
+        for (const value of values) {
+            const condition = normalizeMercariCondition(value);
+            if (condition) {
+                return condition;
+            }
+        }
+        return null;
+    }
+    function extractTextNearLabel(source, label) {
+        const text = normalizeText(source instanceof Document ? source.body?.innerText || source.body?.textContent || "" : source.textContent ?? "");
+        const index = text.indexOf(label);
+        return index === -1 ? null : text.slice(index, index + 160);
+    }
+    function extractMercariDetailBodyText(source, labels) {
+        for (const label of labels) {
+            const body = findMercariDetailBody(source, label);
+            const text = normalizeText(body?.textContent ?? "");
+            if (text) {
+                return text;
+            }
+        }
+        return null;
+    }
+    function extractLabeledInfoValue(source, labels) {
+        const labelElements = safeQuerySelectorAll(source, "mer-text, .merText, dt, th, span, p, div")
+            .filter((element) => labels.includes(normalizeText(element.textContent)));
+        for (const element of labelElements) {
+            const siblingValue = getNextSiblingTextValue(element, labels);
+            if (siblingValue) {
+                return siblingValue;
+            }
+            let current = element.parentElement;
+            for (let depth = 0; current && depth < 3; depth += 1) {
+                const lines = getTextLines(current);
+                const labelIndex = lines.findIndex((line) => labels.includes(line));
+                if (labelIndex !== -1 && lines.length <= 6) {
+                    const value = lines.slice(labelIndex + 1).find((line) => line && !labels.includes(line));
+                    if (value) {
+                        return value;
+                    }
+                }
+                current = current.parentElement;
+            }
+        }
+        return null;
+    }
+    function getNextSiblingTextValue(element, labels) {
+        let sibling = element.nextElementSibling;
+        let checkedCount = 0;
+        while (sibling && checkedCount < 4) {
+            const text = normalizeText(sibling.textContent);
+            if (text && !labels.includes(text) && text.length <= 120) {
+                return text;
+            }
+            sibling = sibling.nextElementSibling;
+            checkedCount += 1;
+        }
+        return null;
+    }
+    function findMercariDetailBody(source, label) {
+        const rows = safeQuerySelectorAll(source, `
+      #item-info mer-display-row,
+      #item-info .merDisplayRow,
+      #product-info mer-display-row,
+      #product-info .merDisplayRow,
+      main mer-display-row,
+      main .merDisplayRow,
+      mer-display-row,
+      .merDisplayRow,
+      dl,
+      tr
+    `);
+        const row = rows.find((candidate) => {
+            const title = candidate.querySelector('span[slot="title"], [slot="title"], [class*="title__"], dt, th');
+            const titleText = normalizeText(title?.textContent ?? "");
+            return titleText === label || new RegExp(label).test(titleText);
+        });
+        const body = row?.querySelector('[slot="body"], [class*="body__"], dd, td');
+        return body instanceof HTMLElement ? body : null;
+    }
+    function extractNearbyInfoValue(source, labels) {
+        const candidates = safeQuerySelectorAll(source, "div, li, dl, tr, section").flatMap((element) => {
+            if (!isVisible(element)) {
+                return [];
+            }
+            const lines = getTextLines(element);
+            const labelIndex = lines.findIndex((line) => labels.includes(line));
+            if (labelIndex === -1 || lines.length > 8) {
+                return [];
+            }
+            const value = lines.slice(labelIndex + 1).find((line) => line && !labels.includes(line));
+            if (!value) {
+                return [];
+            }
+            return [{ value, score: lines.length * 100 + normalizeText(element.textContent).length }];
+        });
+        return candidates.sort((a, b) => a.score - b.score)[0]?.value ?? null;
+    }
     function getTextLines(source) {
-        const text = source instanceof Document ? source.body?.innerText ?? "" : source.textContent ?? "";
+        const text = source instanceof Document ? source.body?.innerText || source.body?.textContent || "" : source.textContent ?? "";
         return text
             .split(/\n+/)
             .map((line) => normalizeText(line))
@@ -1057,6 +1731,24 @@
     }
     function normalizeText(value) {
         return (value ?? "").replace(/\s+/g, " ").trim();
+    }
+    function normalizeMercariCondition(value) {
+        const compactValue = normalizeText(value).replace(/[\s、，,・/／()（）\[\]【】]/g, "");
+        if (!compactValue) {
+            return null;
+        }
+        const conditions = [
+            "新品、未使用",
+            "未使用に近い",
+            "目立った傷や汚れなし",
+            "やや傷や汚れあり",
+            "傷や汚れあり",
+            "全体的に状態が悪い",
+        ];
+        return conditions.find((condition) => {
+            const compactCondition = normalizeText(condition).replace(/[\s、，,・/／()（）\[\]【】]/g, "");
+            return compactCondition === compactValue || compactValue.includes(compactCondition);
+        }) ?? null;
     }
     function isVisible(element) {
         const rect = element.getBoundingClientRect();

@@ -15,6 +15,7 @@ type ResearchSavedPurchasePrice = {
 type ResearchSimulatorOptions = {
   savedPrice?: ResearchSavedPurchasePrice;
   platform?: ResearchPlatform;
+  monthlySalesCount?: number;
 };
 
 declare global {
@@ -75,16 +76,19 @@ function calculateSimulatorProfit(
   sellPrice: number,
   purchasePrice: number,
   shippingFee: number,
-  platform: ResearchPlatform
+  platform: ResearchPlatform,
+  monthlySalesCount: number
 ) {
   const fee = Math.round(sellPrice * getSimulatorFeeRate(platform));
   const netProfit = sellPrice - purchasePrice - shippingFee - fee;
   const profitRate = sellPrice > 0 ? (netProfit / sellPrice) * 100 : 0;
+  const safeMonthlySalesCount = Math.max(0, Math.round(monthlySalesCount));
 
   return {
     fee,
     netProfit,
-    profitRate
+    profitRate,
+    monthlyExpectedProfit: netProfit * safeMonthlySalesCount
   };
 }
 
@@ -184,21 +188,39 @@ async function renderSimulator(
     const feeValue = createSimulatorElement("strong", "furimane-research-simulator__metric-value");
     const profitValue = createSimulatorElement("strong", "furimane-research-simulator__metric-value");
     const rateValue = createSimulatorElement("strong", "furimane-research-simulator__metric-rate");
+    const monthlyProfitValue = createSimulatorElement("strong", "furimane-research-simulator__metric-value");
+    const purchaseHint = createSimulatorElement("p", "furimane-research-simulator__hint", "仕入れ値を入力してください");
     const saveStatus = createSimulatorElement("p", "furimane-research-simulator__save-status", "");
 
     const recalculate = () => {
+      const hasPurchasePrice = purchaseInput.value.trim().length > 0;
       const purchasePrice = normalizeSimulatorAmount(purchaseInput.value);
       const shippingFee = normalizeSimulatorAmount(shippingInput.value);
-      const result = calculateSimulatorProfit(item.price, purchasePrice, shippingFee, platform);
+      const result = calculateSimulatorProfit(item.price, purchasePrice, shippingFee, platform, options.monthlySalesCount ?? 0);
 
+      purchaseHint.hidden = hasPurchasePrice;
       feeValue.textContent = formatSimulatorPrice(result.fee);
       profitValue.textContent = formatSimulatorPrice(result.netProfit);
       profitValue.classList.toggle("furimane-research-simulator__metric-value--positive", result.netProfit >= 0);
       profitValue.classList.toggle("furimane-research-simulator__metric-value--negative", result.netProfit < 0);
       rateValue.textContent = formatSimulatorRate(result.profitRate);
+      monthlyProfitValue.textContent = formatSimulatorPrice(result.monthlyExpectedProfit);
+      monthlyProfitValue.classList.toggle(
+        "furimane-research-simulator__metric-value--positive",
+        result.monthlyExpectedProfit >= 0
+      );
+      monthlyProfitValue.classList.toggle(
+        "furimane-research-simulator__metric-value--negative",
+        result.monthlyExpectedProfit < 0
+      );
     };
 
     const save = async () => {
+      if (!purchaseInput.value.trim()) {
+        saveStatus.textContent = "";
+        return;
+      }
+
       try {
         saveStatus.textContent = "保存中...";
         await saveSimulatorValue(item, options, purchaseInput, shippingInput);
@@ -216,7 +238,7 @@ async function renderSimulator(
 
     const form = createSimulatorElement("div", "furimane-research-simulator__form");
     const purchaseLabel = createSimulatorElement("label", "furimane-research-simulator__label");
-    purchaseLabel.append(createSimulatorElement("span", undefined, "仕入れ値"), purchaseInput);
+    purchaseLabel.append(createSimulatorElement("span", undefined, "仕入れ値"), purchaseInput, purchaseHint);
 
     const shippingLabel = createSimulatorElement("label", "furimane-research-simulator__label");
     shippingLabel.append(createSimulatorElement("span", undefined, "送料"), shippingInput);
@@ -233,7 +255,10 @@ async function renderSimulator(
     const rateMetric = createSimulatorElement("div", "furimane-research-simulator__metric");
     rateMetric.append(createSimulatorElement("span", undefined, "利益率"), rateValue);
 
-    metrics.append(feeMetric, profitMetric, rateMetric);
+    const monthlyProfitMetric = createSimulatorElement("div", "furimane-research-simulator__metric");
+    monthlyProfitMetric.append(createSimulatorElement("span", undefined, "月間予想利益"), monthlyProfitValue);
+
+    metrics.append(feeMetric, profitMetric, rateMetric, monthlyProfitMetric);
 
     root.replaceChildren(form, metrics, saveStatus);
     recalculate();

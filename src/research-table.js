@@ -456,6 +456,7 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
     const panel = createElement("section", "furimane-research-table__table-panel");
     const scrollArea = createElement("div", "furimane-research-table__scroll");
     const table = createElement("table", "furimane-research-table");
+    const colgroup = createResearchTableColGroup();
     const thead = document.createElement("thead");
     const mainHeaderRow = document.createElement("tr");
     const subHeaderRow = document.createElement("tr");
@@ -514,9 +515,7 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
         const actionWrapper = createElement("div", "furimane-research-table__row-actions");
         const bookmarkButton = createBookmarkButton(row, bookmarkState, rerender);
         const savedPrice = purchasePrices[row.listing.item_id];
-        const simulateButton = createElement("button", "furimane-research-table__simulate-button", savedPrice?.purchasePrice !== null && savedPrice?.purchasePrice !== undefined
-            ? "✓ シミュレート"
-            : "シミュレート");
+        const simulateButton = createElement("button", "furimane-research-table__simulate-button", "シミュレート");
         simulateButton.type = "button";
         simulateButton.addEventListener("click", async () => {
             const nextRow = tr.nextElementSibling;
@@ -530,7 +529,8 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
             }
             await window.FurimanagerResearchSimulator.renderSimulator(tr, row.listing, {
                 savedPrice,
-                platform: row.platform
+                platform: row.platform,
+                monthlySalesCount: dashboard.hasDatedListings ? row.periods.period1.count : row.totalCount
             });
         });
         actionWrapper.append(bookmarkButton, simulateButton);
@@ -538,10 +538,20 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
         tr.append(thumbnailCell, titleCell, priceCell, ...periodCells, actionCell);
         tbody.appendChild(tr);
     }
-    table.append(thead, tbody);
+    table.append(colgroup, thead, tbody);
     scrollArea.appendChild(table);
     panel.appendChild(scrollArea);
     return panel;
+}
+function createResearchTableColGroup() {
+    const colgroup = document.createElement("colgroup");
+    const widths = ["7%", "34%", "9%", "5.5%", "6.5%", "5.5%", "6.5%", "5.5%", "6.5%", "14%"];
+    for (const width of widths) {
+        const col = document.createElement("col");
+        col.style.width = width;
+        colgroup.appendChild(col);
+    }
+    return colgroup;
 }
 async function renderResearchTable(container, seller, listings, options = {}) {
     const normalizedListings = listings.map((listing) => ({

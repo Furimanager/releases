@@ -6,6 +6,7 @@ const AUTH_STORAGE_KEYS = [
   "supabaseTokenExpiresAt"
 ];
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const DEFAULT_APP_URL = "https://furimanager.com";
 
 const statusText = document.getElementById("statusText");
 const statusDetails = document.getElementById("statusDetails");
@@ -233,12 +234,7 @@ function getConfig() {
 }
 
 function getAppBaseUrl() {
-  const appUrl = String(window.FurimanagerConfig?.APP_URL || "").trim().replace(/\/+$/, "");
-
-  if (!appUrl) {
-    throw new Error("config.js の APP_URL が未設定です");
-  }
-
+  const appUrl = String(window.FurimanagerConfig?.APP_URL || DEFAULT_APP_URL).trim().replace(/\/+$/, "");
   return appUrl;
 }
 
@@ -1031,6 +1027,20 @@ async function handleScrapeAndSend() {
   }
 }
 
+async function loadRakurakuPendingTaskPreview() {
+  if (!isLoggedIn()) {
+    renderRakurakuTask(null);
+    return;
+  }
+
+  try {
+    const data = await fetchAppApi("/api/automation/tasks/next");
+    renderRakurakuTask(data?.task || null);
+  } catch (error) {
+    console.warn("[furimane-rakuraku] pending task preview failed", error);
+  }
+}
+
 async function handleRakurakuTaskCheck() {
   setActionButtonsDisabled(true);
 
@@ -1116,6 +1126,7 @@ async function initializePopup() {
     await restoreAuthState();
     await loadRakurakuAutoPollState();
     await loadRakurakuExecutionMode();
+    await loadRakurakuPendingTaskPreview();
   } catch (error) {
     updateAuthUi();
     setAuthMessage("error", error instanceof Error ? error.message : "ログイン状態の復元に失敗しました");

@@ -549,15 +549,17 @@
 
 .furimane-research-table__scroll {
   max-height: 70vh;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .furimane-research-table {
   width: 100%;
-  min-width: 1180px;
+  min-width: 0;
   border-collapse: separate;
   border-spacing: 0;
   color: #e2e8f0;
+  table-layout: fixed;
 }
 
 .furimane-research-table th,
@@ -630,6 +632,7 @@
   font-size: 12px;
   vertical-align: middle;
   background: rgba(10, 18, 32, 0.88);
+  min-width: 0;
 }
 
 .furimane-research-table__row:hover td {
@@ -668,7 +671,7 @@
 
 .furimane-research-table__title-link {
   display: inline-block;
-  max-width: 340px;
+  max-width: 100%;
   overflow: hidden;
   color: #ffffff;
   font-size: 14px;
@@ -741,7 +744,7 @@
 .furimane-research-table__row-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .furimane-research-table__bookmark-button {
@@ -759,6 +762,8 @@
 }
 
 .furimane-research-table__simulate-button {
+  padding-right: 10px;
+  padding-left: 10px;
   background-image: linear-gradient(90deg, #8b3dff 0%, #f04fa8 100%);
   color: #ffffff;
   background-clip: padding-box;
@@ -790,7 +795,7 @@
 
 .furimane-research-simulator {
   display: grid;
-  grid-template-columns: minmax(260px, 0.85fr) 1fr;
+  grid-template-columns: minmax(230px, 0.65fr) 1fr;
   gap: 14px;
   padding: 14px;
   border: 1px solid rgba(124, 58, 237, 0.22);
@@ -834,8 +839,20 @@
   box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.18);
 }
 
+.furimane-research-simulator__hint {
+  margin: 0;
+  color: #f9a8d4;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.furimane-research-simulator__hint[hidden] {
+  display: none;
+}
+
 .furimane-research-simulator__metrics {
-  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .furimane-research-simulator__metric {
@@ -853,7 +870,7 @@
 .furimane-research-simulator__metric-value,
 .furimane-research-simulator__metric-rate {
   color: #e2e8f0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 800;
 }
 
@@ -867,7 +884,7 @@
 
 .furimane-research-simulator__metric-rate {
   color: #fb923c;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .furimane-research-simulator__status,
