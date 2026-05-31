@@ -79,12 +79,12 @@
         <p class="rakuraku-card__description">
           半自動では承認待ち候補を許可して開始できます。全自動では承認済みタスクを1件ずつ処理します。
         </p>
-        <div class="rakuraku-sync-row">
+        <div class="rakuraku-mode-summary">
           <div>
-            <span class="rakuraku-sync-row__label">自動同期</span>
-            <strong>常にON</strong>
+            <span class="rakuraku-mode-summary__label">現在のモード</span>
+            <strong id="rakurakuModeText">確認中</strong>
           </div>
-          <span class="rakuraku-sync-row__badge">real</span>
+          <span id="rakurakuModeBadge" class="rakuraku-mode-summary__badge">-</span>
         </div>
         <div class="rakuraku-auto-row" hidden>
           <span id="rakurakuAutoPollState">自動チェック：確認中</span>
@@ -97,9 +97,7 @@
             <option value="real">real（次フェーズ）</option>
           </select>
         </label>
-        <button id="rakurakuTaskCheckButton" class="action-button action-button--ghost rakuraku-card__button" type="button">
-          今すぐ確認
-        </button>
+        <p id="rakurakuEmptyState" class="rakuraku-empty-state">ログイン後に状態を確認します。</p>
         <div id="rakurakuTaskPanel" class="rakuraku-task" hidden>
           <dl class="status-details">
             <div class="status-details__row">
@@ -115,9 +113,14 @@
               <dd id="rakurakuTaskStatus">-</dd>
             </div>
           </dl>
-          <button id="rakurakuTaskStartButton" class="action-button action-button--send rakuraku-card__button" type="button" hidden>
-            このタスクを開始
-          </button>
+          <div class="rakuraku-card__actions">
+            <button id="rakurakuTaskStartButton" class="action-button action-button--send rakuraku-card__button" type="button" hidden>
+              許可して開始
+            </button>
+            <button id="rakurakuWebOpenButton" class="mini-button rakuraku-card__web-button" type="button">
+              Webで開く
+            </button>
+          </div>
         </div>
       </section>
 

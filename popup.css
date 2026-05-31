@@ -394,7 +394,7 @@ body {
   min-height: 48px;
 }
 
-.rakuraku-sync-row {
+.rakuraku-mode-summary {
   position: relative;
   z-index: 1;
   display: flex;
@@ -411,7 +411,7 @@ body {
   color: var(--text);
 }
 
-.rakuraku-sync-row__label {
+.rakuraku-mode-summary__label {
   display: block;
   margin-bottom: 4px;
   color: var(--muted);
@@ -420,25 +420,38 @@ body {
   letter-spacing: 0.08em;
 }
 
-.rakuraku-sync-row strong {
+.rakuraku-mode-summary strong {
   display: block;
   font-size: 15px;
   line-height: 1.2;
 }
 
-.rakuraku-sync-row__badge {
+.rakuraku-mode-summary__badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 54px;
+  min-width: 64px;
   padding: 7px 10px;
-  border: 1px solid rgba(249, 115, 22, 0.28);
+  border: 1px solid rgba(124, 58, 237, 0.3);
   border-radius: 999px;
-  background: rgba(249, 115, 22, 0.12);
-  color: #fed7aa;
+  background: rgba(124, 58, 237, 0.14);
+  color: #ddd6fe;
   font-size: 11px;
   font-weight: 800;
-  text-transform: uppercase;
+}
+
+.rakuraku-empty-state {
+  position: relative;
+  z-index: 1;
+  margin: 12px 0 0;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.6;
 }
 
 .rakuraku-auto-row {
@@ -499,6 +512,20 @@ body {
   position: relative;
   z-index: 1;
   margin-top: 12px;
+}
+
+.rakuraku-card__actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.rakuraku-card__actions .rakuraku-card__button {
+  margin-top: 0;
+}
+
+.rakuraku-card__web-button {
+  min-height: 42px;
 }
 
 .action-grid {

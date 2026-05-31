@@ -42,6 +42,11 @@
     mode: RelistMode;
   };
 
+  type ListingDateInfo = {
+    listedAt: Date | null;
+    updatedAt: Date | null;
+  };
+
   type RuntimeResponse = {
     success?: boolean;
     message?: string;
@@ -75,6 +80,7 @@
   const TOOLBAR_ATTRIBUTE = "data-furimanager-action-toolbar";
   const TOOLBAR_KIND_ATTRIBUTE = "data-furimanager-action-kind";
   const TOOLBAR_BUTTONS_ATTRIBUTE = "data-furimanager-action-buttons";
+  const LISTING_DATE_PANEL_ATTRIBUTE = "data-furimanager-listing-date-panel";
   const COPY_LISTING_BUTTON_WAIT_TIMEOUT_MS = 10000;
   const COPY_LISTING_BUTTON_WAIT_INTERVAL_MS = 300;
   const OBSERVER_DEBOUNCE_MS = 250;
@@ -128,21 +134,21 @@
       { id: "copy-draft", label: "下書き", action: "saveDraft" },
     ],
     ownProduct: [
+      { id: "relist", label: "再出品", action: "relist" },
+      { id: "decrease-price", label: "-100", action: "adjustPrice", amount: -100 },
+      { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
+      { id: "save-draft", label: "下書き", action: "saveDraft" },
       { id: "stop-listing", label: "停止", action: "stopListing" },
       { id: "delete-listing", label: "削除", action: "deleteListing" },
-      { id: "relist", label: "再出品", action: "relist" },
-      { id: "save-draft", label: "下書き", action: "saveDraft" },
-      { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
-      { id: "decrease-price", label: "-100", action: "adjustPrice", amount: -100 },
     ],
     history: [
       { id: "relist", label: "再出品", action: "relist" },
     ],
     activeListings: [
       { id: "relist", label: "再出品", action: "relist" },
-      { id: "save-draft", label: "下書き", action: "saveDraft" },
-      { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
       { id: "decrease-price", label: "-100", action: "adjustPrice", amount: -100 },
+      { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
+      { id: "save-draft", label: "下書き", action: "saveDraft" },
     ],
   };
 
@@ -341,12 +347,66 @@
         transform: translateY(1px);
       }
 
+      .furimanager-listing-date-panel {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(124, 58, 237, 0.18);
+        border-left: 4px solid #7c3aed;
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(124, 58, 237, 0.08), rgba(249, 115, 22, 0.06));
+        color: #333333;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .furimanager-listing-date-panel__title {
+        margin-bottom: 8px;
+        color: #5b21b6;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .furimanager-listing-date-panel__row {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 4px 0;
+      }
+
+      .furimanager-listing-date-panel__label {
+        color: #555555;
+        font-weight: 700;
+      }
+
+      .furimanager-listing-date-panel__value {
+        min-width: 0;
+      }
+
+      .furimanager-listing-date-panel__absolute {
+        display: block;
+        color: #333333;
+        font-weight: 600;
+      }
+
+      .furimanager-listing-date-panel__relative {
+        display: block;
+        margin-top: 2px;
+        color: #ec4899;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
       @media (max-width: 900px) {
         .furimanager-action-toolbar--inline-end {
           position: static;
           transform: none;
           margin-top: 8px;
           flex-wrap: wrap;
+        }
+
+        .furimanager-listing-date-panel__row {
+          grid-template-columns: 76px minmax(0, 1fr);
         }
       }
 
@@ -383,6 +443,11 @@
       return;
     }
 
+    if (pageKind === "ownProduct" || pageKind === "otherProduct") {
+      injectStyles();
+      ensureListingDatePanel();
+    }
+
     const buttonDefinitions = getButtonDefinitions(pageKind);
     const targets = getInjectionTargets(pageKind);
 
@@ -410,6 +475,100 @@
     }
 
     return [];
+  }
+
+  function ensureListingDatePanel(): void {
+    if (!PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
+      return;
+    }
+
+    const dateInfo = extractListingDateInfo(document);
+    const existingPanel = document.querySelector(`[${LISTING_DATE_PANEL_ATTRIBUTE}="true"]`);
+
+    if (!dateInfo.listedAt && !dateInfo.updatedAt) {
+      existingPanel?.remove();
+      return;
+    }
+
+    const mount = findListingDatePanelMount();
+
+    if (!mount) {
+      return;
+    }
+
+    const panel = existingPanel instanceof HTMLElement ? existingPanel : document.createElement("div");
+    panel.className = "furimanager-listing-date-panel";
+    panel.setAttribute(LISTING_DATE_PANEL_ATTRIBUTE, "true");
+    panel.innerHTML = "";
+
+    const title = document.createElement("div");
+    title.className = "furimanager-listing-date-panel__title";
+    title.textContent = "フリマネ日時メモ";
+    panel.appendChild(title);
+
+    if (dateInfo.listedAt) {
+      panel.appendChild(createListingDateRow("出品日時", dateInfo.listedAt));
+    }
+
+    if (dateInfo.updatedAt) {
+      panel.appendChild(createListingDateRow("更新日時", dateInfo.updatedAt));
+    }
+
+    if (panel.parentElement !== mount) {
+      mount.appendChild(panel);
+    }
+  }
+
+  function findListingDatePanelMount(): HTMLElement | null {
+    const itemInfo = document.querySelector("#item-info, #product-info");
+
+    if (itemInfo instanceof HTMLElement) {
+      return itemInfo;
+    }
+
+    const detailBody = findMercariDetailBody(document, "商品の状態") ?? findMercariDetailBody(document, "配送の方法");
+    const detailRow = detailBody?.closest("mer-display-row, .merDisplayRow, dl, tr");
+    let current = (detailRow instanceof HTMLElement ? detailRow.parentElement : detailBody?.parentElement) ?? null;
+
+    for (let depth = 0; current && depth < 5; depth += 1) {
+      const text = normalizeText(current.textContent ?? "");
+
+      if (text.includes("商品の情報") || text.includes("商品の状態")) {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    const heading = safeQuerySelectorAll(document, "main h2, main h3, main mer-heading, main .merHeading, main span, main p")
+      .find((element) => normalizeText(element.textContent) === "商品の情報");
+    const headingMount = heading?.closest("section, div");
+
+    return headingMount instanceof HTMLElement ? headingMount : null;
+  }
+
+  function createListingDateRow(labelText: string, date: Date): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "furimanager-listing-date-panel__row";
+
+    const label = document.createElement("div");
+    label.className = "furimanager-listing-date-panel__label";
+    label.textContent = labelText;
+
+    const value = document.createElement("div");
+    value.className = "furimanager-listing-date-panel__value";
+
+    const absolute = document.createElement("span");
+    absolute.className = "furimanager-listing-date-panel__absolute";
+    absolute.textContent = formatListingDate(date);
+
+    const relative = document.createElement("span");
+    relative.className = "furimanager-listing-date-panel__relative";
+    relative.textContent = formatRelativeDate(date);
+
+    value.append(absolute, relative);
+    row.append(label, value);
+    return row;
   }
 
   function getButtonDefinitions(pageKind: Exclude<MercariPageKind, "unknown" | "browsingHistory">): ActionButtonDefinition[] {
@@ -784,6 +943,9 @@
   function removeAllToolbars(): void {
     safeQuerySelectorAll(document, `[${TOOLBAR_ATTRIBUTE}="true"]`).forEach((toolbar) => {
       toolbar.remove();
+    });
+    safeQuerySelectorAll(document, `[${LISTING_DATE_PANEL_ATTRIBUTE}="true"]`).forEach((panel) => {
+      panel.remove();
     });
   }
 
@@ -1738,6 +1900,192 @@
     }
 
     return null;
+  }
+
+  function extractListingDateInfo(source: Document): ListingDateInfo {
+    const itemId = extractMercariItemId(window.location.href);
+    const jsonItem = itemId ? findCurrentItemJsonObject(source, itemId) : null;
+
+    return {
+      listedAt: extractJsonDateValue(jsonItem, [
+        "created",
+        "createdAt",
+        "created_at",
+        "createdTime",
+        "created_time",
+        "createdDate",
+        "created_date",
+        "createdTimestamp",
+        "created_timestamp",
+        "datePublished",
+        "date_published",
+        "listedAt",
+        "listed_at",
+        "listingCreatedAt",
+        "listing_created_at",
+        "itemCreatedAt",
+        "item_created_at",
+      ]),
+      updatedAt: extractJsonDateValue(jsonItem, [
+        "updated",
+        "updatedAt",
+        "updated_at",
+        "updatedTime",
+        "updated_time",
+        "updatedDate",
+        "updated_date",
+        "updatedTimestamp",
+        "updated_timestamp",
+        "dateModified",
+        "date_modified",
+        "modifiedAt",
+        "modified_at",
+        "lastUpdatedAt",
+        "last_updated_at",
+        "itemUpdatedAt",
+        "item_updated_at",
+      ]),
+    };
+  }
+
+  function extractJsonDateValue(source: Record<string, unknown> | null, keys: string[]): Date | null {
+    if (!source) {
+      return null;
+    }
+
+    const normalizedKeys = keys.map(normalizeJsonDateKey);
+    return findJsonDateValue(source, normalizedKeys);
+  }
+
+  function findJsonDateValue(source: unknown, normalizedKeys: string[], depth = 0, parentKey = ""): Date | null {
+    if (depth > 6 || source === null || source === undefined || typeof source !== "object") {
+      return null;
+    }
+
+    if (/seller|user|profile|avatar|shop|owner/i.test(parentKey)) {
+      return null;
+    }
+
+    if (Array.isArray(source)) {
+      for (const item of source) {
+        const matched = findJsonDateValue(item, normalizedKeys, depth + 1, parentKey);
+
+        if (matched) {
+          return matched;
+        }
+      }
+
+      return null;
+    }
+
+    const objectValue = source as Record<string, unknown>;
+
+    for (const [key, value] of Object.entries(objectValue)) {
+      if (!normalizedKeys.includes(normalizeJsonDateKey(key))) {
+        continue;
+      }
+
+      const date = parseMercariDateValue(value);
+
+      if (date) {
+        return date;
+      }
+    }
+
+    for (const [key, value] of Object.entries(objectValue)) {
+      const matched = findJsonDateValue(value, normalizedKeys, depth + 1, key);
+
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return null;
+  }
+
+  function normalizeJsonDateKey(value: string): string {
+    return value.replace(/[_\-\s]/g, "").toLowerCase();
+  }
+
+  function parseMercariDateValue(value: unknown): Date | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const timestamp = value > 100000000000 ? value : value * 1000;
+      const date = new Date(timestamp);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const objectValue = value as Record<string, unknown>;
+      const seconds = objectValue.seconds ?? objectValue._seconds;
+
+      if (typeof seconds === "number" && Number.isFinite(seconds)) {
+        return parseMercariDateValue(seconds);
+      }
+    }
+
+    if (typeof value !== "string") {
+      return null;
+    }
+
+    const text = value.trim();
+
+    if (!text) {
+      return null;
+    }
+
+    if (/^\d{10,13}$/.test(text)) {
+      return parseMercariDateValue(Number(text));
+    }
+
+    const matched = text.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+
+    if (matched) {
+      const [, year, month, day, hour = "0", minute = "0", second = "0"] = matched;
+      const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    const date = new Date(text);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function formatListingDate(date: Date): string {
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+
+  function formatRelativeDate(date: Date): string {
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+
+    if (elapsedSeconds < 60) {
+      return "たった今";
+    }
+
+    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+
+    if (elapsedMinutes < 60) {
+      return `${elapsedMinutes}分前`;
+    }
+
+    const elapsedHours = Math.floor(elapsedMinutes / 60);
+
+    if (elapsedHours < 24) {
+      return `${elapsedHours}時間前`;
+    }
+
+    const elapsedDays = Math.floor(elapsedHours / 24);
+
+    if (elapsedDays < 31) {
+      return `${elapsedDays}日前`;
+    }
+
+    const elapsedMonths = Math.floor(elapsedDays / 30);
+
+    if (elapsedMonths < 12) {
+      return `${elapsedMonths}ヶ月前`;
+    }
+
+    return `${Math.floor(elapsedDays / 365)}年前`;
   }
 
   function extractNamedJsonValue(source: Record<string, unknown> | null, keys: string[]): string | null {

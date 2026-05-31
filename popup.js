@@ -25,6 +25,9 @@ const sessionText = document.getElementById("sessionText");
 const authStateText = document.getElementById("authStateText");
 const authMessage = document.getElementById("authMessage");
 const rakurakuTaskState = document.getElementById("rakurakuTaskState");
+const rakurakuModeText = document.getElementById("rakurakuModeText");
+const rakurakuModeBadge = document.getElementById("rakurakuModeBadge");
+const rakurakuEmptyState = document.getElementById("rakurakuEmptyState");
 const rakurakuAutoPollState = document.getElementById("rakurakuAutoPollState");
 const rakurakuAutoPollToggleButton = document.getElementById("rakurakuAutoPollToggleButton");
 const rakurakuExecutionModeSelect = document.getElementById("rakurakuExecutionModeSelect");
@@ -34,6 +37,7 @@ const rakurakuTaskTitle = document.getElementById("rakurakuTaskTitle");
 const rakurakuTaskPrice = document.getElementById("rakurakuTaskPrice");
 const rakurakuTaskStatus = document.getElementById("rakurakuTaskStatus");
 const rakurakuTaskStartButton = document.getElementById("rakurakuTaskStartButton");
+const rakurakuWebOpenButton = document.getElementById("rakurakuWebOpenButton");
 
 const authState = {
   accessToken: null,
@@ -44,6 +48,7 @@ const authState = {
 let currentRakurakuTask = null;
 let currentRakurakuApprovalCandidate = null;
 let rakurakuAutoPollEnabled = true;
+let currentRakurakuMode = null;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 
 function escapeHtml(value) {
@@ -252,6 +257,59 @@ function formatYen(value) {
   }).format(value);
 }
 
+function formatRakurakuMode(mode) {
+  return mode === "full_auto" ? "全自動モード" : "半自動モード";
+}
+
+function renderRakurakuMode(mode) {
+  if (mode !== "full_auto" && mode !== "semi_auto") {
+    currentRakurakuMode = null;
+
+    if (rakurakuModeText) {
+      rakurakuModeText.textContent = "未確認";
+    }
+
+    if (rakurakuModeBadge) {
+      rakurakuModeBadge.textContent = "-";
+    }
+
+    return;
+  }
+
+  currentRakurakuMode = mode;
+
+  if (rakurakuModeText) {
+    rakurakuModeText.textContent = formatRakurakuMode(currentRakurakuMode);
+  }
+
+  if (rakurakuModeBadge) {
+    rakurakuModeBadge.textContent = currentRakurakuMode === "full_auto" ? "全自動" : "半自動";
+  }
+}
+
+function setRakurakuEmptyState(text) {
+  currentRakurakuTask = null;
+  currentRakurakuApprovalCandidate = null;
+
+  if (rakurakuTaskState) {
+    rakurakuTaskState.textContent = "待機中 0件";
+  }
+
+  if (rakurakuTaskPanel) {
+    rakurakuTaskPanel.hidden = true;
+  }
+
+  if (rakurakuEmptyState) {
+    rakurakuEmptyState.hidden = false;
+    rakurakuEmptyState.textContent = text;
+  }
+
+  if (rakurakuTaskStartButton) {
+    rakurakuTaskStartButton.hidden = true;
+    rakurakuTaskStartButton.disabled = true;
+  }
+}
+
 function renderRakurakuTask(task) {
   currentRakurakuTask = task || null;
   currentRakurakuApprovalCandidate = null;
@@ -261,18 +319,17 @@ function renderRakurakuTask(task) {
   }
 
   if (!task) {
-    rakurakuTaskState.textContent = "待機中 0件";
-    rakurakuTaskPanel.hidden = true;
-    if (rakurakuTaskStartButton) {
-      rakurakuTaskStartButton.hidden = true;
-      rakurakuTaskStartButton.disabled = true;
-    }
+    setRakurakuEmptyState(currentRakurakuMode === "full_auto" ? "自動処理待ちタスクはありません。" : "承認待ち候補はありません。");
     return;
   }
 
   const payload = task.payload || {};
   rakurakuTaskState.textContent = task.status === "pending" ? "待機中 1件" : `最新タスク：${task.status || "状態不明"}`;
   rakurakuTaskPanel.hidden = false;
+
+  if (rakurakuEmptyState) {
+    rakurakuEmptyState.hidden = true;
+  }
 
   if (rakurakuTaskTitle) {
     rakurakuTaskTitle.textContent = payload.title || "商品名未取得";
@@ -307,6 +364,10 @@ function renderRakurakuApprovalCandidate(candidate) {
 
   rakurakuTaskState.textContent = "承認待ち 1件";
   rakurakuTaskPanel.hidden = false;
+
+  if (rakurakuEmptyState) {
+    rakurakuEmptyState.hidden = true;
+  }
 
   if (rakurakuTaskTitle) {
     rakurakuTaskTitle.textContent = candidate.title || "商品名未取得";
@@ -1062,19 +1123,35 @@ async function handleScrapeAndSend() {
 
 async function loadRakurakuPendingTaskPreview() {
   if (!isLoggedIn()) {
-    renderRakurakuTask(null);
+    renderRakurakuMode(null);
+    setRakurakuEmptyState("ログイン後に状態を確認します。");
     return;
   }
 
   try {
+    const settingsData = await fetchAppApi("/api/rakuraku/settings");
+    const mode = settingsData?.settings?.automationMode === "full_auto" ? "full_auto" : "semi_auto";
+    renderRakurakuMode(mode);
+
     const data = await fetchAppApi("/api/automation/tasks/next");
     if (data?.task) {
       renderRakurakuTask(data.task);
       return;
     }
 
-    await loadRakurakuApprovalCandidatePreview();
+    if (mode === "semi_auto") {
+      const approvalCandidate = await loadRakurakuApprovalCandidatePreview();
+
+      if (!approvalCandidate) {
+        setRakurakuEmptyState("承認待ち候補はありません。");
+      }
+
+      return;
+    }
+
+    setRakurakuEmptyState("自動処理待ちタスクはありません。");
   } catch (error) {
+    setRakurakuEmptyState("状態の取得に失敗しました。時間をおいてもう一度開いてください。");
     console.warn("[furimane-rakuraku] pending task preview failed", error);
   }
 }
@@ -1200,6 +1277,10 @@ async function handleRakurakuTaskStart() {
   }
 }
 
+function handleOpenRakurakuWeb() {
+  chrome.tabs.create({ url: `${getAppBaseUrl()}/dashboard/rakuraku/relist-candidates`, active: true });
+}
+
 async function initializePopup() {
   setStatus("idle", "待機中");
   updateAuthUi();
@@ -1245,6 +1326,9 @@ rakurakuTaskCheckButton?.addEventListener("click", () => {
 });
 rakurakuTaskStartButton?.addEventListener("click", () => {
   void handleRakurakuTaskStart();
+});
+rakurakuWebOpenButton?.addEventListener("click", () => {
+  handleOpenRakurakuWeb();
 });
 rakurakuAutoPollToggleButton?.addEventListener("click", () => {
   void handleRakurakuAutoPollToggle();
