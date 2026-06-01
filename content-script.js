@@ -49,8 +49,10 @@
         "売却済み",
         "売れた商品",
     ];
+    const INVENTORY_LINK_BUTTON = { id: "link-inventory", label: "在庫連携", action: "linkInventory" };
     const RELIST_ONLY_BUTTONS = [
         { id: "relist", label: "再出品", action: "relist" },
+        INVENTORY_LINK_BUTTON,
     ];
     const BUTTONS_BY_KIND = {
         otherProduct: [
@@ -59,6 +61,7 @@
         ],
         ownProduct: [
             { id: "relist", label: "再出品", action: "relist" },
+            INVENTORY_LINK_BUTTON,
             { id: "decrease-price", label: "-100", action: "adjustPrice", amount: -100 },
             { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
             { id: "save-draft", label: "下書き", action: "saveDraft" },
@@ -70,6 +73,7 @@
         ],
         activeListings: [
             { id: "relist", label: "再出品", action: "relist" },
+            INVENTORY_LINK_BUTTON,
             { id: "decrease-price", label: "-100", action: "adjustPrice", amount: -100 },
             { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
             { id: "save-draft", label: "下書き", action: "saveDraft" },
@@ -759,6 +763,10 @@
             await handleSaveDraft(context);
             return;
         }
+        if (definition.action === "linkInventory") {
+            await handleInventoryLink(context);
+            return;
+        }
         await handleAdjustPrice(definition.amount ?? 0, context);
     }
     async function handleCopyListing(context) {
@@ -785,6 +793,28 @@
     async function saveRelistPending(context, mode) {
         const item = await collectRelistData(context, mode);
         await sendRelistPending(item);
+    }
+    async function handleInventoryLink(context) {
+        const item = await collectRelistData(context, "relist");
+        await sendInventoryLinkPending({
+            platform: "mercari",
+            mercariItemId: item.itemId ?? context.itemId,
+            listingUrl: item.itemUrl ?? context.itemUrl,
+            listingTitle: item.title,
+            listingPrice: item.price,
+            listingStatus: getInventoryListingStatus(context.pageKind),
+            imageUrl: item.thumbnailUrl ?? item.imageUrls[0] ?? null,
+            capturedAt: new Date().toISOString(),
+        });
+    }
+    function getInventoryListingStatus(pageKind) {
+        if (pageKind === "history" || isSoldProductPage()) {
+            return "sold";
+        }
+        if (pageKind === "activeListings" || pageKind === "ownProduct") {
+            return "active";
+        }
+        return "unknown";
     }
     async function collectRelistData(context, mode) {
         const extractionRoot = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : context.root;
@@ -918,6 +948,32 @@
                 }
                 else {
                     showToast(response?.message ?? "出品データの保存に失敗しました");
+                }
+                resolve();
+            });
+        });
+    }
+    function sendInventoryLinkPending(item) {
+        return new Promise((resolve) => {
+            if (!chromeApi?.runtime?.sendMessage) {
+                showToast("在庫連携ページを開けませんでした");
+                resolve();
+                return;
+            }
+            chromeApi.runtime.sendMessage({
+                type: "OPEN_INVENTORY_LINK",
+                payload: item,
+            }, (response) => {
+                if (chromeApi.runtime?.lastError) {
+                    showToast("在庫連携ページを開けませんでした");
+                    resolve();
+                    return;
+                }
+                if (response?.success) {
+                    showToast("在庫連携ページを開きます");
+                }
+                else {
+                    showToast(response?.message ?? "在庫連携ページを開けませんでした");
                 }
                 resolve();
             });

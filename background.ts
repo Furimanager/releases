@@ -60,6 +60,11 @@
       return true;
     }
 
+    if (message?.type === "OPEN_INVENTORY_LINK") {
+      void handleOpenInventoryLink(message.payload, respond);
+      return true;
+    }
+
     if (message?.type === "GET_RAKURAKU_AUTO_POLL_STATE") {
       void handleGetRakurakuAutoPollState(respond);
       return true;
@@ -96,6 +101,10 @@
 
   async function handleSetRelistPending(payload: any, respond: (response: any) => void) {
     respond(await setRelistPending(payload));
+  }
+
+  async function handleOpenInventoryLink(payload: any, respond: (response: any) => void) {
+    respond(await openInventoryLink(payload));
   }
 
   async function handleGetRakurakuAutoPollState(respond: (response: any) => void) {
@@ -596,6 +605,41 @@
       return {
         success: false,
         message: error instanceof Error ? error.message : "出品データの保存に失敗しました",
+      };
+    }
+  }
+
+  async function openInventoryLink(payload: any) {
+    if (!payload || typeof payload !== "object") {
+      return { success: false, message: "連携する商品データが見つかりませんでした" };
+    }
+
+    const url = new URL(`${getAppBaseUrl()}/dashboard/inventory/link`);
+    const params: Record<string, string | null> = {
+      platform: payload.platform ?? "mercari",
+      mercari_item_id: payload.mercariItemId ?? null,
+      listing_url: payload.listingUrl ?? null,
+      listing_title: payload.listingTitle ?? null,
+      listing_price: typeof payload.listingPrice === "number" ? String(payload.listingPrice) : null,
+      listing_status: payload.listingStatus ?? null,
+      image_url: payload.imageUrl ?? null,
+      captured_at: payload.capturedAt ?? new Date().toISOString(),
+    };
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (typeof value === "string" && value.trim()) {
+        url.searchParams.set(key, value);
+      }
+    });
+
+    try {
+      await createTab({ url: url.toString(), active: true });
+      return { success: true };
+    } catch (error) {
+      console.error("[furimanager-extension] open inventory link failed", error);
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "在庫連携ページを開けませんでした",
       };
     }
   }
