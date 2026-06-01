@@ -13,6 +13,7 @@
   const DEFAULT_APP_URL = "https://furimanager.com";
   const MERCARI_SELL_URL = "https://jp.mercari.com/sell";
   const MERCARI_ITEM_URL_BASE = "https://jp.mercari.com/item/";
+  const MERCARI_EDIT_URL_BASE = "https://jp.mercari.com/sell/edit/";
   const MOCK_RELIST_PATH = "mock/mercari-relist.html";
   const REAL_RELIST_DETECTION_TIMEOUT_MS = 15000;
   const REAL_RELIST_DETECTION_RETRY_MS = 700;
@@ -183,6 +184,7 @@
       status: task.status,
       targetType: task.targetType,
       targetId: task.targetId,
+      action: task.action,
       title: task.payload?.title,
       mercariItemId: task.payload?.mercariItemId
     });
@@ -217,9 +219,14 @@
     console.log("[rakuraku] executeRelistTask", {
       executionMode,
       taskId: task.id,
+      action: task.action,
       title: task.payload?.title,
       mercariItemId: task.payload?.mercariItemId
     });
+
+    if (task.action === "price_drop") {
+      return executePriceDropTask(task);
+    }
 
     if (executionMode === "real") {
       return executeRealCopyListingTask(task);
@@ -276,6 +283,50 @@
     throw new Error(`real-relist-action: ${result?.reason || "relist action button not found on item page"}`);
   }
 
+  async function executePriceDropTask(task: any) {
+    const mercariItemId = normalizeMercariItemId(task.payload?.mercariItemId || task.payload?.itemId || task.target_item_id || task.targetItemId);
+    if (!mercariItemId) {
+      throw new Error("price-drop: mercari item id is missing");
+    }
+
+    const amount = normalizePositiveInteger(task.payload?.priceDropAmount ?? task.payload?.settings?.priceDropAmount, 100);
+    const minimumPrice = normalizeNullableInteger(task.payload?.minimumPrice ?? task.payload?.settings?.minimumPrice);
+    const editUrl = buildMercariEditUrl(mercariItemId);
+    const tab = await createTab({ url: editUrl, active: true });
+
+    if (typeof tab?.id !== "number") {
+      throw new Error("price-drop: edit page tab could not be opened");
+    }
+
+    await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
+    await sleep(1200);
+
+    const result = await sendTabMessageWithRetry(tab.id, {
+      type: "APPLY_FURIMANE_PRICE_DROP_ON_EDIT",
+      taskId: task.id,
+      mercariItemId,
+      amount,
+      minimumPrice
+    });
+
+    console.log("[rakuraku] price drop action result", {
+      taskId: task.id,
+      mercariItemId,
+      editUrl,
+      currentPrice: result?.currentPrice,
+      nextPrice: result?.nextPrice,
+      submitted: result?.submitted === true,
+      reason: result?.reason
+    });
+
+    if (result?.submitted === true) {
+      const completed = await completeTask(task.id, true, `price-drop: changed price from ${result.currentPrice} to ${result.nextPrice}`);
+      return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
+    }
+
+    throw new Error(`price-drop: ${result?.reason || "price update failed"}`);
+  }
+
   async function completeTask(taskId: string, success: boolean, message: string) {
     return fetchAppApi(`/api/automation/tasks/${taskId}/complete`, {
       method: "POST",
@@ -301,10 +352,28 @@
     return `${MERCARI_ITEM_URL_BASE}${encodeURIComponent(itemId)}`;
   }
 
+  function buildMercariEditUrl(itemId: string) {
+    return `${MERCARI_EDIT_URL_BASE}${encodeURIComponent(itemId)}`;
+  }
+
   function normalizeMercariItemId(value: unknown) {
     const text = String(value || "").trim();
     const matched = text.match(/m\d{6,}/i);
     return matched?.[0] ?? null;
+  }
+
+  function normalizePositiveInteger(value: unknown, fallback: number) {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) && numberValue > 0 ? Math.floor(numberValue) : fallback;
+  }
+
+  function normalizeNullableInteger(value: unknown) {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) && numberValue >= 0 ? Math.floor(numberValue) : null;
   }
 
   function waitForMockRelistDetection(taskId: string) {
