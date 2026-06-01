@@ -137,12 +137,12 @@
     ],
     ownProduct: [
       { id: "relist", label: "再出品", action: "relist" },
-      INVENTORY_LINK_BUTTON,
       { id: "decrease-price", label: "-100", action: "adjustPrice", amount: -100 },
       { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
       { id: "save-draft", label: "下書き", action: "saveDraft" },
       { id: "stop-listing", label: "停止", action: "stopListing" },
       { id: "delete-listing", label: "削除", action: "deleteListing" },
+      INVENTORY_LINK_BUTTON,
     ],
     history: [
       { id: "relist", label: "再出品", action: "relist" },
