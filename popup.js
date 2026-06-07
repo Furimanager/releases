@@ -47,7 +47,7 @@ const authState = {
 };
 let currentRakurakuTask = null;
 let currentRakurakuApprovalCandidate = null;
-let rakurakuAutoPollEnabled = true;
+let rakurakuAutoPollEnabled = false;
 let currentRakurakuMode = null;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 
@@ -402,7 +402,7 @@ function sendRuntimeMessage(message) {
 }
 
 function renderRakurakuAutoPollState(enabled, isRunningTask = false) {
-  rakurakuAutoPollEnabled = enabled !== false;
+  rakurakuAutoPollEnabled = enabled === true;
 
   if (rakurakuAutoPollState) {
     rakurakuAutoPollState.textContent = isRunningTask
@@ -419,7 +419,7 @@ function renderRakurakuAutoPollState(enabled, isRunningTask = false) {
 async function loadRakurakuAutoPollState() {
   try {
     const response = await sendRuntimeMessage({ type: "GET_RAKURAKU_AUTO_POLL_STATE" });
-    renderRakurakuAutoPollState(response?.enabled !== false, response?.isRunningTask === true);
+    renderRakurakuAutoPollState(response?.enabled === true, response?.isRunningTask === true);
   } catch (error) {
     if (rakurakuAutoPollState) {
       rakurakuAutoPollState.textContent = "自動チェック：確認失敗";
@@ -438,7 +438,7 @@ async function handleRakurakuAutoPollToggle() {
       type: "SET_RAKURAKU_AUTO_POLL_ENABLED",
       enabled: !rakurakuAutoPollEnabled
     });
-    renderRakurakuAutoPollState(response?.enabled !== false, response?.isRunningTask === true);
+    renderRakurakuAutoPollState(response?.enabled === true, response?.isRunningTask === true);
   } catch (error) {
     if (rakurakuAutoPollState) {
       rakurakuAutoPollState.textContent = "自動チェック：切替失敗";
@@ -1294,7 +1294,6 @@ async function initializePopup() {
 
   try {
     await restoreAuthState();
-    await loadRakurakuAutoPollState();
     await loadRakurakuExecutionMode();
     await loadRakurakuPendingTaskPreview();
   } catch (error) {
@@ -1329,9 +1328,6 @@ rakurakuTaskStartButton?.addEventListener("click", () => {
 });
 rakurakuWebOpenButton?.addEventListener("click", () => {
   handleOpenRakurakuWeb();
-});
-rakurakuAutoPollToggleButton?.addEventListener("click", () => {
-  void handleRakurakuAutoPollToggle();
 });
 rakurakuExecutionModeSelect?.addEventListener("change", () => {
   void handleRakurakuExecutionModeChange();

@@ -7,9 +7,11 @@
     }
     const chromeApi = globalThis.chrome;
     const RELIST_PENDING_KEY = "relist_pending";
-    const RAKURAKU_AUTO_POLL_KEY = "rakurakuAutoPollEnabled";
+    const RAKURAKU_AUTO_POLL_KEY = "rakurakuAutoPollEnabledV2";
     const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
     const RAKURAKU_ALARM_NAME = "rakurakuPoll";
+    const RAKURAKU_AUTO_POLL_MIN_MINUTES = 10;
+    const RAKURAKU_AUTO_POLL_JITTER_MINUTES = 3;
     const DEFAULT_APP_URL = "https://furimanager.com";
     const MERCARI_SELL_URL = "https://jp.mercari.com/sell";
     const MERCARI_ITEM_URL_BASE = "https://jp.mercari.com/item/";
@@ -73,8 +75,7 @@
         }
         return false;
     });
-    setupRakurakuAlarm();
-    void pollNextRelistTask("startup").catch((error) => console.warn("[rakuraku] startup poll skipped", error));
+    void setupRakurakuAlarm().catch((error) => console.warn("[rakuraku] alarm setup skipped", error));
     async function handleFetchImage(url, respond) {
         try {
             respond(await fetchImageAsDataUrl(url));
@@ -91,17 +92,17 @@
         respond(await openInventoryLink(payload));
     }
     async function handleGetRakurakuAutoPollState(respond) {
+        const enabled = await isRakurakuAutoPollEnabled();
         respond({
             success: true,
-            enabled: true,
+            enabled,
             isRunningTask: isRunningRakurakuTask
         });
     }
     async function handleSetRakurakuAutoPollEnabled(enabled, respond) {
-        await setLocalStorage({ [RAKURAKU_AUTO_POLL_KEY]: true });
-        setupRakurakuAlarm();
-        void pollNextRelistTask("toggle_on").catch((error) => console.warn("[rakuraku] toggle poll skipped", error));
-        respond({ success: true, enabled: true, isRunningTask: isRunningRakurakuTask });
+        await setLocalStorage({ [RAKURAKU_AUTO_POLL_KEY]: enabled === true });
+        await setupRakurakuAlarm();
+        respond({ success: true, enabled: enabled === true, isRunningTask: isRunningRakurakuTask });
     }
     async function handlePollRakurakuNow(respond) {
         try {
@@ -116,23 +117,34 @@
             });
         }
     }
-    function setupRakurakuAlarm() {
+    async function setupRakurakuAlarm() {
         if (!chromeApi.alarms?.create) {
             return;
         }
+        chromeApi.alarms.clear?.(RAKURAKU_ALARM_NAME);
         chromeApi.alarms.create(RAKURAKU_ALARM_NAME, {
-            periodInMinutes: 1
+            delayInMinutes: getNextRakurakuPollDelayMinutes()
         });
     }
     chromeApi.runtime.onInstalled?.addListener(() => {
-        setupRakurakuAlarm();
+        void setupRakurakuAlarm().catch((error) => console.warn("[rakuraku] alarm setup skipped", error));
     });
     chromeApi.runtime.onStartup?.addListener(() => {
-        setupRakurakuAlarm();
+        void setupRakurakuAlarm().catch((error) => console.warn("[rakuraku] alarm setup skipped", error));
     });
     chromeApi.alarms?.onAlarm?.addListener((alarm) => {
         if (alarm.name === RAKURAKU_ALARM_NAME) {
-            void pollNextRelistTask("alarm").catch((error) => console.warn("[rakuraku] alarm poll skipped", error));
+            void (async () => {
+                try {
+                    await pollNextRelistTask("alarm");
+                }
+                catch (error) {
+                    console.warn("[rakuraku] alarm poll skipped", error);
+                }
+                finally {
+                    await setupRakurakuAlarm();
+                }
+            })();
         }
     });
     async function pollNextRelistTask(reason, options = {}) {
@@ -143,6 +155,9 @@
         if (!hasSession) {
             console.log("[rakuraku] poll skipped", { reason, result: "auth_required" });
             return { task: null, started: false, reason: "auth_required" };
+        }
+        if (options.ignoreAutoPollDisabled !== true && !(await isRakurakuAutoPollEnabled())) {
+            return { task: null, started: false, reason: "full_auto_disabled" };
         }
         const next = await fetchAppApi("/api/automation/tasks/next");
         const task = next?.task || null;
@@ -231,27 +246,37 @@
         if (typeof tab?.id !== "number") {
             throw new Error("real-copy-listing: item page tab could not be opened");
         }
-        await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
-        await sleep(1200);
-        const result = await sendTabMessageWithRetry(tab.id, {
-            type: "CLICK_FURIMANE_COPY_LISTING_BUTTON",
-            taskId: task.id,
-            mercariItemId
-        });
-        console.log("[rakuraku] real relist action result", {
-            taskId: task.id,
-            mercariItemId,
-            itemUrl,
-            detected: result?.detected === true,
-            clicked: result?.clicked === true,
-            action: result?.action,
-            reason: result?.reason
-        });
-        if (result?.clicked === true) {
-            const completed = await completeTask(task.id, true, "real-relist-action: Furimane relist action button clicked; final publish not executed");
-            return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
+        // 商品ページを開けた時点でタスクを消化済みにし、同じページを自動で開き直さない。
+        const completed = await completeTask(task.id, true, "real-copy-listing: Mercari item page opened once; automatic retry disabled");
+        const completedTask = completed?.task
+            ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload }
+            : { ...task, status: "succeeded" };
+        try {
+            await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
+            await sleep(1200);
+            const result = await sendTabMessageWithRetry(tab.id, {
+                type: "CLICK_FURIMANE_COPY_LISTING_BUTTON",
+                taskId: task.id,
+                mercariItemId
+            });
+            console.log("[rakuraku] real relist action result", {
+                taskId: task.id,
+                mercariItemId,
+                itemUrl,
+                detected: result?.detected === true,
+                clicked: result?.clicked === true,
+                action: result?.action,
+                reason: result?.reason
+            });
         }
-        throw new Error(`real-relist-action: ${result?.reason || "relist action button not found on item page"}`);
+        catch (error) {
+            console.warn("[rakuraku] relist action stopped after one page open", {
+                taskId: task.id,
+                mercariItemId,
+                message: error instanceof Error ? error.message : "relist action stopped"
+            });
+        }
+        return completedTask;
     }
     async function executePriceDropTask(task) {
         const mercariItemId = normalizeMercariItemId(task.payload?.mercariItemId || task.payload?.itemId || task.target_item_id || task.targetItemId);
@@ -548,11 +573,14 @@
         const appUrl = String(globalThis.FurimanagerConfig?.APP_URL || DEFAULT_APP_URL).trim().replace(/\/+$/, "");
         return appUrl;
     }
+    async function getRakurakuExecutionMode() {
+        return "real";
+    }
     async function isRakurakuAutoPollEnabled() {
         return true;
     }
-    async function getRakurakuExecutionMode() {
-        return "real";
+    function getNextRakurakuPollDelayMinutes() {
+        return RAKURAKU_AUTO_POLL_MIN_MINUTES + Math.random() * RAKURAKU_AUTO_POLL_JITTER_MINUTES;
     }
     async function setRelistPending(payload) {
         if (!payload || typeof payload !== "object") {

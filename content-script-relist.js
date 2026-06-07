@@ -27,6 +27,25 @@
         return;
     }
     mountedWindow.__furimanagerRelistAutofillMounted = true;
+    chromeApi?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+        if (message?.type !== "APPLY_FURIMANE_PRICE_DROP_ON_EDIT") {
+            return false;
+        }
+        void applyPriceDropOnEditPage(message)
+            .then((result) => {
+            sendResponse({
+                success: true,
+                ...result,
+            });
+        })
+            .catch((error) => {
+            sendResponse({
+                success: false,
+                reason: error instanceof Error ? error.message : "price drop failed",
+            });
+        });
+        return true;
+    });
     function boot() {
         if (!window.location.pathname.startsWith("/sell")) {
             return;
@@ -1213,6 +1232,22 @@
     function normalizeText(value) {
         return (value ?? "").replace(/\s+/g, " ").trim();
     }
+    function parsePriceValue(value) {
+        const normalized = String(value ?? "").replace(/[^\d]/g, "");
+        const price = Number.parseInt(normalized, 10);
+        return Number.isFinite(price) ? price : NaN;
+    }
+    function normalizePositiveInteger(value, fallback) {
+        const numberValue = Number(value);
+        return Number.isFinite(numberValue) && numberValue > 0 ? Math.floor(numberValue) : fallback;
+    }
+    function normalizeNullableInteger(value) {
+        if (value === null || value === undefined || value === "") {
+            return null;
+        }
+        const numberValue = Number(value);
+        return Number.isFinite(numberValue) && numberValue >= 0 ? Math.floor(numberValue) : null;
+    }
     function isVisible(element) {
         const rect = element.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
@@ -1302,7 +1337,9 @@
     function findPriceField() {
         return findInputLike([
             'input[name="price"]',
+            'input[name*="price"]',
             'input[inputmode="numeric"]',
+            'input[placeholder*="価格"]',
             'input[aria-label*="価格"]',
             '[data-testid*="price"] input',
             '[data-testid*="Price"] input',
@@ -1413,6 +1450,78 @@
     }
     function isMercariSellDebugPath() {
         return ["/sell", "/sell/create", "/sell/categories", "/sell/conditions", "/sell/shipping_methods", "/sell/brands", "/sell/wizard"].includes(window.location.pathname);
+    }
+    async function applyPriceDropOnEditPage(message) {
+        if (!window.location.pathname.startsWith("/sell/edit")) {
+            throw new Error("edit page is not open");
+        }
+        const amount = normalizePositiveInteger(message?.amount, 100);
+        const minimumPrice = normalizeNullableInteger(message?.minimumPrice);
+        const priceField = await waitForPriceField();
+        if (!priceField) {
+            throw new Error("price field not found");
+        }
+        const currentPrice = parsePriceValue(priceField.value || priceField.getAttribute("value") || "");
+        if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+            throw new Error("current price could not be read");
+        }
+        const nextPrice = Math.max(currentPrice - amount, 0);
+        if (minimumPrice !== null && nextPrice < minimumPrice) {
+            throw new Error(`minimum price reached: ${nextPrice} < ${minimumPrice}`);
+        }
+        setFieldValue(priceField, String(nextPrice));
+        await sleep(SAFE_CLICK_SETTLE_MS);
+        const submitButton = await waitForEditSubmitButton();
+        if (!submitButton) {
+            throw new Error("edit submit button not found");
+        }
+        clickButtonLike(submitButton);
+        return {
+            submitted: true,
+            currentPrice,
+            nextPrice,
+            amount,
+            minimumPrice,
+        };
+    }
+    async function waitForPriceField() {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < MAX_WAIT_MS) {
+            const field = findPriceField();
+            if (field instanceof HTMLInputElement && field.type !== "hidden") {
+                return field;
+            }
+            await sleep(RETRY_INTERVAL_MS);
+        }
+        return null;
+    }
+    async function waitForEditSubmitButton() {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < MAX_WAIT_MS) {
+            const button = findEditSubmitButton();
+            if (button && isClickableButtonLike(button)) {
+                return button;
+            }
+            await sleep(RETRY_INTERVAL_MS);
+        }
+        return null;
+    }
+    function findEditSubmitButton() {
+        const selectors = [
+            'button[data-testid="edit-button"]',
+            'button[type="submit"][data-testid="edit-button"]',
+            '[data-location="listing:footer:edit"] button',
+            'button[type="submit"]',
+        ];
+        for (const selector of selectors) {
+            const element = document.querySelector(selector);
+            if (element instanceof HTMLElement && isVisible(element)) {
+                return element;
+            }
+        }
+        return Array.from(document.querySelectorAll("button"))
+            .filter((element) => element instanceof HTMLElement && isVisible(element))
+            .find((button) => normalizeText(button.textContent).includes("変更する")) ?? null;
     }
     function collectMercariSellDomCandidates() {
         const selector = [
