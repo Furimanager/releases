@@ -79,20 +79,42 @@ function isButtonDisabled(button) {
   );
 }
 
-function findNextPageButton() {
+function isElementVisible(element) {
+  const style = window.getComputedStyle(element);
+
+  return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
+}
+
+function getButtonLabel(button) {
+  return [button.textContent, button.getAttribute("aria-label"), button.getAttribute("title")]
+    .filter((value) => typeof value === "string" && value.trim() !== "")
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findPageButton(labels) {
   const buttons = Array.from(document.querySelectorAll("button"));
 
   return (
     buttons.find((button) => {
-      const text = button.textContent?.replace(/\s+/g, " ").trim() || "";
+      const text = getButtonLabel(button);
 
-      if (!text.includes("次へ")) {
+      if (!labels.some((label) => text.includes(label))) {
         return false;
       }
 
-      return !isButtonDisabled(button);
+      return !isButtonDisabled(button) && isElementVisible(button);
     }) || null
   );
+}
+
+function findNextPageButton() {
+  return findPageButton(["次へ", "次のページ", "Next"]);
+}
+
+function findPreviousPageButton() {
+  return findPageButton(["前へ", "前のページ", "Previous", "Prev"]);
 }
 
 function waitForPageChange(previousFirstId, timeoutMs = PAGE_CHANGE_TIMEOUT_MS) {
@@ -140,7 +162,53 @@ async function goToNextPage(currentItems) {
   return true;
 }
 
+async function goToPreviousPage(currentItems) {
+  const previousButton = findPreviousPageButton();
+
+  if (!previousButton) {
+    return false;
+  }
+
+  const previousFirstId = currentItems[0] ? getItemIdentity(currentItems[0]) : null;
+
+  previousButton.click();
+
+  const pageChanged = await waitForPageChange(previousFirstId, PAGE_CHANGE_TIMEOUT_MS);
+
+  if (!pageChanged) {
+    throw new Error("ページ切り替えの待機がタイムアウトしました");
+  }
+
+  return true;
+}
+
+async function moveToFirstPage() {
+  let movedPageCount = 0;
+
+  while (movedPageCount < FULL_SCRAPE_MAX_PAGES) {
+    const currentItems = parseCurrentPageItems();
+    const moved = await goToPreviousPage(currentItems);
+
+    if (!moved) {
+      break;
+    }
+
+    movedPageCount += 1;
+  }
+
+  if (movedPageCount >= FULL_SCRAPE_MAX_PAGES && findPreviousPageButton()) {
+    throw new Error("先頭ページへの移動が上限に達しました");
+  }
+
+  if (movedPageCount > 0) {
+    console.log("[furimanager-extension] moved to first sold page", { movedPageCount });
+  }
+
+  return movedPageCount;
+}
+
 async function scrapeAllPages() {
+  const startPageResetCount = await moveToFirstPage();
   const allItems = [];
   let pageCount = 0;
 
@@ -167,6 +235,7 @@ async function scrapeAllPages() {
     items,
     pageCount,
     reachedPageLimit,
+    startPageResetCount,
   };
 }
 
@@ -183,6 +252,7 @@ async function scrapeDeltaPages(lastItemId) {
     };
   }
 
+  const startPageResetCount = await moveToFirstPage();
   const collectedItems = [];
   let pageCount = 0;
   let matchedLastItemId = false;
@@ -233,6 +303,8 @@ async function scrapeDeltaPages(lastItemId) {
     newLastItemId,
     pageCount,
     reachedPageLimit,
+    startPageResetCount,
+    matchedLastItemId,
   };
 }
 
