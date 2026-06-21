@@ -727,7 +727,10 @@ function parseSoldAtTextToDate(soldAtText) {
     return null;
   }
 
-  const matched = soldAtText.trim().match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  const normalizedText = soldAtText.trim();
+  const matched =
+    normalizedText.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/) ||
+    normalizedText.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
 
   if (!matched) {
     return null;
@@ -772,6 +775,14 @@ function convertItemToTransactionInsert(item) {
     return null;
   }
 
+  // B-2: external_id(取引ID)が取れない行は重複判定できないため送信しない。
+  const externalId =
+    typeof item?.mercariTransactionId === "string" ? item.mercariTransactionId.trim() : "";
+
+  if (!externalId) {
+    return null;
+  }
+
   return {
     platform: "mercari",
     item_name: item.itemName || "",
@@ -779,7 +790,9 @@ function convertItemToTransactionInsert(item) {
     shipping_cost: resolveShippingCostForInsert(item),
     platform_fee_rate: 0.1,
     sold_at: parseSoldAtTextToDate(item.soldAtText),
-    external_id: item.mercariTransactionId || null
+    external_id: externalId,
+    // B-11: 取込元の判別用(sourceのCHECK制約に既存の許可値)。
+    source: "chrome_extension"
   };
 }
 
@@ -806,13 +819,15 @@ async function insertTransactions(records) {
     throw new Error("ログインしてから送信してください");
   }
 
-  const response = await fetch(`${url}/rest/v1/transactions`, {
+  // B-1: 既存取引(重複)が混ざっても新規分だけ登録する。
+  // on_conflict はDBのユニーク制約 transactions_user_external_unique (user_id, external_id) に対応。
+  const response = await fetch(`${url}/rest/v1/transactions?on_conflict=user_id,external_id`, {
     method: "POST",
     headers: {
       apikey: anonKey,
       Authorization: `Bearer ${authState.accessToken}`,
       "Content-Type": "application/json",
-      Prefer: "return=minimal"
+      Prefer: "resolution=ignore-duplicates,return=minimal"
     },
     body: JSON.stringify(records)
   });
@@ -1102,7 +1117,8 @@ async function handleScrapeAndSend() {
 
     setStatus("success", records.length > 0 ? "送信完了" : "送信対象なし", [
       { label: "差分取得件数", value: response.count ?? 0 },
-      { label: "送信件数", value: records.length },
+      { label: "送信対象件数", value: records.length },
+      { label: "送信対象外(取引IDなし等)", value: Math.max((response.count ?? 0) - records.length, 0) },
       { label: "先頭1件", value: response.items?.[0]?.itemName || "データなし" },
       { label: "読み込みページ数", value: response.pageCount ?? 0 },
       { label: "上限到達", value: response.reachedPageLimit ? "はい" : "いいえ" },

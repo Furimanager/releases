@@ -21,6 +21,18 @@
     mode: RelistMode;
   };
 
+  type PriceAdjustPendingItem = {
+    itemId: string;
+    delta: number;
+    savedAt: number;
+  };
+
+  type ListingManagementPendingItem = {
+    itemId: string;
+    action: "stop" | "delete";
+    savedAt: number;
+  };
+
   type ChromeLike = {
     storage?: {
       local: {
@@ -51,6 +63,8 @@
   };
   const chromeApi = (globalThis as unknown as { chrome?: ChromeLike }).chrome;
   const RELIST_PENDING_KEY = "relist_pending";
+  const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
+  const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
   const MAX_WAIT_MS = 12000;
   const RETRY_INTERVAL_MS = 300;
   const INITIAL_SELL_CLICK_WAIT_MS = 600;
@@ -69,6 +83,7 @@
   const SESSION_ITEM_KEY = "furimanager_relist_session_item";
   const CATEGORY_ID_PATH_KEY = "furimanager_relist_category_id_path";
   const INITIAL_CREATE_VISITED_KEY = "furimanager_relist_initial_create_visited";
+  const DRAFT_SAVE_DONE_KEY = "furimanager_relist_draft_save_done";
   const ENABLE_DOM_DEBUG = false;
   const ENABLE_METADATA_AUTOFILL = true;
   let imageFillAttempted = false;
@@ -111,6 +126,16 @@
       window.setTimeout(debugMercariSellDom, 1500);
     }
 
+    if (window.location.pathname.startsWith("/sell/edit")) {
+      if (applyPendingListingManagementOnEditPage()) {
+        return;
+      }
+
+      if (applyPendingPriceAdjustOnEditPage()) {
+        return;
+      }
+    }
+
     getPendingItem((item) => {
       if (!item) {
         return;
@@ -118,6 +143,269 @@
 
       void waitForFormAndFill(item);
     });
+  }
+
+  function applyPendingPriceAdjustOnEditPage(): boolean {
+    const pending = getPendingPriceAdjustItem();
+
+    if (!pending) {
+      return false;
+    }
+
+    const currentItemId = getEditPageItemId();
+
+    if (pending.itemId !== currentItemId) {
+      clearPendingPriceAdjustItem();
+      return false;
+    }
+
+    const amount = Math.abs(pending.delta);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      clearPendingPriceAdjustItem();
+      return false;
+    }
+
+    void applyPriceDropOnEditPage({ delta: pending.delta })
+      .then(() => {
+        clearPendingPriceAdjustItem();
+      })
+      .catch((error) => {
+        console.warn("[furimanager] manual price adjust failed", error);
+      });
+
+    return true;
+  }
+
+  function applyPendingListingManagementOnEditPage(): boolean {
+    const pending = getPendingListingManagementItem();
+
+    if (!pending) {
+      return false;
+    }
+
+    const currentItemId = getEditPageItemId();
+
+    if (pending.itemId !== currentItemId) {
+      clearPendingListingManagementItem();
+      return false;
+    }
+
+    void executePendingListingManagement(pending)
+      .then(() => {
+        clearPendingListingManagementItem();
+      })
+      .catch((error) => {
+        clearPendingListingManagementItem();
+        console.warn("[furimanager] listing management failed", error);
+        showToast(error instanceof Error ? error.message : "商品操作に失敗しました");
+      });
+
+    return true;
+  }
+
+  function getPendingListingManagementItem(): ListingManagementPendingItem | null {
+    try {
+      const raw = sessionStorage.getItem(LISTING_MANAGEMENT_PENDING_KEY);
+
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as Partial<ListingManagementPendingItem>;
+      const isFresh = typeof parsed.savedAt === "number" && Date.now() - parsed.savedAt <= 120000;
+
+      if (
+        typeof parsed.itemId !== "string" ||
+        !/^m\d{8,}$/.test(parsed.itemId) ||
+        (parsed.action !== "stop" && parsed.action !== "delete") ||
+        !isFresh
+      ) {
+        clearPendingListingManagementItem();
+        return null;
+      }
+
+      return {
+        itemId: parsed.itemId,
+        action: parsed.action,
+        savedAt: parsed.savedAt,
+      };
+    } catch {
+      clearPendingListingManagementItem();
+      return null;
+    }
+  }
+
+  function clearPendingListingManagementItem(): void {
+    sessionStorage.removeItem(LISTING_MANAGEMENT_PENDING_KEY);
+  }
+
+  async function executePendingListingManagement(pending: ListingManagementPendingItem): Promise<void> {
+    if (pending.action === "stop") {
+      const suspendButton = await waitForActionButton(findSuspendListingButton);
+
+      if (!suspendButton) {
+        throw new Error("「出品を一時停止する」ボタンが見つかりませんでした");
+      }
+
+      clickButtonLike(suspendButton);
+      return;
+    }
+
+    const deleteButton = await waitForActionButton(findInitialDeleteListingButton);
+
+    if (!deleteButton) {
+      throw new Error("「この商品を削除する」ボタンが見つかりませんでした");
+    }
+
+    // 削除は、編集画面の削除ボタン → 確認ダイアログの削除ボタンの2段階。
+    clickButtonLike(deleteButton);
+
+    const confirmButton = await waitForActionButton(findDeleteConfirmationButton);
+
+    if (!confirmButton) {
+      throw new Error("削除確認ダイアログの「削除する」ボタンが見つかりませんでした");
+    }
+
+    clickButtonLike(confirmButton);
+  }
+
+  async function waitForActionButton(finder: () => HTMLElement | null): Promise<HTMLElement | null> {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < MAX_WAIT_MS) {
+      const button = finder();
+
+      if (button && isClickableButtonLike(button)) {
+        return button;
+      }
+
+      await sleep(RETRY_INTERVAL_MS);
+    }
+
+    return null;
+  }
+
+  function findSuspendListingButton(): HTMLElement | null {
+    const selectors = [
+      'button[data-testid="suspend-button"]',
+      '[data-testid="suspend-button"] button',
+      '[data-location="listing:footer:exit_buttons:suspend_listing"] button',
+    ];
+    const direct = findVisibleElement(selectors);
+
+    if (direct && normalizeText(direct.textContent).includes("出品を一時停止する")) {
+      return direct;
+    }
+
+    return findVisibleButtonByExactText("出品を一時停止する");
+  }
+
+  function findInitialDeleteListingButton(): HTMLElement | null {
+    const selectors = [
+      'button[data-testid="delete-button"]',
+      '[data-testid="delete-button"] button',
+      '[data-location="listing:footer:exit_buttons:delete_listing"] button',
+    ];
+    const direct = findVisibleElement(selectors);
+
+    if (direct && normalizeText(direct.textContent).includes("この商品を削除する")) {
+      return direct;
+    }
+
+    return findVisibleButtonByExactText("この商品を削除する");
+  }
+
+  function findDeleteConfirmationButton(): HTMLElement | null {
+    const selectors = [
+      'button[data-testid="dialog-action-button"]',
+      '[data-testid="dialog-action-button"] button',
+    ];
+    const candidates = selectors
+      .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && isVisible(element));
+    const textCandidates = Array.from(document.querySelectorAll("button"))
+      .filter((element): element is HTMLButtonElement => (
+        element instanceof HTMLButtonElement &&
+        isVisible(element) &&
+        normalizeText(element.textContent) === "削除する"
+      ));
+
+    return [...candidates, ...textCandidates].find((element) => (
+      normalizeText(element.textContent) === "削除する" &&
+      hasDeleteConfirmationContext(element)
+    )) ?? null;
+  }
+
+  function findVisibleElement(selectors: string[]): HTMLElement | null {
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+
+      if (element instanceof HTMLElement && isVisible(element)) {
+        return element;
+      }
+    }
+
+    return null;
+  }
+
+  function findVisibleButtonByExactText(text: string): HTMLButtonElement | null {
+    return Array.from(document.querySelectorAll("button"))
+      .filter((element): element is HTMLButtonElement => element instanceof HTMLButtonElement && isVisible(element))
+      .find((button) => normalizeText(button.textContent) === text) ?? null;
+  }
+
+  function hasDeleteConfirmationContext(element: HTMLElement): boolean {
+    let current: HTMLElement | null = element;
+
+    for (let depth = 0; current && depth < 7; depth += 1) {
+      if (normalizeText(current.textContent).includes("この商品を削除しますか")) {
+        return true;
+      }
+
+      current = current.parentElement;
+    }
+
+    return false;
+  }
+
+  function getPendingPriceAdjustItem(): PriceAdjustPendingItem | null {
+    try {
+      const raw = sessionStorage.getItem(PRICE_ADJUST_PENDING_KEY);
+
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as Partial<PriceAdjustPendingItem>;
+
+      if (typeof parsed.itemId !== "string" || !/^m\d{8,}$/.test(parsed.itemId)) {
+        clearPendingPriceAdjustItem();
+        return null;
+      }
+
+      if (typeof parsed.delta !== "number" || !Number.isFinite(parsed.delta)) {
+        clearPendingPriceAdjustItem();
+        return null;
+      }
+
+      return {
+        itemId: parsed.itemId,
+        delta: parsed.delta,
+        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+      };
+    } catch {
+      clearPendingPriceAdjustItem();
+      return null;
+    }
+  }
+
+  function clearPendingPriceAdjustItem(): void {
+    sessionStorage.removeItem(PRICE_ADJUST_PENDING_KEY);
+  }
+
+  function getEditPageItemId(): string | null {
+    return window.location.pathname.match(/\/sell\/edit\/(m\d{8,})/)?.[1] ?? null;
   }
 
   function getPendingItem(callback: (item: RelistPendingItem | null) => void): void {
@@ -165,6 +453,10 @@
       hasFilledAnyField = result.filled || hasFilledAnyField;
 
       if (result.complete) {
+        if (item.mode === "draft") {
+          await saveDraftAfterFill();
+        }
+
         return;
       }
 
@@ -189,8 +481,64 @@
       return;
     }
 
-    [IMAGE_DONE_KEY, SIZE_DONE_KEY, BRAND_DONE_KEY, SHIPPING_FROM_DONE_KEY, CATEGORY_STEP_KEY, CATEGORY_DONE_KEY, CONDITION_DONE_KEY, SHIPPING_METHOD_DONE_KEY, CATEGORY_ID_PATH_KEY, INITIAL_CREATE_VISITED_KEY].forEach((key) => sessionStorage.removeItem(key));
+    [IMAGE_DONE_KEY, SIZE_DONE_KEY, BRAND_DONE_KEY, SHIPPING_FROM_DONE_KEY, CATEGORY_STEP_KEY, CATEGORY_DONE_KEY, CONDITION_DONE_KEY, SHIPPING_METHOD_DONE_KEY, CATEGORY_ID_PATH_KEY, INITIAL_CREATE_VISITED_KEY, DRAFT_SAVE_DONE_KEY].forEach((key) => sessionStorage.removeItem(key));
     sessionStorage.setItem(SESSION_ITEM_KEY, sessionKey);
+  }
+
+  async function saveDraftAfterFill(): Promise<void> {
+    if (sessionStorage.getItem(DRAFT_SAVE_DONE_KEY) === "true") {
+      return;
+    }
+
+    await sleep(SAFE_CLICK_SETTLE_MS);
+    const button = await waitForDraftSaveButton();
+
+    if (!button) {
+      showToast("「下書きに保存する」ボタンが見つかりませんでした");
+      return;
+    }
+
+    // 入力完了後、画像のDOMにある最後の下書き保存ボタンを1回だけ押す。
+    sessionStorage.setItem(DRAFT_SAVE_DONE_KEY, "true");
+    clickButtonLike(button);
+    chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
+  }
+
+  async function waitForDraftSaveButton(): Promise<HTMLElement | null> {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < MAX_WAIT_MS) {
+      const button = findDraftSaveButton();
+
+      if (button && isClickableButtonLike(button)) {
+        return button;
+      }
+
+      await sleep(RETRY_INTERVAL_MS);
+    }
+
+    return null;
+  }
+
+  function findDraftSaveButton(): HTMLElement | null {
+    const selectors = [
+      'button[data-testid="save-draft"]',
+      'button[testid="save-draft"]',
+      '[data-location="listing:footer:exit_buttons:save_draft"] button',
+      '[data-location="listing:footer:exit_buttons:save_draft"]',
+    ];
+
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+
+      if (element instanceof HTMLElement && isVisible(element)) {
+        return element;
+      }
+    }
+
+    return Array.from(document.querySelectorAll("button"))
+      .filter((element): element is HTMLButtonElement => element instanceof HTMLButtonElement && isVisible(element))
+      .find((button) => normalizeText(button.textContent).includes("下書きに保存する")) ?? null;
   }
 
   async function handleSelectionSubPage(item: RelistPendingItem): Promise<boolean> {
@@ -1914,7 +2262,12 @@
       throw new Error("edit page is not open");
     }
 
-    const amount = normalizePositiveInteger(message?.amount, 100);
+    const requestedDelta = Number(message?.delta);
+    // 手動の±100はdeltaを使う。既存の運用アシストはamount指定のため、従来どおり値下げとして扱う。
+    const delta = Number.isFinite(requestedDelta) && requestedDelta !== 0
+      ? Math.trunc(requestedDelta)
+      : -normalizePositiveInteger(message?.amount, 100);
+    const amount = Math.abs(delta);
     const minimumPrice = normalizeNullableInteger(message?.minimumPrice);
     const priceField = await waitForPriceField();
 
@@ -1928,9 +2281,9 @@
       throw new Error("current price could not be read");
     }
 
-    const nextPrice = Math.max(currentPrice - amount, 0);
+    const nextPrice = Math.max(currentPrice + delta, 0);
 
-    if (minimumPrice !== null && nextPrice < minimumPrice) {
+    if (delta < 0 && minimumPrice !== null && nextPrice < minimumPrice) {
       throw new Error(`minimum price reached: ${nextPrice} < ${minimumPrice}`);
     }
 
@@ -1950,6 +2303,7 @@
       currentPrice,
       nextPrice,
       amount,
+      delta,
       minimumPrice,
     };
   }

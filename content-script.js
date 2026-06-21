@@ -9,6 +9,9 @@
     const TOOLBAR_KIND_ATTRIBUTE = "data-furimanager-action-kind";
     const TOOLBAR_BUTTONS_ATTRIBUTE = "data-furimanager-action-buttons";
     const LISTING_DATE_PANEL_ATTRIBUTE = "data-furimanager-listing-date-panel";
+    const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
+    const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
+    const PRODUCT_PAGE_RELIST_PENDING_KEY = "furimanager_product_page_relist_pending";
     const COPY_LISTING_BUTTON_WAIT_TIMEOUT_MS = 10000;
     const COPY_LISTING_BUTTON_WAIT_INTERVAL_MS = 300;
     const OBSERVER_DEBOUNCE_MS = 250;
@@ -72,11 +75,13 @@
             { id: "relist", label: "再出品", action: "relist" },
         ],
         activeListings: [
-            { id: "relist", label: "再出品", action: "relist" },
-            INVENTORY_LINK_BUTTON,
             { id: "decrease-price", label: "-100", action: "adjustPrice", amount: -100 },
             { id: "increase-price", label: "+100", action: "adjustPrice", amount: 100 },
+            { id: "relist", label: "再出品", action: "relist" },
+            INVENTORY_LINK_BUTTON,
             { id: "save-draft", label: "下書き", action: "saveDraft" },
+            { id: "stop-listing", label: "停止", action: "stopListing" },
+            { id: "delete-listing", label: "削除", action: "deleteListing" },
         ],
     };
     BUTTONS_BY_KIND.otherProduct = BUTTONS_BY_KIND.otherProduct.filter((definition) => definition.action === "copyListing");
@@ -217,10 +222,12 @@
 
       .furimanager-action-toolbar--inline-end {
         position: absolute;
-        top: 50%;
+        top: 46%;
         right: 52px;
         z-index: 10;
-        flex-wrap: nowrap;
+        display: grid;
+        grid-template-columns: repeat(4, max-content);
+        gap: 6px;
         margin-top: 0;
         transform: translateY(-50%);
       }
@@ -305,7 +312,7 @@
           position: static;
           transform: none;
           margin-top: 8px;
-          flex-wrap: wrap;
+          grid-template-columns: repeat(3, max-content);
         }
 
         .furimanager-listing-date-panel__row {
@@ -335,6 +342,15 @@
         }
     }
     function injectButtons() {
+        if (continuePendingRelistFromProductPage()) {
+            return;
+        }
+        if (continuePendingListingManagementFromProductPage()) {
+            return;
+        }
+        if (continuePendingPriceAdjustFromProductPage()) {
+            return;
+        }
         const pageKind = detectPageKind();
         cleanupToolbarsForPageKind(pageKind);
         if (pageKind === "unknown" || pageKind === "browsingHistory") {
@@ -773,22 +789,213 @@
         await saveRelistPending(context, "copy");
     }
     async function handleRelist(context) {
-        await saveRelistPending(context, "relist");
+        await runRelistFromProductPage(context, "relist");
     }
     async function handleSaveDraft(context) {
-        // TODO: 下書き保存と正式な再出品で保存先や後続動作を分ける場合は、mode='draft' を起点に分岐する。
-        await saveRelistPending(context, "draft");
+        await runRelistFromProductPage(context, "draft");
     }
-    async function handleAdjustPrice(amount, context) {
-        const item = await collectRelistData(context, "relist");
-        if (typeof item.price !== "number") {
-            showToast("価格が見つかりませんでした");
+    async function runRelistFromProductPage(context, mode) {
+        if (PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
+            await saveRelistPending(context, mode);
             return;
         }
-        await sendRelistPending({
-            ...item,
-            price: Math.max(item.price + amount, 0),
+        const itemId = context.itemId ?? extractMercariItemId(context.itemUrl);
+        const itemLink = getItemLink(context.root);
+        if (!itemId || !itemLink) {
+            showToast("商品ページを開く場所が見つかりませんでした");
+            return;
+        }
+        const pending = {
+            itemId,
+            mode,
+            savedAt: Date.now(),
+        };
+        sessionStorage.setItem(PRODUCT_PAGE_RELIST_PENDING_KEY, JSON.stringify(pending));
+        // 一覧ではデータを作らず、商品行を押して商品ページ用の処理へ一本化する。
+        clickLinkAndFallback(itemLink);
+    }
+    function continuePendingRelistFromProductPage() {
+        if (!PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
+            return false;
+        }
+        const pending = getPendingProductPageRelistItem();
+        if (!pending) {
+            return false;
+        }
+        const currentItemId = extractMercariItemId(window.location.href);
+        if (currentItemId !== pending.itemId) {
+            sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+            return false;
+        }
+        const pageKind = detectPageKind();
+        if (pageKind !== "ownProduct") {
+            return false;
+        }
+        const context = getProductPageTarget(pageKind);
+        if (!context) {
+            return false;
+        }
+        // observerによる再実行で二重送信しないよう、商品データ取得前に受け渡しを消す。
+        sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+        void saveRelistPending(context, pending.mode);
+        return true;
+    }
+    function getPendingProductPageRelistItem() {
+        try {
+            const raw = sessionStorage.getItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+            if (!raw) {
+                return null;
+            }
+            const parsed = JSON.parse(raw);
+            const isFresh = typeof parsed.savedAt === "number" && Date.now() - parsed.savedAt <= 120000;
+            if (typeof parsed.itemId !== "string" ||
+                !/^m\d{8,}$/.test(parsed.itemId) ||
+                (parsed.mode !== "relist" && parsed.mode !== "draft") ||
+                !isFresh) {
+                sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+                return null;
+            }
+            return {
+                itemId: parsed.itemId,
+                mode: parsed.mode,
+                savedAt: parsed.savedAt,
+            };
+        }
+        catch {
+            sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+            return null;
+        }
+    }
+    async function handleAdjustPrice(amount, context) {
+        const itemId = context.itemId ?? extractMercariItemId(context.itemUrl) ?? extractMercariItemId(window.location.href);
+        if (!itemId) {
+            showToast("商品の編集ページを特定できませんでした");
+            return;
+        }
+        const pending = {
+            itemId,
+            delta: amount,
+            savedAt: Date.now(),
+            stage: context.pageKind === "activeListings" ? "openItem" : "openEdit",
+        };
+        savePendingPriceAdjustItem(pending);
+        if (context.pageKind === "activeListings") {
+            const itemLink = getItemLink(context.root);
+            if (!itemLink) {
+                clearPendingPriceAdjustItem();
+                showToast("商品ページを開く場所が見つかりませんでした");
+                return;
+            }
+            // 出品一覧では、先に商品行のリンク（画像4の青い領域）を押して商品詳細へ進む。
+            clickLinkAndFallback(itemLink);
+            return;
+        }
+        if (!openProductEditPage(itemId)) {
+            clearPendingPriceAdjustItem();
+            showToast("「商品の編集」が見つかりませんでした");
+        }
+    }
+    function continuePendingPriceAdjustFromProductPage() {
+        if (!PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
+            return false;
+        }
+        const pending = getPendingPriceAdjustItem();
+        if (!pending || pending.stage !== "openItem") {
+            return false;
+        }
+        const currentItemId = extractMercariItemId(window.location.href);
+        if (currentItemId !== pending.itemId) {
+            clearPendingPriceAdjustItem();
+            return false;
+        }
+        const editLink = findProductEditLink(document, pending.itemId);
+        if (!editLink) {
+            return false;
+        }
+        savePendingPriceAdjustItem({
+            ...pending,
+            stage: "openEdit",
         });
+        clickEditLinkAndEnsureReload(editLink, pending.itemId);
+        return true;
+    }
+    function openProductEditPage(itemId) {
+        const editLink = findProductEditLink(document, itemId);
+        if (!editLink) {
+            return false;
+        }
+        clickEditLinkAndEnsureReload(editLink, itemId);
+        return true;
+    }
+    function clickLinkAndFallback(link) {
+        const startUrl = window.location.href;
+        link.click();
+        window.setTimeout(() => {
+            if (window.location.href === startUrl) {
+                window.location.assign(link.href);
+            }
+        }, 800);
+    }
+    function clickEditLinkAndEnsureReload(link, itemId) {
+        const startUrl = window.location.href;
+        link.click();
+        window.setTimeout(() => {
+            const editItemId = window.location.pathname.match(/\/sell\/edit\/(m\d{8,})/)?.[1] ?? null;
+            if (editItemId === itemId) {
+                // SPA遷移では編集画面用スクリプトが追加読込されないため、一度だけ通常読込へ切り替える。
+                window.location.reload();
+                return;
+            }
+            if (window.location.href === startUrl) {
+                window.location.assign(link.href);
+            }
+        }, 800);
+    }
+    function savePendingPriceAdjustItem(item) {
+        sessionStorage.setItem(PRICE_ADJUST_PENDING_KEY, JSON.stringify(item));
+    }
+    function getPendingPriceAdjustItem() {
+        try {
+            const raw = sessionStorage.getItem(PRICE_ADJUST_PENDING_KEY);
+            if (!raw) {
+                return null;
+            }
+            const parsed = JSON.parse(raw);
+            if (typeof parsed.itemId !== "string" ||
+                !/^m\d{8,}$/.test(parsed.itemId) ||
+                typeof parsed.delta !== "number" ||
+                !Number.isFinite(parsed.delta)) {
+                clearPendingPriceAdjustItem();
+                return null;
+            }
+            return {
+                itemId: parsed.itemId,
+                delta: parsed.delta,
+                savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+                stage: parsed.stage === "openItem" ? "openItem" : "openEdit",
+            };
+        }
+        catch {
+            clearPendingPriceAdjustItem();
+            return null;
+        }
+    }
+    function clearPendingPriceAdjustItem() {
+        sessionStorage.removeItem(PRICE_ADJUST_PENDING_KEY);
+    }
+    function findProductEditLink(source, itemId) {
+        const links = Array.from(source.querySelectorAll(`
+      a[href="/sell/edit/${itemId}"][data-testid="checkout-link"],
+      a[href="/sell/edit/${itemId}"],
+      a[href*="/sell/edit/${itemId}"],
+      a[href*="/sell/edit/"][data-testid="checkout-link"],
+      a[href*="/sell/edit/"]
+    `)).filter((link) => link instanceof HTMLAnchorElement && isVisible(link));
+        return links.find((link) => {
+            const hrefItemId = extractMercariItemId(link.href.replace("/sell/edit/", "/item/"));
+            const text = normalizeText(link.textContent);
+            return (!hrefItemId || hrefItemId === itemId) && (text.includes("商品の編集") || text.includes("編集") || link.dataset.testid === "checkout-link");
+        }) ?? links[0] ?? null;
     }
     async function saveRelistPending(context, mode) {
         const item = await collectRelistData(context, mode);
@@ -980,34 +1187,81 @@
         });
     }
     async function handleStopListing(context) {
-        if (!window.confirm("この商品を出品停止しますか？")) {
-            return;
-        }
-        // メルカリ側のDOM文言に依存するため、複数候補から停止操作だけを慎重に探す。
-        const stopTarget = await findActionElement(context.root, ["出品を停止", "公開停止", "停止する", "停止"], context.pageKind === "ownProduct");
-        if (!stopTarget) {
-            showToast("出品停止の操作対象が見つかりませんでした");
-            return;
-        }
-        stopTarget.click();
-        showToast("出品停止の操作を開始しました");
+        startListingManagementAction("stop", context);
     }
     async function handleDeleteListing(context) {
-        if (!window.confirm("この商品を削除しますか？この操作は取り消せない可能性があります")) {
+        startListingManagementAction("delete", context);
+    }
+    function startListingManagementAction(action, context) {
+        const itemId = context.itemId ?? extractMercariItemId(context.itemUrl) ?? extractMercariItemId(window.location.href);
+        if (!itemId) {
+            showToast("商品の編集ページを特定できませんでした");
             return;
         }
-        // 削除は危険操作なので、最終確定ボタンが出た場合はユーザー自身に押してもらう。
-        const deleteTarget = await findActionElement(context.root, ["商品を削除", "削除"], context.pageKind === "ownProduct");
-        if (!deleteTarget) {
-            showToast("削除操作の対象が見つかりませんでした");
+        const pending = {
+            itemId,
+            action,
+            savedAt: Date.now(),
+        };
+        sessionStorage.setItem(LISTING_MANAGEMENT_PENDING_KEY, JSON.stringify(pending));
+        if (context.pageKind === "activeListings") {
+            const itemLink = getItemLink(context.root);
+            if (!itemLink) {
+                sessionStorage.removeItem(LISTING_MANAGEMENT_PENDING_KEY);
+                showToast("商品ページを開く場所が見つかりませんでした");
+                return;
+            }
+            clickLinkAndFallback(itemLink);
             return;
         }
-        if (isInsideDialog(deleteTarget) || isFinalDeleteElement(deleteTarget)) {
-            showToast("削除確認画面を開きました。内容を確認してください");
-            return;
+        if (!openProductEditPage(itemId)) {
+            sessionStorage.removeItem(LISTING_MANAGEMENT_PENDING_KEY);
+            showToast("「商品の編集」が見つかりませんでした");
         }
-        deleteTarget.click();
-        showToast("削除確認画面を開きました。内容を確認してください");
+    }
+    function continuePendingListingManagementFromProductPage() {
+        if (!PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
+            return false;
+        }
+        const pending = getPendingListingManagementForProductPage();
+        if (!pending) {
+            return false;
+        }
+        const currentItemId = extractMercariItemId(window.location.href);
+        if (currentItemId !== pending.itemId) {
+            sessionStorage.removeItem(LISTING_MANAGEMENT_PENDING_KEY);
+            return false;
+        }
+        if (!openProductEditPage(pending.itemId)) {
+            return false;
+        }
+        return true;
+    }
+    function getPendingListingManagementForProductPage() {
+        try {
+            const raw = sessionStorage.getItem(LISTING_MANAGEMENT_PENDING_KEY);
+            if (!raw) {
+                return null;
+            }
+            const parsed = JSON.parse(raw);
+            const isFresh = typeof parsed.savedAt === "number" && Date.now() - parsed.savedAt <= 120000;
+            if (typeof parsed.itemId !== "string" ||
+                !/^m\d{8,}$/.test(parsed.itemId) ||
+                (parsed.action !== "stop" && parsed.action !== "delete") ||
+                !isFresh) {
+                sessionStorage.removeItem(LISTING_MANAGEMENT_PENDING_KEY);
+                return null;
+            }
+            return {
+                itemId: parsed.itemId,
+                action: parsed.action,
+                savedAt: parsed.savedAt,
+            };
+        }
+        catch {
+            sessionStorage.removeItem(LISTING_MANAGEMENT_PENDING_KEY);
+            return null;
+        }
     }
     function detectRelistButtonCandidate(expectedItemId) {
         const currentItemId = extractMercariItemId(window.location.href);
