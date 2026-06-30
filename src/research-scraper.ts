@@ -36,6 +36,7 @@ type ResearchFetchOptions = {
   signal?: AbortSignal;
   onProgress?: (count: number, details?: ResearchProgressDetails) => void;
   strategy?: ResearchFetchStrategy;
+  directFetch?: boolean;
 };
 
 type ResearchFetchResult = {
@@ -91,7 +92,7 @@ declare global {
 
 const MERCARI_PROFILE_URL_PATTERN = /\/user\/profile\/([^/?#]+)/;
 const MERCARI_SHOPS_PROFILE_URL_PATTERN = /\/shops\/profile\/([^/?#]+)/;
-const MAX_RESEARCH_LISTINGS = 200;
+const MAX_RESEARCH_LISTINGS = 1000;
 const MAX_SCROLL_ATTEMPTS = 40;
 const STABLE_SCROLL_LIMIT = 3;
 const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -100,17 +101,17 @@ const PAGE_FETCHER_SCRIPT_ID = "furimane-research-page-fetcher";
 const PAGE_FETCHER_SCRIPT_PATH = "src/research-page-fetcher.js";
 const PAGE_FETCH_REQUEST_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_REQUEST";
 const PAGE_FETCH_RESPONSE_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_RESPONSE";
-const PAGE_FETCH_TIMEOUT_MS = 30000;
+const PAGE_FETCH_TIMEOUT_MS = 15000;
 const DOM_FETCH_LOG_PREFIX = "[furimane-research][dom-fetch]";
 const PRICE_TEXT_PATTERN = /(?:[\u00a5\uffe5]\s*([\d,]+)|([\d,]+)\s*\u5186)/;
 const PRICE_TEXT_TAIL_PATTERN = /(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186).*$/;
 const PRICE_TEXT_PREFIX_PATTERN = /^(?:SOLD\s*)?(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186)\s*/i;
 const API_AUTO_MORE_MAX_CLICKS = 5;
 const API_AUTO_MORE_OLD_ITEM_STOP_COUNT = 3;
-const API_AUTO_MORE_PROGRESS_TIMEOUT_MS = 12000;
-const API_AUTO_MORE_POLL_MS = 300;
-const API_AUTO_MORE_CLICK_DELAY_MS = 900;
-const API_AUTO_MORE_AFTER_CLICK_MS = 1500;
+const API_AUTO_MORE_PROGRESS_TIMEOUT_MS = 8000;
+const API_AUTO_MORE_POLL_MS = 200;
+const API_AUTO_MORE_CLICK_DELAY_MS = 300;
+const API_AUTO_MORE_AFTER_CLICK_MS = 800;
 const API_ALWAYS_LOG_STEPS = new Set([
   "api_mode_entered",
   "fallback_to_dom",
@@ -124,7 +125,7 @@ const API_ALWAYS_LOG_STEPS = new Set([
 ]);
 let hasLoggedApiPagerDiagnostic = false;
 let pageFetcherInjectPromise: Promise<void> | null = null;
-let pageApiPayloadPromise: Promise<unknown> | null = null;
+let pageApiPayloadRequest: { sellerId: string; promise: Promise<unknown>; directFetch: boolean } | null = null;
 let latestPageApiProgress: Partial<PageContextFetchResponse> | null = null;
 let pageApiProgressListeners: Array<{
   seller: ResearchSellerContext;
@@ -275,9 +276,10 @@ function notifyPageApiProgress(data: Partial<PageContextFetchResponse>) {
 
 async function waitMercariApiPayloadFromPage(seller: ResearchSellerContext, options: ResearchFetchOptions = {}) {
   const removeProgressListener = addPageApiProgressListener(seller, options);
+  const wantsDirectFetch = options.directFetch !== false;
 
-  if (pageApiPayloadPromise) {
-    return pageApiPayloadPromise.finally(removeProgressListener);
+  if (pageApiPayloadRequest?.sellerId === seller.seller_id && (pageApiPayloadRequest.directFetch || !wantsDirectFetch)) {
+    return pageApiPayloadRequest.promise.finally(removeProgressListener);
   }
 
   try {
@@ -302,9 +304,15 @@ async function waitMercariApiPayloadFromPage(seller: ResearchSellerContext, opti
     throw error;
   }
 
-  pageApiPayloadPromise = new Promise<unknown>((resolve, reject) => {
+  let promise: Promise<unknown>;
+  promise = new Promise<unknown>((resolve, reject) => {
     const requestId = createRequestId();
     let timeoutId: number | null = null;
+    const clearPayloadRequest = () => {
+      if (pageApiPayloadRequest?.promise === promise) {
+        pageApiPayloadRequest = null;
+      }
+    };
     const resetTimeout = () => {
       if (timeoutId != null) {
         window.clearTimeout(timeoutId);
@@ -312,7 +320,7 @@ async function waitMercariApiPayloadFromPage(seller: ResearchSellerContext, opti
 
       timeoutId = window.setTimeout(() => {
         cleanup();
-        pageApiPayloadPromise = null;
+        clearPayloadRequest();
         logApiFetch("info", "timeout_waiting_page_api", {
           sellerId: seller.seller_id
         });
@@ -335,7 +343,7 @@ async function waitMercariApiPayloadFromPage(seller: ResearchSellerContext, opti
 
     const handleAbort = () => {
       cleanup();
-      pageApiPayloadPromise = null;
+      clearPayloadRequest();
       reject(new DOMException("Aborted", "AbortError"));
     };
 
@@ -352,7 +360,7 @@ async function waitMercariApiPayloadFromPage(seller: ResearchSellerContext, opti
 
       if (data.error) {
         cleanup();
-        pageApiPayloadPromise = null;
+        clearPayloadRequest();
         reject(new Error(data.error));
         return;
       }
@@ -384,7 +392,7 @@ async function waitMercariApiPayloadFromPage(seller: ResearchSellerContext, opti
       });
 
       notifyPageApiProgress(data);
-      pageApiPayloadPromise = null;
+      clearPayloadRequest();
       resolve(data.payload);
     };
 
@@ -394,11 +402,13 @@ async function waitMercariApiPayloadFromPage(seller: ResearchSellerContext, opti
     window.postMessage({
       type: PAGE_FETCH_REQUEST_TYPE,
       requestId,
-      sellerId: seller.seller_id
+      sellerId: seller.seller_id,
+      directFetch: wantsDirectFetch
     }, window.location.origin);
   });
 
-  return pageApiPayloadPromise;
+  pageApiPayloadRequest = { sellerId: seller.seller_id, promise, directFetch: wantsDirectFetch };
+  return promise;
 }
 
 function getSellerIdFromCurrentUrl() {
@@ -540,7 +550,7 @@ function getItemIdFromUrl(url: string) {
   return itemMatch?.[1] ?? shopProductMatch?.[1] ?? null;
 }
 
-function getAncestorCandidates(element: HTMLElement, maxDepth = 6) {
+function getAncestorCandidates(element: HTMLElement, maxDepth = 10) {
   const candidates: Element[] = [];
   let current = element.parentElement;
 
@@ -581,11 +591,42 @@ function getListingContainer(link: HTMLAnchorElement) {
   return candidates.find((candidate) => parsePrice(getText(candidate)) !== null) ?? candidates[0] ?? link;
 }
 
-function getTitle(link: HTMLAnchorElement, container: Element) {
-  const imageAlt = link.querySelector("img")?.getAttribute("alt")?.trim();
+function getUniqueTextValues(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
 
-  if (imageAlt && imageAlt !== "縺ｮ繧ｵ繝繝阪う繝ｫ" && !imageAlt.startsWith("Image:")) {
-    return imageAlt;
+  return values
+    .map((value) => value?.replace(/\s+/g, " ").trim() ?? "")
+    .filter((value) => {
+      if (!value || seen.has(value)) {
+        return false;
+      }
+
+      seen.add(value);
+      return true;
+    });
+}
+
+function getListingText(link: HTMLAnchorElement, container: Element) {
+  const parent = link.parentElement;
+  const grandParent = parent?.parentElement;
+
+  return getUniqueTextValues([
+    getText(container),
+    getText(parent),
+    getText(grandParent),
+    getText(parent?.nextElementSibling),
+    getText(grandParent?.nextElementSibling),
+    link.getAttribute("aria-label"),
+    link.querySelector("img")?.getAttribute("alt")
+  ]).join(" ");
+}
+
+function getTitle(link: HTMLAnchorElement, container: Element, listingText?: string) {
+  const imageAlt = link.querySelector("img")?.getAttribute("alt")?.trim();
+  const normalizedImageAlt = imageAlt?.replace(/^Image:\s*/i, "").trim();
+
+  if (normalizedImageAlt && normalizedImageAlt !== "縺ｮ繧ｵ繝繝阪う繝ｫ") {
+    return normalizedImageAlt.replace(PRICE_TEXT_TAIL_PATTERN, "").trim();
   }
 
   const ariaLabel = link.getAttribute("aria-label")?.trim();
@@ -594,7 +635,7 @@ function getTitle(link: HTMLAnchorElement, container: Element) {
     return ariaLabel.replace(PRICE_TEXT_TAIL_PATTERN, "").trim();
   }
 
-  const text = getText(container);
+  const text = listingText || getText(container);
   const candidates = [
     text.replace(PRICE_TEXT_PREFIX_PATTERN, "").trim(),
     text.replace(PRICE_TEXT_TAIL_PATTERN, "").trim()
@@ -605,13 +646,17 @@ function getTitle(link: HTMLAnchorElement, container: Element) {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  return [...candidates, ...lines].find((line) => line && !/^(SOLD|雋ｩ螢ｲ荳ｭ|譁ｰ逹鬆・縺吶∋縺ｦ縺ｮ蝠・・ｽ・ｽ)$/i.test(line)) ?? "";
+  return [...candidates, ...lines].find((line) => {
+    const normalized = line.replace(/^Image:\s*/i, "").replace(PRICE_TEXT_PREFIX_PATTERN, "").trim();
+
+    return normalized && !/^(SOLD|[¥￥]?\s*[\d,]+|[\d,]+\s*円|雋ｩ螢ｲ荳ｭ|譁ｰ逹鬆・縺吶∋縺ｦ縺ｮ蝠・・ｽ・ｽ)$/i.test(normalized);
+  }) ?? "";
 }
 
 function getListingLinkSelector(platform: ResearchPlatform | null) {
   return platform === "mercari_shops"
-    ? 'main a[href*="/shops/product/"]'
-    : 'main a[href*="/item/"]';
+    ? 'a[href*="/shops/product/"]'
+    : 'a[href*="/item/"]';
 }
 
 function getListingLinks(platform: ResearchPlatform | null) {
@@ -691,13 +736,9 @@ function collectListings(platform: ResearchPlatform | null, diagnostics?: DomCol
     }
 
     const container = getListingContainer(link);
-    const text = [
-      getText(container),
-      link.getAttribute("aria-label") ?? "",
-      link.querySelector("img")?.getAttribute("alt") ?? ""
-    ].join(" ");
+    const text = getListingText(link, container);
     const price = parsePrice(text);
-    const title = getTitle(link, container);
+    const title = getTitle(link, container, text);
 
     if (diagnostics && !diagnostics.firstContainerTag) {
       diagnostics.firstContainerTag = container.tagName?.toLowerCase() ?? null;
@@ -853,7 +894,7 @@ function getApiPeriodDateCandidate(rawListing: ResearchApiRawListing): ApiPeriod
     ["purchased_at", rawListing.purchased_at],
     ["purchasedAt", rawListing.purchasedAt]
   ];
-  // API PoCの期間分類/停止判定専用。created/updatedは売却日時としては扱わない。
+  // API取得分は競合に近い期間分類へ寄せるため、売却日時が無い場合は作成日時を優先する。
   const estimatedCandidates: Array<[string, unknown]> = [
     ["created", rawListing.created],
     ["created_at", rawListing.created_at],
@@ -1020,6 +1061,55 @@ async function runApiAutoMoreAssist(seller: ResearchSellerContext, signal?: Abor
     clickedCount,
     handledPageLikeIndex,
     stop_reason: "safety_limit_clicks_exhausted"
+  });
+}
+
+async function triggerApiFetchAfterWatch(seller: ResearchSellerContext, signal?: AbortSignal) {
+  await sleep(API_AUTO_MORE_CLICK_DELAY_MS, signal);
+
+  if (getLatestApiProgressForSeller(seller)) {
+    logApiFetch("info", "api_kickoff_skipped_existing_progress", {
+      sellerId: seller.seller_id
+    });
+    return;
+  }
+
+  const button = findApiAutoMoreButton();
+
+  if (button) {
+    logApiFetch("info", "api_kickoff_more_button_clicked", {
+      sellerId: seller.seller_id
+    });
+    button.click();
+    await sleep(API_AUTO_MORE_AFTER_CLICK_MS, signal);
+    return;
+  }
+
+  logApiFetch("info", "api_kickoff_scroll", {
+    sellerId: seller.seller_id
+  });
+  window.scrollBy({ top: Math.max(window.innerHeight, 600), behavior: "auto" });
+  await sleep(API_AUTO_MORE_AFTER_CLICK_MS, signal);
+}
+
+async function runApiAssistAfterWatch(seller: ResearchSellerContext, signal?: AbortSignal) {
+  await triggerApiFetchAfterWatch(seller, signal);
+  await runApiAutoMoreAssist(seller, signal);
+}
+
+function isDirectFetchFailure(error: unknown) {
+  return error instanceof Error && ["direct_fetch_empty", "direct_fetch_error"].includes(error.message);
+}
+
+function runApiAssistAfterWatchSafe(seller: ResearchSellerContext, signal?: AbortSignal) {
+  runApiAssistAfterWatch(seller, signal).catch((error) => {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return;
+    }
+
+    logApiFetch("warn", "auto_more_assist_failed", {
+      reason: error instanceof Error ? error.message : String(error)
+    });
   });
 }
 
@@ -1600,6 +1690,24 @@ function getApiListingStatus(rawListing: ResearchApiRawListing, soldAt: string |
     return status;
   }
 
+  const requestStatus = getStringValue(rawListing["__furimane_request_status"]);
+
+  if (requestStatus) {
+    const normalizedRequestStatus = requestStatus.toLowerCase();
+
+    if (normalizedRequestStatus.includes("sold_out")) {
+      return "sold_out";
+    }
+
+    if (normalizedRequestStatus.includes("trading")) {
+      return "trading";
+    }
+
+    if (normalizedRequestStatus.includes("sold") || normalizedRequestStatus.includes("complete")) {
+      return "sold";
+    }
+  }
+
   return soldAt ? "sold" : "active";
 }
 
@@ -1752,15 +1860,29 @@ async function fetchSellerListingsByApiPoc(options: ResearchFetchOptions = {}) {
     strategy: options.strategy ?? null
   });
 
-  runApiAutoMoreAssist(seller, options.signal).catch((error) => {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      return;
+  let apiPayloadPromise = waitMercariApiPayloadFromPage(seller, options);
+  const shouldRunPageAssist = options.directFetch === false;
+
+  if (shouldRunPageAssist) {
+    runApiAssistAfterWatchSafe(seller, options.signal);
+  }
+
+  let apiPayload: unknown;
+
+  try {
+    apiPayload = await apiPayloadPromise;
+  } catch (error) {
+    if (!isDirectFetchFailure(error) || options.directFetch === false) {
+      throw error;
     }
 
-    logApiFetch("warn", "auto_more_assist_failed");
-  });
-
-  const apiPayload = await waitMercariApiPayloadFromPage(seller, options);
+    logApiFetch("warn", "direct_fetch_failed_retry_page_api", {
+      reason: error instanceof Error ? error.message : String(error)
+    });
+    apiPayloadPromise = waitMercariApiPayloadFromPage(seller, { ...options, directFetch: false });
+    runApiAssistAfterWatchSafe(seller, options.signal);
+    apiPayload = await apiPayloadPromise;
+  }
 
   if (!isResearchObject(apiPayload) || !Array.isArray(apiPayload["data"])) {
     throw new Error("mercari_api_invalid_response");
@@ -1807,7 +1929,9 @@ async function fetchSellerResearchData(options: ResearchFetchOptions = {}): Prom
         throw error;
       }
 
-      logApiFetch("warn", "fallback_to_dom");
+      logApiFetch("warn", "fallback_to_dom", {
+        reason: error instanceof Error ? error.message : String(error)
+      });
       options.onProgress?.(0, {
         totalCount: 0,
         pageLikeIndex: null,
@@ -1865,7 +1989,7 @@ try {
   const seller = shouldStartPageApiWatch ? getSellerContextFromCurrentPage() : null;
 
   if (seller?.platform === "mercari") {
-    waitMercariApiPayloadFromPage(seller).catch(() => {
+    waitMercariApiPayloadFromPage(seller, { directFetch: false }).catch(() => {
       // api mode flow will fallback to DOM if no page API payload arrives.
     });
   }

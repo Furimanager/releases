@@ -25,6 +25,23 @@ function getFurimaneResearchListingPeriodDate(listing) {
   return listing.period_date || listing.sold_at || null;
 }
 
+function isFurimaneSoldListing(listing) {
+  const status = (listing.status || "").trim().toLowerCase();
+
+  if (!status) {
+    return Boolean(listing.sold_at);
+  }
+
+  return (
+    status.includes("sold") ||
+    status.includes("trading") ||
+    status.includes("complete") ||
+    status.includes("\u58f2\u308a\u5207\u308c") ||
+    status.includes("\u58f2\u5374\u6e08") ||
+    status.includes("\u53d6\u5f15\u4e2d")
+  );
+}
+
 function getFurimaneResearchListingPeriodKey(listing) {
   const daysAgo = getFurimaneResearchDaysAgo(getFurimaneResearchListingPeriodDate(listing));
 
@@ -47,6 +64,10 @@ function calcFurimaneResearchPeriodStats(listings) {
   const stats = createFurimaneEmptyStats();
 
   for (const listing of listings) {
+    if (!isFurimaneSoldListing(listing)) {
+      continue;
+    }
+
     const price = Number.isFinite(listing.price) ? listing.price : 0;
     const periodKey = getFurimaneResearchListingPeriodKey(listing);
 
@@ -82,6 +103,10 @@ function summarizeFurimaneResearchPeriodAnalysis(listings) {
   let usesEstimatedDates = false;
 
   for (const listing of listings) {
+    if (!isFurimaneSoldListing(listing)) {
+      continue;
+    }
+
     const price = Number.isFinite(listing.price) ? listing.price : 0;
     const periodDate = getFurimaneResearchListingPeriodDate(listing);
     const daysAgo = getFurimaneResearchDaysAgo(periodDate);

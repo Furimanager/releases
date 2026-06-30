@@ -1,6 +1,7 @@
 const FURIMANE_DEFAULT_APP_URL = "https://furimanager.com";
 const FURIMANE_RESEARCH_API_TIMEOUT_MS = 30000;
 const FURIMANE_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const FURIMANE_LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
 
 function getFurimaneAppUrl() {
   return (window.FurimanagerConfig?.APP_URL ?? FURIMANE_DEFAULT_APP_URL).replace(/\/$/, "");
@@ -40,6 +41,75 @@ function setFurimaneChromeStorage(values) {
       resolve();
     });
   });
+}
+
+function getFurimaneLocalPurchasePriceKey(platform, itemId) {
+  return `${platform}:${itemId}`;
+}
+
+function normalizeFurimaneLocalPurchasePrice(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const purchasePrice = typeof value.purchasePrice === "number" && Number.isFinite(value.purchasePrice)
+    ? Math.round(value.purchasePrice)
+    : null;
+  const shippingFee = typeof value.shippingFee === "number" && Number.isFinite(value.shippingFee)
+    ? Math.round(value.shippingFee)
+    : null;
+
+  if (purchasePrice === null) {
+    return null;
+  }
+
+  return {
+    purchasePrice,
+    shippingFee: shippingFee ?? 0,
+    savedAt: typeof value.savedAt === "string" ? value.savedAt : undefined
+  };
+}
+
+async function getFurimaneLocalPurchasePriceStore() {
+  const storage = await getFurimaneChromeStorage([FURIMANE_LOCAL_PURCHASE_PRICE_STORAGE_KEY]);
+  const rawStore = storage[FURIMANE_LOCAL_PURCHASE_PRICE_STORAGE_KEY];
+
+  return rawStore && typeof rawStore === "object" && !Array.isArray(rawStore)
+    ? rawStore
+    : {};
+}
+
+async function getFurimaneLocalPurchasePrice(platform, itemId) {
+  const store = await getFurimaneLocalPurchasePriceStore();
+  return normalizeFurimaneLocalPurchasePrice(store[getFurimaneLocalPurchasePriceKey(platform, itemId)]);
+}
+
+async function saveFurimaneLocalPurchasePrice(payload) {
+  const store = await getFurimaneLocalPurchasePriceStore();
+  store[getFurimaneLocalPurchasePriceKey(payload.platform, payload.itemId)] = {
+    purchasePrice: payload.purchasePrice,
+    shippingFee: payload.shippingFee,
+    savedAt: new Date().toISOString()
+  };
+
+  await setFurimaneChromeStorage({
+    [FURIMANE_LOCAL_PURCHASE_PRICE_STORAGE_KEY]: store
+  });
+}
+
+async function getFurimaneLocalPurchasePricesBatch(platform, itemIds) {
+  const store = await getFurimaneLocalPurchasePriceStore();
+  const result = {};
+
+  for (const itemId of itemIds) {
+    const value = normalizeFurimaneLocalPurchasePrice(store[getFurimaneLocalPurchasePriceKey(platform, itemId)]);
+
+    if (value) {
+      result[itemId] = value;
+    }
+  }
+
+  return result;
 }
 
 function getFurimaneSupabaseConfig() {
@@ -303,26 +373,48 @@ async function getFurimaneResearchPurchasePrice(platform, itemId, options = {}) 
     itemId
   });
 
-  return requestFurimaneResearchJsonSafe(`/api/research/purchase-price?${params.toString()}`, {
-    method: "GET",
-    signal: options.signal
-  });
+  try {
+    return await requestFurimaneResearchJsonSafe(`/api/research/purchase-price?${params.toString()}`, {
+      method: "GET",
+      signal: options.signal
+    });
+  } catch (error) {
+    console.warn("[furimane-research] purchase price API fetch failed; using local fallback", error);
+    return await getFurimaneLocalPurchasePrice(platform, itemId) ?? { purchasePrice: null, shippingFee: null };
+  }
 }
 
 async function saveFurimaneResearchPurchasePrice(payload, options = {}) {
-  return requestFurimaneResearchJsonSafe("/api/research/purchase-price", {
-    method: "POST",
-    signal: options.signal,
-    body: JSON.stringify(payload)
-  });
+  try {
+    return await requestFurimaneResearchJsonSafe("/api/research/purchase-price", {
+      method: "POST",
+      signal: options.signal,
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    console.warn("[furimane-research] purchase price API save failed; saved locally", error);
+    await saveFurimaneLocalPurchasePrice(payload);
+    return { success: true, localOnly: true };
+  }
 }
 
 async function getFurimaneResearchPurchasePricesBatch(platform, itemIds, options = {}) {
-  return requestFurimaneResearchJsonSafe("/api/research/purchase-prices/batch", {
-    method: "POST",
-    signal: options.signal,
-    body: JSON.stringify({ platform, itemIds })
-  });
+  let serverPrices = {};
+
+  try {
+    serverPrices = await requestFurimaneResearchJsonSafe("/api/research/purchase-prices/batch", {
+      method: "POST",
+      signal: options.signal,
+      body: JSON.stringify({ platform, itemIds })
+    });
+  } catch (error) {
+    console.warn("[furimane-research] purchase prices batch API failed; using local fallback", error);
+  }
+
+  return {
+    ...serverPrices,
+    ...await getFurimaneLocalPurchasePricesBatch(platform, itemIds)
+  };
 }
 
 window.FurimanagerResearchApi = {

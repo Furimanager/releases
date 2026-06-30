@@ -39,7 +39,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://jp.mercari.com/user/profile/*"],
+      "matches": ["https://jp.mercari.com/*"],
       "css": ["src/research-overlay.css"],
       "js": [
         "config.js",
@@ -50,12 +50,12 @@
         "src/research-table.js",
         "src/research-overlay.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/research-page-fetcher.js"],
+      "resources": ["src/research-page-fetcher.js", "icons/icon-48.png"],
       "matches": ["https://jp.mercari.com/*"]
     }
   ],

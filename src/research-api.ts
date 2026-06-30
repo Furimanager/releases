@@ -87,6 +87,7 @@ type ResearchBookmarkMutationResponse = {
 type ResearchPurchasePrice = {
   purchasePrice: number | null;
   shippingFee: number | null;
+  savedAt?: string;
 };
 
 type ResearchPurchasePriceMap = Record<string, ResearchPurchasePrice>;
@@ -150,7 +151,7 @@ declare global {
       savePurchasePrice: (
         payload: ResearchPurchasePricePayload,
         options?: ResearchRequestOptions
-      ) => Promise<{ success: boolean }>;
+      ) => Promise<{ success: boolean; localOnly?: boolean }>;
       getPurchasePricesBatch: (
         platform: ResearchPlatform,
         itemIds: string[],
@@ -164,6 +165,7 @@ declare global {
 const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_API_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
 
 function getAppUrl() {
   return (window.FurimanagerConfig?.APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, "");
@@ -203,6 +205,76 @@ function setChromeStorage(values: Record<string, unknown>) {
       resolve();
     });
   });
+}
+
+function getLocalPurchasePriceKey(platform: ResearchPlatform, itemId: string) {
+  return `${platform}:${itemId}`;
+}
+
+function normalizeLocalPurchasePrice(value: unknown): ResearchPurchasePrice | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const item = value as Partial<ResearchPurchasePrice>;
+  const purchasePrice = typeof item.purchasePrice === "number" && Number.isFinite(item.purchasePrice)
+    ? Math.round(item.purchasePrice)
+    : null;
+  const shippingFee = typeof item.shippingFee === "number" && Number.isFinite(item.shippingFee)
+    ? Math.round(item.shippingFee)
+    : null;
+
+  if (purchasePrice === null) {
+    return null;
+  }
+
+  return {
+    purchasePrice,
+    shippingFee: shippingFee ?? 0,
+    savedAt: typeof item.savedAt === "string" ? item.savedAt : undefined
+  };
+}
+
+async function getLocalPurchasePriceStore() {
+  const storage = await getChromeStorage([LOCAL_PURCHASE_PRICE_STORAGE_KEY]);
+  const rawStore = storage[LOCAL_PURCHASE_PRICE_STORAGE_KEY];
+
+  return rawStore && typeof rawStore === "object" && !Array.isArray(rawStore)
+    ? rawStore as Record<string, unknown>
+    : {};
+}
+
+async function getLocalPurchasePrice(platform: ResearchPlatform, itemId: string) {
+  const store = await getLocalPurchasePriceStore();
+  return normalizeLocalPurchasePrice(store[getLocalPurchasePriceKey(platform, itemId)]);
+}
+
+async function saveLocalPurchasePrice(payload: ResearchPurchasePricePayload) {
+  const store = await getLocalPurchasePriceStore();
+  store[getLocalPurchasePriceKey(payload.platform, payload.itemId)] = {
+    purchasePrice: payload.purchasePrice,
+    shippingFee: payload.shippingFee,
+    savedAt: new Date().toISOString()
+  };
+
+  await setChromeStorage({
+    [LOCAL_PURCHASE_PRICE_STORAGE_KEY]: store
+  });
+}
+
+async function getLocalPurchasePricesBatch(platform: ResearchPlatform, itemIds: string[]) {
+  const store = await getLocalPurchasePriceStore();
+  const result: ResearchPurchasePriceMap = {};
+
+  for (const itemId of itemIds) {
+    const value = normalizeLocalPurchasePrice(store[getLocalPurchasePriceKey(platform, itemId)]);
+
+    if (value) {
+      result[itemId] = value;
+    }
+  }
+
+  return result;
 }
 
 function getSupabaseConfig() {
@@ -319,7 +391,7 @@ async function requestJson<T>(path: string, options: RequestInit & ResearchReque
   const data = (await response.json().catch(() => null)) as T | { error?: string } | null;
 
   if (!response.ok) {
-    const message = data && "error" in data && data.error ? data.error : "リサーチAPIの呼び出しに失敗しました。";
+    const message = getApiErrorMessage(data, "リサーチAPIの呼び出しに失敗しました。");
     throw new Error(message);
   }
 
@@ -354,7 +426,7 @@ async function requestJsonSafe<T>(path: string, options: RequestInit & ResearchR
     const data = (await response.json().catch(() => null)) as T | { error?: string } | null;
 
     if (!response.ok) {
-      const message = data && "error" in data && data.error ? data.error : "api_request_failed";
+      const message = getApiErrorMessage(data, "api_request_failed");
       const errorCode = response.status === 401 ? "auth_required" : response.status === 403 ? "plan_required" : message;
       console.error("[furimane-research] api request failed", {
         path,
@@ -390,6 +462,15 @@ async function requestJsonSafe<T>(path: string, options: RequestInit & ResearchR
     window.clearTimeout(timeoutId);
     options.signal?.removeEventListener("abort", abortHandler);
   }
+}
+
+function getApiErrorMessage(data: unknown, fallback: string) {
+  if (!data || typeof data !== "object" || !("error" in data)) {
+    return fallback;
+  }
+
+  const error = (data as { error?: unknown }).error;
+  return typeof error === "string" && error.trim() ? error : fallback;
 }
 
 async function checkAccess(options: ResearchRequestOptions = {}) {
@@ -463,18 +544,29 @@ async function getPurchasePrice(platform: ResearchPlatform, itemId: string, opti
     itemId
   });
 
-  return requestJsonSafe<ResearchPurchasePrice>(`/api/research/purchase-price?${params.toString()}`, {
-    method: "GET",
-    signal: options.signal
-  });
+  try {
+    return await requestJsonSafe<ResearchPurchasePrice>(`/api/research/purchase-price?${params.toString()}`, {
+      method: "GET",
+      signal: options.signal
+    });
+  } catch (error) {
+    console.warn("[furimane-research] purchase price API fetch failed; using local fallback", error);
+    return await getLocalPurchasePrice(platform, itemId) ?? { purchasePrice: null, shippingFee: null };
+  }
 }
 
 async function savePurchasePrice(payload: ResearchPurchasePricePayload, options: ResearchRequestOptions = {}) {
-  return requestJsonSafe<{ success: boolean }>("/api/research/purchase-price", {
-    method: "POST",
-    signal: options.signal,
-    body: JSON.stringify(payload)
-  });
+  try {
+    return await requestJsonSafe<{ success: boolean }>("/api/research/purchase-price", {
+      method: "POST",
+      signal: options.signal,
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    console.warn("[furimane-research] purchase price API save failed; saved locally", error);
+    await saveLocalPurchasePrice(payload);
+    return { success: true, localOnly: true };
+  }
 }
 
 async function getPurchasePricesBatch(
@@ -482,11 +574,22 @@ async function getPurchasePricesBatch(
   itemIds: string[],
   options: ResearchRequestOptions = {}
 ) {
-  return requestJsonSafe<ResearchPurchasePriceMap>("/api/research/purchase-prices/batch", {
-    method: "POST",
-    signal: options.signal,
-    body: JSON.stringify({ platform, itemIds })
-  });
+  let serverPrices: ResearchPurchasePriceMap = {};
+
+  try {
+    serverPrices = await requestJsonSafe<ResearchPurchasePriceMap>("/api/research/purchase-prices/batch", {
+      method: "POST",
+      signal: options.signal,
+      body: JSON.stringify({ platform, itemIds })
+    });
+  } catch (error) {
+    console.warn("[furimane-research] purchase prices batch API failed; using local fallback", error);
+  }
+
+  return {
+    ...serverPrices,
+    ...await getLocalPurchasePricesBatch(platform, itemIds)
+  };
 }
 
 window.FurimanagerResearchApi = {

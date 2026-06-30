@@ -1,6 +1,6 @@
 ﻿const FURIMANE_MERCARI_PROFILE_URL_PATTERN = /\/user\/profile\/([^/?#]+)/;
 const FURIMANE_MERCARI_SHOPS_PROFILE_URL_PATTERN = /\/shops\/profile\/([^/?#]+)/;
-const FURIMANE_MAX_RESEARCH_LISTINGS = 200;
+const FURIMANE_MAX_RESEARCH_LISTINGS = 1000;
 const FURIMANE_MAX_SCROLL_ATTEMPTS = 40;
 const FURIMANE_STABLE_SCROLL_LIMIT = 3;
 const FURIMANE_THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -9,17 +9,17 @@ const FURIMANE_PAGE_FETCHER_SCRIPT_ID = "furimane-research-page-fetcher";
 const FURIMANE_PAGE_FETCHER_SCRIPT_PATH = "src/research-page-fetcher.js";
 const FURIMANE_PAGE_FETCH_REQUEST_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_REQUEST";
 const FURIMANE_PAGE_FETCH_RESPONSE_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_RESPONSE";
-const FURIMANE_PAGE_FETCH_TIMEOUT_MS = 30000;
+const FURIMANE_PAGE_FETCH_TIMEOUT_MS = 15000;
 const FURIMANE_DOM_FETCH_LOG_PREFIX = "[furimane-research][dom-fetch]";
 const FURIMANE_PRICE_TEXT_PATTERN = /(?:[\u00a5\uffe5]\s*([\d,]+)|([\d,]+)\s*\u5186)/;
 const FURIMANE_PRICE_TEXT_TAIL_PATTERN = /(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186).*$/;
 const FURIMANE_PRICE_TEXT_PREFIX_PATTERN = /^(?:SOLD\s*)?(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186)\s*/i;
 const FURIMANE_API_AUTO_MORE_MAX_CLICKS = 5;
 const FURIMANE_API_AUTO_MORE_OLD_ITEM_STOP_COUNT = 3;
-const FURIMANE_API_AUTO_MORE_PROGRESS_TIMEOUT_MS = 12000;
-const FURIMANE_API_AUTO_MORE_POLL_MS = 300;
-const FURIMANE_API_AUTO_MORE_CLICK_DELAY_MS = 900;
-const FURIMANE_API_AUTO_MORE_AFTER_CLICK_MS = 1500;
+const FURIMANE_API_AUTO_MORE_PROGRESS_TIMEOUT_MS = 8000;
+const FURIMANE_API_AUTO_MORE_POLL_MS = 200;
+const FURIMANE_API_AUTO_MORE_CLICK_DELAY_MS = 300;
+const FURIMANE_API_AUTO_MORE_AFTER_CLICK_MS = 800;
 const FURIMANE_API_ALWAYS_LOG_STEPS = new Set([
   "api_mode_entered",
   "fallback_to_dom",
@@ -33,7 +33,7 @@ const FURIMANE_API_ALWAYS_LOG_STEPS = new Set([
 ]);
 let hasLoggedFurimaneApiPagerDiagnostic = false;
 let furimanePageFetcherInjectPromise = null;
-let furimanePageApiPayloadPromise = null;
+let furimanePageApiPayloadRequest = null;
 let furimaneLatestPageApiProgress = null;
 let furimanePageApiProgressListeners = [];
 
@@ -177,9 +177,10 @@ function notifyFurimanePageApiProgress(data) {
 
 async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
   const removeProgressListener = addFurimanePageApiProgressListener(seller, options);
+  const wantsDirectFetch = options.directFetch !== false;
 
-  if (furimanePageApiPayloadPromise) {
-    return furimanePageApiPayloadPromise.finally(removeProgressListener);
+  if (furimanePageApiPayloadRequest?.sellerId === seller.seller_id && (furimanePageApiPayloadRequest.directFetch || !wantsDirectFetch)) {
+    return furimanePageApiPayloadRequest.promise.finally(removeProgressListener);
   }
 
   try {
@@ -204,9 +205,15 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
     throw error;
   }
 
-  furimanePageApiPayloadPromise = new Promise((resolve, reject) => {
+  let promise;
+  promise = new Promise((resolve, reject) => {
     const requestId = createFurimaneResearchRequestId();
     let timeoutId = null;
+    const clearPayloadRequest = () => {
+      if (furimanePageApiPayloadRequest?.promise === promise) {
+        furimanePageApiPayloadRequest = null;
+      }
+    };
     const resetTimeout = () => {
       if (timeoutId != null) {
         window.clearTimeout(timeoutId);
@@ -214,7 +221,7 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
 
       timeoutId = window.setTimeout(() => {
         cleanup();
-        furimanePageApiPayloadPromise = null;
+        clearPayloadRequest();
         logFurimaneApiFetch("info", "timeout_waiting_page_api", {
           sellerId: seller.seller_id
         });
@@ -237,7 +244,7 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
 
     const handleAbort = () => {
       cleanup();
-      furimanePageApiPayloadPromise = null;
+      clearPayloadRequest();
       reject(new DOMException("Aborted", "AbortError"));
     };
 
@@ -254,7 +261,7 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
 
       if (data.error) {
         cleanup();
-        furimanePageApiPayloadPromise = null;
+        clearPayloadRequest();
         reject(new Error(data.error));
         return;
       }
@@ -286,7 +293,7 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
       });
 
       notifyFurimanePageApiProgress(data);
-      furimanePageApiPayloadPromise = null;
+      clearPayloadRequest();
       resolve(data.payload);
     };
 
@@ -296,11 +303,13 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
     window.postMessage({
       type: FURIMANE_PAGE_FETCH_REQUEST_TYPE,
       requestId,
-      sellerId: seller.seller_id
+      sellerId: seller.seller_id,
+      directFetch: wantsDirectFetch
     }, window.location.origin);
   });
 
-  return furimanePageApiPayloadPromise;
+  furimanePageApiPayloadRequest = { sellerId: seller.seller_id, promise, directFetch: wantsDirectFetch };
+  return promise;
 }
 
 function getFurimaneSellerIdFromCurrentUrl() {
@@ -442,7 +451,7 @@ function getFurimaneResearchItemIdFromUrl(url) {
   return itemMatch?.[1] ?? shopProductMatch?.[1] ?? null;
 }
 
-function getFurimaneResearchAncestorCandidates(element, maxDepth = 6) {
+function getFurimaneResearchAncestorCandidates(element, maxDepth = 10) {
   const candidates = [];
   let current = element.parentElement;
 
@@ -483,11 +492,42 @@ function getFurimaneResearchListingContainer(link) {
   return candidates.find((candidate) => parseFurimaneResearchPrice(getFurimaneResearchText(candidate)) !== null) ?? candidates[0] ?? link;
 }
 
-function getFurimaneResearchTitle(link, container) {
-  const imageAlt = link.querySelector("img")?.getAttribute("alt")?.trim();
+function getUniqueFurimaneResearchTextValues(values) {
+  const seen = new Set();
 
-  if (imageAlt && imageAlt !== "縺ｮ繧ｵ繝繝阪う繝ｫ" && !imageAlt.startsWith("Image:")) {
-    return imageAlt;
+  return values
+    .map((value) => value?.replace(/\s+/g, " ").trim() ?? "")
+    .filter((value) => {
+      if (!value || seen.has(value)) {
+        return false;
+      }
+
+      seen.add(value);
+      return true;
+    });
+}
+
+function getFurimaneResearchListingText(link, container) {
+  const parent = link.parentElement;
+  const grandParent = parent?.parentElement;
+
+  return getUniqueFurimaneResearchTextValues([
+    getFurimaneResearchText(container),
+    getFurimaneResearchText(parent),
+    getFurimaneResearchText(grandParent),
+    getFurimaneResearchText(parent?.nextElementSibling),
+    getFurimaneResearchText(grandParent?.nextElementSibling),
+    link.getAttribute("aria-label"),
+    link.querySelector("img")?.getAttribute("alt")
+  ]).join(" ");
+}
+
+function getFurimaneResearchTitle(link, container, listingText) {
+  const imageAlt = link.querySelector("img")?.getAttribute("alt")?.trim();
+  const normalizedImageAlt = imageAlt?.replace(/^Image:\s*/i, "").trim();
+
+  if (normalizedImageAlt && normalizedImageAlt !== "縺ｮ繧ｵ繝繝阪う繝ｫ") {
+    return normalizedImageAlt.replace(FURIMANE_PRICE_TEXT_TAIL_PATTERN, "").trim();
   }
 
   const ariaLabel = link.getAttribute("aria-label")?.trim();
@@ -496,7 +536,7 @@ function getFurimaneResearchTitle(link, container) {
     return ariaLabel.replace(FURIMANE_PRICE_TEXT_TAIL_PATTERN, "").trim();
   }
 
-  const text = getFurimaneResearchText(container);
+  const text = listingText || getFurimaneResearchText(container);
   const candidates = [
     text.replace(FURIMANE_PRICE_TEXT_PREFIX_PATTERN, "").trim(),
     text.replace(FURIMANE_PRICE_TEXT_TAIL_PATTERN, "").trim()
@@ -507,13 +547,17 @@ function getFurimaneResearchTitle(link, container) {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  return [...candidates, ...lines].find((line) => line && !/^(SOLD|雋ｩ螢ｲ荳ｭ|譁ｰ逹鬆・縺吶∋縺ｦ縺ｮ蝠・・ｽ・ｽ)$/i.test(line)) ?? "";
+  return [...candidates, ...lines].find((line) => {
+    const normalized = line.replace(/^Image:\s*/i, "").replace(FURIMANE_PRICE_TEXT_PREFIX_PATTERN, "").trim();
+
+    return normalized && !/^(SOLD|[¥￥]?\s*[\d,]+|[\d,]+\s*円|雋ｩ螢ｲ荳ｭ|譁ｰ逹鬆・縺吶∋縺ｦ縺ｮ蝠・・ｽ・ｽ)$/i.test(normalized);
+  }) ?? "";
 }
 
 function getFurimaneResearchListingLinkSelector(platform) {
   return platform === "mercari_shops"
-    ? 'main a[href*="/shops/product/"]'
-    : 'main a[href*="/item/"]';
+    ? 'a[href*="/shops/product/"]'
+    : 'a[href*="/item/"]';
 }
 
 function getFurimaneResearchListingLinks(platform) {
@@ -579,13 +623,9 @@ function collectFurimaneResearchListings(platform, diagnostics) {
     }
 
     const container = getFurimaneResearchListingContainer(link);
-    const text = [
-      getFurimaneResearchText(container),
-      link.getAttribute("aria-label") ?? "",
-      link.querySelector("img")?.getAttribute("alt") ?? ""
-    ].join(" ");
+    const text = getFurimaneResearchListingText(link, container);
     const price = parseFurimaneResearchPrice(text);
-    const title = getFurimaneResearchTitle(link, container);
+    const title = getFurimaneResearchTitle(link, container, text);
 
     if (diagnostics && !diagnostics.firstContainerTag) {
       diagnostics.firstContainerTag = container.tagName?.toLowerCase() ?? null;
@@ -737,7 +777,7 @@ function getFurimaneApiPeriodDateCandidate(rawListing) {
     ["purchased_at", rawListing.purchased_at],
     ["purchasedAt", rawListing.purchasedAt]
   ];
-  // API PoCの期間分類/停止判定専用。created/updatedは売却日時としては扱わない。
+  // API取得分は競合に近い期間分類へ寄せるため、売却日時が無い場合は作成日時を優先する。
   const estimatedCandidates = [
     ["created", rawListing.created],
     ["created_at", rawListing.created_at],
@@ -904,6 +944,55 @@ async function runFurimaneApiAutoMoreAssist(seller, signal) {
     clickedCount,
     handledPageLikeIndex,
     stop_reason: "safety_limit_clicks_exhausted"
+  });
+}
+
+async function triggerFurimaneApiFetchAfterWatch(seller, signal) {
+  await sleepForFurimaneResearch(FURIMANE_API_AUTO_MORE_CLICK_DELAY_MS, signal);
+
+  if (getFurimaneLatestApiProgressForSeller(seller)) {
+    logFurimaneApiFetch("info", "api_kickoff_skipped_existing_progress", {
+      sellerId: seller.seller_id
+    });
+    return;
+  }
+
+  const button = findFurimaneApiAutoMoreButton();
+
+  if (button) {
+    logFurimaneApiFetch("info", "api_kickoff_more_button_clicked", {
+      sellerId: seller.seller_id
+    });
+    button.click();
+    await sleepForFurimaneResearch(FURIMANE_API_AUTO_MORE_AFTER_CLICK_MS, signal);
+    return;
+  }
+
+  logFurimaneApiFetch("info", "api_kickoff_scroll", {
+    sellerId: seller.seller_id
+  });
+  window.scrollBy({ top: Math.max(window.innerHeight, 600), behavior: "auto" });
+  await sleepForFurimaneResearch(FURIMANE_API_AUTO_MORE_AFTER_CLICK_MS, signal);
+}
+
+async function runFurimaneApiAssistAfterWatch(seller, signal) {
+  await triggerFurimaneApiFetchAfterWatch(seller, signal);
+  await runFurimaneApiAutoMoreAssist(seller, signal);
+}
+
+function isFurimaneDirectFetchFailure(error) {
+  return error instanceof Error && ["direct_fetch_empty", "direct_fetch_error"].includes(error.message);
+}
+
+function runFurimaneApiAssistAfterWatchSafe(seller, signal) {
+  runFurimaneApiAssistAfterWatch(seller, signal).catch((error) => {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return;
+    }
+
+    logFurimaneApiFetch("warn", "auto_more_assist_failed", {
+      reason: error instanceof Error ? error.message : String(error)
+    });
   });
 }
 
@@ -1484,6 +1573,24 @@ function getFurimaneApiListingStatus(rawListing, soldAt) {
     return status;
   }
 
+  const requestStatus = getFurimaneResearchStringValue(rawListing.__furimane_request_status);
+
+  if (requestStatus) {
+    const normalizedRequestStatus = requestStatus.toLowerCase();
+
+    if (normalizedRequestStatus.includes("sold_out")) {
+      return "sold_out";
+    }
+
+    if (normalizedRequestStatus.includes("trading")) {
+      return "trading";
+    }
+
+    if (normalizedRequestStatus.includes("sold") || normalizedRequestStatus.includes("complete")) {
+      return "sold";
+    }
+  }
+
   return soldAt ? "sold" : "active";
 }
 
@@ -1642,15 +1749,29 @@ async function fetchFurimaneSellerListingsByApiPoc(options = {}) {
     strategy: options.strategy ?? null
   });
 
-  runFurimaneApiAutoMoreAssist(seller, options.signal).catch((error) => {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      return;
+  let apiPayloadPromise = waitFurimaneMercariApiPayloadFromPage(seller, options);
+  const shouldRunPageAssist = options.directFetch === false;
+
+  if (shouldRunPageAssist) {
+    runFurimaneApiAssistAfterWatchSafe(seller, options.signal);
+  }
+
+  let apiPayload;
+
+  try {
+    apiPayload = await apiPayloadPromise;
+  } catch (error) {
+    if (!isFurimaneDirectFetchFailure(error) || options.directFetch === false) {
+      throw error;
     }
 
-    logFurimaneApiFetch("warn", "auto_more_assist_failed");
-  });
-
-  const apiPayload = await waitFurimaneMercariApiPayloadFromPage(seller, options);
+    logFurimaneApiFetch("warn", "direct_fetch_failed_retry_page_api", {
+      reason: error instanceof Error ? error.message : String(error)
+    });
+    apiPayloadPromise = waitFurimaneMercariApiPayloadFromPage(seller, { ...options, directFetch: false });
+    runFurimaneApiAssistAfterWatchSafe(seller, options.signal);
+    apiPayload = await apiPayloadPromise;
+  }
 
   if (!isFurimaneResearchObject(apiPayload) || !Array.isArray(apiPayload.data)) {
     throw new Error("mercari_api_invalid_response");
@@ -1697,7 +1818,9 @@ async function fetchFurimaneSellerResearchData(options = {}) {
         throw error;
       }
 
-      logFurimaneApiFetch("warn", "fallback_to_dom");
+      logFurimaneApiFetch("warn", "fallback_to_dom", {
+        reason: error instanceof Error ? error.message : String(error)
+      });
       options.onProgress?.(0, {
         totalCount: 0,
         pageLikeIndex: null,
@@ -1755,7 +1878,7 @@ try {
   const seller = shouldStartPageApiWatch ? getFurimaneSellerContextFromCurrentPage() : null;
 
   if (seller?.platform === "mercari") {
-    waitFurimaneMercariApiPayloadFromPage(seller).catch(() => {
+    waitFurimaneMercariApiPayloadFromPage(seller, { directFetch: false }).catch(() => {
       // api mode flow will fallback to DOM if no page API payload arrives.
     });
   }

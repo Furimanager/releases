@@ -103,6 +103,7 @@ type ResearchDisplayRow = {
   price: number;
   totalCount: number;
   totalSales: number;
+  latestSoldAtMs: number;
   periods: Record<PeriodKey, ResearchPeriodTotals>;
 };
 
@@ -146,7 +147,12 @@ interface Window {
     renderSimulator: (
       rowElement: HTMLTableRowElement,
       item: ResearchTableListing,
-      options?: { savedPrice?: ResearchPurchasePrice; platform?: ResearchPlatform; monthlySalesCount?: number }
+      options?: {
+        savedPrice?: ResearchPurchasePrice;
+        platform?: ResearchPlatform;
+        monthlySalesCount?: number;
+        onSave?: (savedPrice: ResearchPurchasePrice) => void | Promise<void>;
+      }
     ) => Promise<HTMLTableRowElement>;
   };
   FurimanagerResearchStats?: {
@@ -293,6 +299,15 @@ function getListingPeriodStats(listing: ResearchTableListing) {
   return periods;
 }
 
+function getListingSoldAtMs(listing: ResearchTableListing) {
+  if (!listing.sold_at) {
+    return 0;
+  }
+
+  const soldAtMs = new Date(listing.sold_at).getTime();
+  return Number.isFinite(soldAtMs) ? soldAtMs : 0;
+}
+
 function normalizeProductTitle(title: string) {
   return title
     .normalize("NFKC")
@@ -308,6 +323,23 @@ function normalizeProductTitle(title: string) {
 function getProductGroupKey(listing: ResearchTableListing, platform: ResearchPlatform) {
   const normalizedTitle = normalizeProductTitle(listing.title);
   return `${platform}::${normalizedTitle || `item:${listing.item_id}`}`;
+}
+
+function isSoldListing(listing: ResearchTableListing) {
+  const status = (listing.status || "").trim().toLowerCase();
+
+  if (!status) {
+    return Boolean(listing.sold_at);
+  }
+
+  return (
+    status.includes("sold") ||
+    status.includes("trading") ||
+    status.includes("complete") ||
+    status.includes("\u58f2\u308a\u5207\u308c") ||
+    status.includes("\u58f2\u5374\u6e08") ||
+    status.includes("\u53d6\u5f15\u4e2d")
+  );
 }
 
 function buildDisplayRows(listings: ResearchTableListing[]) {
@@ -329,6 +361,7 @@ function buildDisplayRows(listings: ResearchTableListing[]) {
         price: listing.price,
         totalCount: 1,
         totalSales: Number.isFinite(listing.price) ? listing.price : 0,
+        latestSoldAtMs: getListingSoldAtMs(listing),
         periods: itemPeriods
       });
       continue;
@@ -337,6 +370,7 @@ function buildDisplayRows(listings: ResearchTableListing[]) {
     existing.thumbnailUrl = existing.thumbnailUrl ?? listing.thumbnail_url;
     existing.totalCount += 1;
     existing.totalSales += Number.isFinite(listing.price) ? listing.price : 0;
+    existing.latestSoldAtMs = Math.max(existing.latestSoldAtMs, getListingSoldAtMs(listing));
 
     for (const period of PERIOD_DEFINITIONS) {
       existing.periods[period.key].count += itemPeriods[period.key].count;
@@ -347,19 +381,60 @@ function buildDisplayRows(listings: ResearchTableListing[]) {
   return Array.from(groups.values());
 }
 
-function getDisplayedPeriodSales(row: ResearchDisplayRow) {
-  return PERIOD_DEFINITIONS.reduce((total, period) => total + row.periods[period.key].revenue, 0);
+function getTrendScore(row: ResearchDisplayRow) {
+  const weightedSales =
+    row.periods.period1.revenue * 1 +
+    row.periods.period2.revenue * 0.35 +
+    row.periods.period3.revenue * 0.1;
+  const weightedCount =
+    row.periods.period1.count * 1 +
+    row.periods.period2.count * 0.6 +
+    row.periods.period3.count * 0.25;
+  const repeatBonus = 1 + Math.min(Math.max(weightedCount - 1, 0) * 0.08, 0.24);
+  const oldSinglePenalty = row.totalCount === 1 && row.periods.period1.count === 0
+    ? row.periods.period2.count === 1
+      ? 0.85
+      : row.periods.period3.count === 1
+        ? 0.55
+        : 1
+    : 1;
+
+  return weightedSales * repeatBonus * oldSinglePenalty;
 }
 
 function sortRowsByDisplayedSales(rows: ResearchDisplayRow[]) {
   return [...rows].sort((a, b) => {
-    const periodSalesDiff = getDisplayedPeriodSales(b) - getDisplayedPeriodSales(a);
+    const trendScoreDiff = getTrendScore(b) - getTrendScore(a);
 
-    if (periodSalesDiff !== 0) {
-      return periodSalesDiff;
+    if (trendScoreDiff !== 0) {
+      return trendScoreDiff;
     }
 
-    return b.totalSales - a.totalSales;
+    const period1RevenueDiff = b.periods.period1.revenue - a.periods.period1.revenue;
+
+    if (period1RevenueDiff !== 0) {
+      return period1RevenueDiff;
+    }
+
+    const period1CountDiff = b.periods.period1.count - a.periods.period1.count;
+
+    if (period1CountDiff !== 0) {
+      return period1CountDiff;
+    }
+
+    const latestSoldAtDiff = b.latestSoldAtMs - a.latestSoldAtMs;
+
+    if (latestSoldAtDiff !== 0) {
+      return latestSoldAtDiff;
+    }
+
+    const totalSalesDiff = b.totalSales - a.totalSales;
+
+    if (totalSalesDiff !== 0) {
+      return totalSalesDiff;
+    }
+
+    return b.price - a.price;
   });
 }
 
@@ -372,7 +447,9 @@ function buildDashboardData(
   const sellerName = seller.seller_name || seller.seller_id || "出品者";
   const sourceLabel = options.sourceLabel ?? "リサーチ結果";
   const fetchedAtLabel = formatResearchDate(seller.fetched_at);
-  const totals = listings.reduce(
+  const soldListings = listings.filter(isSoldListing);
+  const displayListings = soldListings.length > 0 ? soldListings : listings;
+  const totals = displayListings.reduce(
     (result, listing) => ({
       count: result.count + 1,
       revenue: result.revenue + (Number.isFinite(listing.price) ? listing.price : 0)
@@ -380,9 +457,9 @@ function buildDashboardData(
     createEmptyTotals()
   );
   const periodAnalysis = window.FurimanagerResearchStats?.summarizePeriodAnalysis
-    ? window.FurimanagerResearchStats.summarizePeriodAnalysis(listings)
+    ? window.FurimanagerResearchStats.summarizePeriodAnalysis(displayListings)
     : createEmptyPeriodAnalysis();
-  const hasDatedListings = periodAnalysis.available || hasUsableSoldAt(listings);
+  const hasDatedListings = periodAnalysis.available || hasUsableSoldAt(displayListings);
   const stats = hasDatedListings
     ? periodAnalysis.stats
     : createEmptyStats();
@@ -401,7 +478,7 @@ function buildDashboardData(
       count: stats[period.key].count,
       revenue: stats[period.key].revenue
     })),
-    rows: sortRowsByDisplayedSales(buildDisplayRows(listings))
+    rows: sortRowsByDisplayedSales(buildDisplayRows(displayListings))
   };
 }
 
@@ -463,6 +540,25 @@ function showBookmarkToast(message: string) {
   window.setTimeout(() => {
     toast.remove();
   }, 2600);
+}
+
+function setBookmarkButtonState(button: HTMLButtonElement, isSaved: boolean) {
+  button.classList.toggle("furimane-research-table__bookmark-button--saved", isSaved);
+  button.textContent = isSaved ? "★" : "☆";
+  button.setAttribute("aria-label", isSaved ? "ブックマーク解除" : "ブックマーク保存");
+}
+
+function createPendingBookmark(row: ResearchDisplayRow): ResearchBookmark {
+  return {
+    id: `pending:${row.platform}:${row.listing.item_id}`,
+    bookmark_type: "item",
+    platform: row.platform,
+    item_id: row.listing.item_id,
+    title: row.title,
+    price: row.price,
+    thumbnail_url: row.thumbnailUrl,
+    item_url: row.listing.item_url
+  };
 }
 
 async function loadResearchBookmarks() {
@@ -701,13 +797,21 @@ function createBookmarkButton(
     }
 
     button.disabled = true;
+    const previousItems = [...bookmarkState.items];
+    const previousCount = bookmarkState.count;
+    const previousLimit = bookmarkState.limit;
 
     try {
       if (existingBookmark) {
-        const response = await window.FurimanagerResearchApi.removeBookmark(existingBookmark.id);
+        setBookmarkButtonState(button, false);
         bookmarkState.items = bookmarkState.items.filter((bookmark) => bookmark.id !== existingBookmark.id);
+        bookmarkState.count = Math.max(0, bookmarkState.count - 1);
+        onUpdated();
+
+        const response = await window.FurimanagerResearchApi.removeBookmark(existingBookmark.id);
         bookmarkState.count = response.count;
         bookmarkState.limit = response.limit;
+        onUpdated();
         showBookmarkToast("ブックマークを解除しました");
       } else {
         if (bookmarkState.count >= bookmarkState.limit) {
@@ -715,6 +819,15 @@ function createBookmarkButton(
           button.disabled = false;
           return;
         }
+
+        const pendingBookmark = createPendingBookmark(row);
+        setBookmarkButtonState(button, true);
+        bookmarkState.items = [
+          pendingBookmark,
+          ...bookmarkState.items.filter((bookmark) => bookmark.id !== pendingBookmark.id)
+        ];
+        bookmarkState.count += 1;
+        onUpdated();
 
         const response = await window.FurimanagerResearchApi.addBookmark({
           platform: row.platform,
@@ -729,24 +842,87 @@ function createBookmarkButton(
         if (newBookmark) {
           bookmarkState.items = [
             newBookmark,
-            ...bookmarkState.items.filter((bookmark) => bookmark.id !== newBookmark.id)
+            ...bookmarkState.items.filter((bookmark) => bookmark.id !== newBookmark.id && bookmark.id !== pendingBookmark.id)
           ];
         }
 
         bookmarkState.count = response.count;
         bookmarkState.limit = response.limit;
+        onUpdated();
         showBookmarkToast("ブックマークに保存しました");
       }
-
-      onUpdated();
     } catch (error) {
       console.error("[furimane-research] bookmark update failed", error);
+      bookmarkState.items = previousItems;
+      bookmarkState.count = previousCount;
+      bookmarkState.limit = previousLimit;
+      setBookmarkButtonState(button, Boolean(existingBookmark));
+      onUpdated();
       showBookmarkToast(error instanceof Error ? error.message : "ブックマークの更新に失敗しました");
       button.disabled = false;
     }
   });
 
   return button;
+}
+
+async function addBookmarkFromSimulation(row: ResearchDisplayRow, bookmarkState: ResearchBookmarkState) {
+  if (findItemBookmark(bookmarkState, row.listing, row.platform)) {
+    showBookmarkToast("仕入れ値を保存しました");
+    return false;
+  }
+
+  if (!window.FurimanagerResearchApi?.addBookmark) {
+    showBookmarkToast("仕入れ値は保存しましたが、ブックマークAPIが利用できません");
+    return false;
+  }
+
+  if (bookmarkState.count >= bookmarkState.limit) {
+    showBookmarkToast("仕入れ値は保存しましたが、ブックマークは上限です");
+    return false;
+  }
+
+  const previousItems = [...bookmarkState.items];
+  const previousCount = bookmarkState.count;
+  const previousLimit = bookmarkState.limit;
+  const pendingBookmark = createPendingBookmark(row);
+
+  bookmarkState.items = [
+    pendingBookmark,
+    ...bookmarkState.items.filter((bookmark) => bookmark.id !== pendingBookmark.id)
+  ];
+  bookmarkState.count += 1;
+
+  try {
+    const response = await window.FurimanagerResearchApi.addBookmark({
+      platform: row.platform,
+      item_id: row.listing.item_id,
+      title: row.title,
+      price: row.price,
+      thumbnail_url: row.thumbnailUrl,
+      item_url: row.listing.item_url
+    });
+    const newBookmark = response.item ?? response.bookmark;
+
+    if (newBookmark) {
+      bookmarkState.items = [
+        newBookmark,
+        ...bookmarkState.items.filter((bookmark) => bookmark.id !== newBookmark.id && bookmark.id !== pendingBookmark.id)
+      ];
+    }
+
+    bookmarkState.count = response.count;
+    bookmarkState.limit = response.limit;
+    showBookmarkToast("仕入れ値を保存し、ブックマークにも追加しました");
+    return true;
+  } catch (error) {
+    console.error("[furimane-research] simulator bookmark save failed", error);
+    bookmarkState.items = previousItems;
+    bookmarkState.count = previousCount;
+    bookmarkState.limit = previousLimit;
+    showBookmarkToast("仕入れ値は保存しましたが、ブックマーク追加に失敗しました");
+    return false;
+  }
 }
 
 function createCountCellContent(count: number, hasDatedListings: boolean) {
@@ -870,7 +1046,7 @@ function createResearchTable(
     const actionCell = document.createElement("td");
     const actionWrapper = createElement("div", "furimane-research-table__row-actions");
     const bookmarkButton = createBookmarkButton(row, bookmarkState, rerender);
-    const savedPrice = purchasePrices[row.listing.item_id];
+    const savedPrice = purchasePrices[row.listing.item_id] ?? { purchasePrice: null, shippingFee: null };
     const simulateButton = createElement(
       "button",
       "furimane-research-table__simulate-button",
@@ -893,7 +1069,15 @@ function createResearchTable(
       await window.FurimanagerResearchSimulator.renderSimulator(tr, row.listing, {
         savedPrice,
         platform: row.platform,
-        monthlySalesCount: dashboard.hasDatedListings ? row.periods.period1.count : row.totalCount
+        monthlySalesCount: dashboard.hasDatedListings ? row.periods.period1.count : row.totalCount,
+        onSave: async (nextSavedPrice) => {
+          purchasePrices[row.listing.item_id] = nextSavedPrice;
+          const addedBookmark = await addBookmarkFromSimulation(row, bookmarkState);
+
+          if (addedBookmark) {
+            setBookmarkButtonState(bookmarkButton, true);
+          }
+        }
       });
     });
 
@@ -912,7 +1096,7 @@ function createResearchTable(
 
 function createResearchTableColGroup() {
   const colgroup = document.createElement("colgroup");
-  const widths = ["7%", "34%", "9%", "5.5%", "6.5%", "5.5%", "6.5%", "5.5%", "6.5%", "14%"];
+  const widths = ["13%", "33%", "8%", "4%", "7%", "4%", "7%", "4%", "7%", "13%"];
 
   for (const width of widths) {
     const col = document.createElement("col");
@@ -934,8 +1118,8 @@ async function renderResearchTable(
     platform: getResearchPlatform(seller, listing)
   }));
   const dashboard = buildDashboardData(seller, normalizedListings, options);
-  const bookmarkState = await loadResearchBookmarks();
-  let purchasePrices = await loadResearchPurchasePrices(dashboard.rows, dashboard.platform);
+  const bookmarkState: ResearchBookmarkState = { items: [], count: 0, limit: 50 };
+  const purchasePrices: ResearchPurchasePriceMap = {};
 
   const render = () => {
     const root = createElement("div", "furimane-research-table-root");
@@ -953,17 +1137,10 @@ async function renderResearchTable(
 
     if (!dashboard.hasDatedListings) {
       desktop.appendChild(createStatsPendingNotice());
-    } else if (dashboard.usesEstimatedPeriodDates) {
-      desktop.appendChild(createStatsEstimatedNotice());
     }
 
     desktop.appendChild(
-      createResearchTable(dashboard.rows, dashboard, bookmarkState, purchasePrices, () => {
-        void (async () => {
-          purchasePrices = await loadResearchPurchasePrices(dashboard.rows, dashboard.platform);
-          render();
-        })();
-      })
+      createResearchTable(dashboard.rows, dashboard, bookmarkState, purchasePrices, render)
     );
 
     root.append(mobileMessage, desktop);
@@ -971,6 +1148,17 @@ async function renderResearchTable(
   };
 
   render();
+
+  void loadResearchBookmarks().then((nextBookmarkState) => {
+    bookmarkState.items = nextBookmarkState.items;
+    bookmarkState.count = nextBookmarkState.count;
+    bookmarkState.limit = nextBookmarkState.limit;
+    render();
+  });
+
+  void loadResearchPurchasePrices(dashboard.rows, dashboard.platform).then((nextPurchasePrices) => {
+    Object.assign(purchasePrices, nextPurchasePrices);
+  });
 }
 
 window.FurimanagerResearchTable = {

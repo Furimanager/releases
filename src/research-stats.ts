@@ -4,6 +4,7 @@ type ResearchListingForStats = {
   period_date?: string | null;
   period_date_source?: string | null;
   period_date_estimated?: boolean;
+  status?: string;
 };
 
 type PeriodStats = {
@@ -65,6 +66,23 @@ function getListingPeriodDate(listing: ResearchListingForStats) {
   return listing.period_date || listing.sold_at || null;
 }
 
+function isSoldListing(listing: ResearchListingForStats) {
+  const status = (listing.status || "").trim().toLowerCase();
+
+  if (!status) {
+    return Boolean(listing.sold_at);
+  }
+
+  return (
+    status.includes("sold") ||
+    status.includes("trading") ||
+    status.includes("complete") ||
+    status.includes("\u58f2\u308a\u5207\u308c") ||
+    status.includes("\u58f2\u5374\u6e08") ||
+    status.includes("\u53d6\u5f15\u4e2d")
+  );
+}
+
 function getListingPeriodKey(listing: ResearchListingForStats) {
   const daysAgo = getDaysAgo(getListingPeriodDate(listing));
 
@@ -87,6 +105,10 @@ function calcPeriodStats(listings: ResearchListingForStats[]) {
   const stats = createEmptyStats();
 
   for (const listing of listings) {
+    if (!isSoldListing(listing)) {
+      continue;
+    }
+
     const price = Number.isFinite(listing.price) ? listing.price : 0;
     const periodKey = getListingPeriodKey(listing);
 
@@ -122,6 +144,10 @@ function summarizePeriodAnalysis(listings: ResearchListingForStats[]): ResearchP
   let usesEstimatedDates = false;
 
   for (const listing of listings) {
+    if (!isSoldListing(listing)) {
+      continue;
+    }
+
     const price = Number.isFinite(listing.price) ? listing.price : 0;
     const periodDate = getListingPeriodDate(listing);
     const daysAgo = getDaysAgo(periodDate);

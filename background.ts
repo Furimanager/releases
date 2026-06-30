@@ -58,6 +58,16 @@
       return true;
     }
 
+    if (message?.type === "FETCH_MERCARI_ITEM_DETAIL") {
+      void handleFetchMercariItemDetail(message, respond);
+      return true;
+    }
+
+    if (message?.type === "FETCH_MERCARI_USER_PROFILE") {
+      void handleFetchMercariUserProfile(message, respond);
+      return true;
+    }
+
     if (message?.type === "SET_RELIST_PENDING") {
       void handleSetRelistPending(message.payload, respond);
       return true;
@@ -98,6 +108,85 @@
     } catch (error) {
       console.error("[furimanager-extension] fetch image request failed", error);
       respond({ success: false, message: "画像の取得に失敗しました" });
+    }
+  }
+
+  async function handleFetchMercariItemDetail(message: any, respond: (response: any) => void) {
+    try {
+      const itemId = typeof message?.itemId === "string" ? message.itemId.trim() : "";
+
+      if (!/^m\d+$/.test(itemId)) {
+        respond({ success: false, message: "メルカリ商品IDを確認できませんでした" });
+        return;
+      }
+
+      const url = new URL("https://api.mercari.jp/items/get");
+      url.searchParams.set("id", itemId);
+      url.searchParams.set("_item_photo_format", "detail");
+
+      const headers: Record<string, string> = {
+        "x-platform": "web"
+      };
+      const accessToken = typeof message?.accessToken === "string" ? message.accessToken.trim() : "";
+
+      if (accessToken) {
+        headers.authorization = accessToken;
+      }
+
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers,
+        credentials: "omit"
+      });
+
+      if (!response.ok) {
+        respond({ success: false, message: `メルカリ商品情報の取得に失敗しました (${response.status})` });
+        return;
+      }
+
+      respond({ success: true, data: await response.json() });
+    } catch (error) {
+      console.warn("[furimanager-extension] mercari item detail fetch failed", error);
+      respond({ success: false, message: "メルカリ商品情報の取得に失敗しました" });
+    }
+  }
+
+  async function handleFetchMercariUserProfile(message: any, respond: (response: any) => void) {
+    try {
+      const userId = typeof message?.userId === "string" ? message.userId.trim() : "";
+
+      if (!/^\d+$/.test(userId)) {
+        respond({ success: false, message: "メルカリユーザーIDを確認できませんでした" });
+        return;
+      }
+
+      const url = new URL("https://api.mercari.jp/users/get_profile");
+      url.searchParams.set("id", userId);
+
+      const headers: Record<string, string> = {
+        "x-platform": "web"
+      };
+      const accessToken = typeof message?.accessToken === "string" ? message.accessToken.trim() : "";
+
+      if (accessToken) {
+        headers.authorization = accessToken;
+      }
+
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers,
+        credentials: "omit"
+      });
+
+      if (!response.ok) {
+        respond({ success: false, message: `メルカリユーザー情報の取得に失敗しました (${response.status})` });
+        return;
+      }
+
+      respond({ success: true, data: await response.json() });
+    } catch (error) {
+      console.warn("[furimanager-extension] mercari user profile fetch failed", error);
+      respond({ success: false, message: "メルカリユーザー情報の取得に失敗しました" });
     }
   }
 

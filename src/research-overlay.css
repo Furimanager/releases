@@ -1,15 +1,18 @@
 #furimane-research-overlay {
-  width: 100%;
-  max-width: 1200px;
+  position: relative;
+  left: 50%;
+  width: min(1320px, calc(100vw - 96px));
+  max-width: none;
   margin: 20px auto;
-  background: #09111f;
-  border: 1px solid rgba(124, 58, 237, 0.28);
+  transform: translateX(-50%);
+  background: #ffffff;
+  border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 12px;
-  color: #e2e8f0;
+  color: #111827;
   overflow: hidden;
   font-family: "Hiragino Sans", sans-serif;
   box-sizing: border-box;
-  box-shadow: 0 24px 64px rgba(2, 6, 23, 0.46);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
 }
 
 #furimane-research-overlay.furimane-research-overlay--fixed {
@@ -21,6 +24,7 @@
   width: auto;
   max-width: 720px;
   margin: 0 auto;
+  transform: none;
 }
 
 #furimane-research-overlay *,
@@ -36,17 +40,28 @@
   padding: 10px 18px;
   border-bottom: 1px solid rgba(124, 58, 237, 0.28);
   background:
-    linear-gradient(90deg, rgba(76, 29, 149, 0.38) 0%, rgba(249, 115, 22, 0.18) 52%, rgba(236, 72, 153, 0.22) 100%),
-    rgba(9, 17, 31, 0.98);
+    linear-gradient(90deg, rgba(236, 72, 153, 0.92) 0%, rgba(249, 115, 22, 0.74) 52%, rgba(59, 130, 246, 0.76) 100%),
+    #ffffff;
 }
 
 .furimane-research-overlay__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   color: #ffffff;
   font-size: 13px;
   font-weight: 700;
   line-height: 1.4;
   letter-spacing: 0.01em;
+}
+
+.furimane-research-overlay__logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.92);
+  object-fit: contain;
 }
 
 .furimane-research-overlay__close {
@@ -71,7 +86,7 @@
 }
 
 .furimane-research-overlay__body {
-  min-height: 400px;
+  min-height: 180px;
   padding: 22px;
 }
 
@@ -81,7 +96,7 @@
 
 .furimane-research-overlay__placeholder {
   margin: 0;
-  color: #94a3b8;
+  color: #475569;
   font-size: 14px;
   line-height: 1.7;
 }
@@ -105,13 +120,13 @@
   padding: 14px 16px;
   border-left: 4px solid #ef4444;
   border-radius: 10px;
-  background: #1a1f2e;
+  background: #fff1f2;
 }
 
 .furimane-research-overlay__state-title,
 .furimane-research-overlay__summary-title {
   margin: 0;
-  color: #ffffff;
+  color: #111827;
   font-size: 18px;
   font-weight: 700;
   line-height: 1.45;
@@ -143,7 +158,7 @@
 .furimane-research-overlay__button--secondary {
   border: 1px solid #7c3aed;
   background: transparent;
-  color: #e2e8f0;
+  color: #111827;
 }
 
 .furimane-research-overlay__results {
@@ -160,7 +175,7 @@
 
 .furimane-research-overlay__summary-meta {
   margin: 0;
-  color: #94a3b8;
+  color: #475569;
   font-size: 13px;
   line-height: 1.6;
 }
@@ -179,8 +194,8 @@
   padding: 10px;
   border: 1px solid rgba(124, 58, 237, 0.28);
   border-radius: 10px;
-  background: rgba(15, 20, 32, 0.78);
-  color: #e2e8f0;
+  background: #ffffff;
+  color: #111827;
   text-decoration: none;
 }
 
@@ -206,7 +221,7 @@
 .furimane-research-overlay__item-title {
   margin: 0;
   overflow: hidden;
-  color: #ffffff;
+  color: #111827;
   font-size: 13px;
   font-weight: 700;
   line-height: 1.4;
@@ -216,7 +231,7 @@
 
 .furimane-research-overlay__item-meta {
   margin: 4px 0 0;
-  color: #94a3b8;
+  color: #475569;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -256,8 +271,8 @@
   padding: 20px;
   border: 1px solid rgba(124, 58, 237, 0.28);
   border-radius: 8px;
-  background: rgba(10, 18, 32, 0.96);
-  color: #e2e8f0;
+  background: #ffffff;
+  color: #111827;
   font-size: 14px;
   line-height: 1.7;
 }
@@ -316,8 +331,8 @@
   padding: 4px 10px;
   border: 1px solid rgba(124, 58, 237, 0.34);
   border-radius: 8px;
-  background: rgba(124, 58, 237, 0.16);
-  color: #ddd6fe;
+  background: rgba(124, 58, 237, 0.08);
+  color: #6d28d9;
   font-size: 11px;
   font-weight: 800;
   line-height: 1;
@@ -325,13 +340,13 @@
 
 .furimane-research-table__platform-badge--shops {
   border-color: rgba(249, 115, 22, 0.42);
-  background: rgba(249, 115, 22, 0.12);
-  color: #fed7aa;
+  background: rgba(249, 115, 22, 0.08);
+  color: #ea580c;
 }
 
 .furimane-research-table__seller-name {
   margin: 0;
-  color: #ffffff;
+  color: #111827;
   font-size: 20px;
   font-weight: 800;
   line-height: 1.35;
@@ -347,7 +362,7 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  color: #94a3b8;
+  color: #475569;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -360,11 +375,11 @@
 }
 
 .furimane-research-table__meta-label {
-  color: #94a3b8;
+  color: #475569;
 }
 
 .furimane-research-table__meta-value {
-  color: #e2e8f0;
+  color: #111827;
   font-weight: 700;
 }
 
@@ -383,8 +398,8 @@
   padding: 8px 12px;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.62);
-  color: #cbd5e1;
+  background: #ffffff;
+  color: #111827;
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
@@ -412,8 +427,8 @@
 .furimane-research-table__action-button {
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-color: rgba(148, 163, 184, 0.2);
-  background: rgba(31, 41, 55, 0.88);
-  color: #ffffff;
+  background: #ffffff;
+  color: #111827;
 }
 
 .furimane-research-table__action-button:disabled {
@@ -426,8 +441,8 @@
   width: 12px;
   height: 12px;
   margin-right: 6px;
-  border: 2px solid rgba(226, 232, 240, 0.3);
-  border-top-color: #e2e8f0;
+  border: 2px solid rgba(148, 163, 184, 0.3);
+  border-top-color: #7c3aed;
   border-radius: 999px;
   animation: furimane-research-spin 0.8s linear infinite;
 }
@@ -447,8 +462,8 @@
 
 .furimane-research-table__save-button--saved,
 .furimane-research-table__bookmark-button--saved {
-  background: rgba(236, 72, 153, 0.16);
-  color: #f9a8d4;
+  background: rgba(236, 72, 153, 0.1);
+  color: #db2777;
 }
 
 .furimane-research-table__period-grid {
@@ -460,12 +475,12 @@
 .furimane-research-table__period-card {
   position: relative;
   display: grid;
-  gap: 10px;
-  min-height: 96px;
-  padding: 18px 18px 16px;
+  gap: 4px;
+  min-height: 76px;
+  padding: 14px 18px 12px;
   border: 1px solid rgba(124, 58, 237, 0.24);
   border-radius: 8px;
-  background: linear-gradient(180deg, rgba(18, 26, 45, 0.96), rgba(13, 20, 35, 0.96));
+  background: #ffffff;
   overflow: hidden;
 }
 
@@ -491,8 +506,9 @@
 .furimane-research-table__period-label {
   margin: 0;
   color: #d8b4fe;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
+  line-height: 1.2;
 }
 
 .furimane-research-table__period-card--period1 .furimane-research-table__period-label,
@@ -511,24 +527,27 @@
 }
 
 .furimane-research-table__period-revenue {
-  color: #ffffff;
-  font-size: 22px;
+  color: #111827;
+  font-size: 21px;
   font-weight: 800;
-  line-height: 1.2;
+  line-height: 1.1;
 }
 
 .furimane-research-table__period-count {
-  justify-self: end;
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
   font-size: 13px;
   font-weight: 800;
+  line-height: 1;
 }
 
 .furimane-research-table__stats-note {
   padding: 12px 14px;
   border: 1px solid rgba(249, 115, 22, 0.26);
   border-radius: 8px;
-  background: rgba(249, 115, 22, 0.08);
-  color: #fdba74;
+  background: rgba(249, 115, 22, 0.06);
+  color: #9a3412;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.7;
@@ -536,14 +555,14 @@
 
 .furimane-research-table__stats-note--estimated {
   border-color: rgba(236, 72, 153, 0.38);
-  background: rgba(124, 58, 237, 0.12);
-  color: #f9a8d4;
+  background: rgba(236, 72, 153, 0.06);
+  color: #be185d;
 }
 
 .furimane-research-table__table-panel {
-  border: 1px solid rgba(124, 58, 237, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 8px;
-  background: rgba(10, 18, 32, 0.92);
+  background: #ffffff;
   overflow: hidden;
 }
 
@@ -558,19 +577,34 @@
   min-width: 0;
   border-collapse: separate;
   border-spacing: 0;
-  color: #e2e8f0;
+  color: #111827;
   table-layout: fixed;
 }
 
 .furimane-research-table th,
 .furimane-research-table td {
-  border-bottom: 1px solid rgba(51, 65, 85, 0.55);
+  border-bottom: 1px solid rgba(203, 213, 225, 0.55);
+  border-right: 1px solid rgba(203, 213, 225, 0.55);
+}
+
+.furimane-research-table th:first-child,
+.furimane-research-table td:first-child {
+  border-left: 1px solid rgba(203, 213, 225, 0.55);
+}
+
+.furimane-research-table tbody td:nth-child(4),
+.furimane-research-table tbody td:nth-child(6),
+.furimane-research-table tbody td:nth-child(8),
+.furimane-research-table thead tr:nth-child(2) th:nth-child(1),
+.furimane-research-table thead tr:nth-child(2) th:nth-child(3),
+.furimane-research-table thead tr:nth-child(2) th:nth-child(5) {
+  border-right: 0;
 }
 
 .furimane-research-table th {
   padding: 14px 12px;
-  color: #ffffff;
-  font-size: 12px;
+  color: #111827;
+  font-size: 13px;
   font-weight: 800;
   text-align: left;
   white-space: nowrap;
@@ -579,75 +613,87 @@
 .furimane-research-table__sticky {
   position: sticky;
   top: 0;
-  z-index: 2;
-  background: #111a2d;
+  z-index: 4;
+  background: #ffffff;
 }
 
 .furimane-research-table__period-group {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 4;
   text-align: center !important;
 }
 
 .furimane-research-table__period-group--period1 {
-  background: rgba(92, 30, 78, 0.52);
+  background: #fce7f3;
   color: #ff4fb3;
 }
 
 .furimane-research-table__period-group--period2 {
-  background: rgba(110, 54, 18, 0.5);
+  background: #ffedd5;
   color: #ff8a33;
 }
 
 .furimane-research-table__period-group--period3 {
-  background: rgba(38, 48, 112, 0.54);
+  background: #dbeafe;
   color: #6f7cff;
 }
 
 .furimane-research-table__period-subhead {
   position: sticky;
   top: 48px;
-  z-index: 2;
+  z-index: 3;
   padding-top: 10px !important;
   padding-bottom: 10px !important;
   text-align: center !important;
-  font-size: 11px !important;
+  font-size: 12px !important;
 }
 
 .furimane-research-table__period-subhead--period1 {
-  background: rgba(92, 30, 78, 0.42);
+  background: #fce7f3;
 }
 
 .furimane-research-table__period-subhead--period2 {
-  background: rgba(110, 54, 18, 0.4);
+  background: #ffedd5;
 }
 
 .furimane-research-table__period-subhead--period3 {
-  background: rgba(38, 48, 112, 0.44);
+  background: #dbeafe;
 }
 
 .furimane-research-table td {
-  padding: 10px 12px;
-  font-size: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
   vertical-align: middle;
-  background: rgba(10, 18, 32, 0.88);
+  background: #ffffff;
   min-width: 0;
 }
 
 .furimane-research-table__row:hover td {
-  background: rgba(18, 27, 45, 0.96);
+  background: #f8fafc;
+}
+
+.furimane-research-table__row:hover .furimane-research-table__period-cell--period1 {
+  background: #fdf2f8;
+}
+
+.furimane-research-table__row:hover .furimane-research-table__period-cell--period2 {
+  background: #fff7ed;
+}
+
+.furimane-research-table__row:hover .furimane-research-table__period-cell--period3 {
+  background: #eef2ff;
 }
 
 .furimane-research-table__thumbnail {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
+  width: 112px;
+  height: 116px;
   overflow: hidden;
-  border-radius: 8px;
-  background: rgba(30, 41, 59, 0.92);
+  border-radius: 10px;
+  background: #f1f5f9;
 }
 
 .furimane-research-table__thumbnail img {
@@ -659,8 +705,15 @@
 
 .furimane-research-table__thumbnail-text {
   color: #64748b;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .furimane-research-table__thumbnail {
+    width: 104px;
+    height: 108px;
+  }
 }
 
 .furimane-research-table__title-wrap {
@@ -670,16 +723,18 @@
 }
 
 .furimane-research-table__title-link {
-  display: inline-block;
+  display: -webkit-box;
   max-width: 100%;
   overflow: hidden;
-  color: #ffffff;
-  font-size: 14px;
+  color: #111827;
+  font-size: 13px;
   font-weight: 700;
-  line-height: 1.5;
+  line-height: 1.35;
   text-decoration: none;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .furimane-research-table__title-link:hover {
@@ -689,7 +744,7 @@
 .furimane-research-table__title-meta {
   margin: 0;
   color: #64748b;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -701,39 +756,43 @@
 }
 
 .furimane-research-table__period-cell {
+  padding-right: 8px !important;
+  padding-left: 8px !important;
   text-align: center;
+  font-size: 14px;
 }
 
-.furimane-research-table__period-cell--period1 {
-  background: rgba(92, 30, 78, 0.1);
+.furimane-research-table .furimane-research-table__period-cell--period1 {
+  background: #fdf2f8;
 }
 
-.furimane-research-table__period-cell--period2 {
-  background: rgba(110, 54, 18, 0.1);
+.furimane-research-table .furimane-research-table__period-cell--period2 {
+  background: #fff7ed;
 }
 
-.furimane-research-table__period-cell--period3 {
-  background: rgba(38, 48, 112, 0.11);
+.furimane-research-table .furimane-research-table__period-cell--period3 {
+  background: #eef2ff;
 }
 
 .furimane-research-table__period-number {
+  font-size: 14px;
   font-weight: 800;
 }
 
 .furimane-research-table__period-number--count {
-  color: #ffffff;
+  color: #111827;
 }
 
 .furimane-research-table__period-number--revenue {
-  color: #ff4fb3;
+  color: #111827;
 }
 
 .furimane-research-table__period-cell--period2 .furimane-research-table__period-number--revenue {
-  color: #ff8a33;
+  color: #111827;
 }
 
 .furimane-research-table__period-cell--period3 .furimane-research-table__period-number--revenue {
-  color: #6f7cff;
+  color: #111827;
 }
 
 .furimane-research-table__period-dash {
@@ -748,12 +807,18 @@
 }
 
 .furimane-research-table__bookmark-button {
-  min-width: 34px;
-  padding-right: 0;
-  padding-left: 0;
-  border-color: rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.82);
-  color: #94a3b8;
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
 .furimane-research-table__bookmark-button:disabled {
@@ -762,6 +827,7 @@
 }
 
 .furimane-research-table__simulate-button {
+  min-width: 92px;
   padding-right: 10px;
   padding-left: 10px;
   background-image: linear-gradient(90deg, #8b3dff 0%, #f04fa8 100%);
@@ -779,8 +845,8 @@
   padding: 12px 16px;
   border: 1px solid rgba(236, 72, 153, 0.26);
   border-radius: 8px;
-  background: rgba(10, 18, 32, 0.96);
-  color: #e2e8f0;
+  background: #ffffff;
+  color: #111827;
   font-family: "Hiragino Sans", sans-serif;
   font-size: 13px;
   font-weight: 700;
@@ -788,25 +854,41 @@
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.36);
 }
 
+.furimane-research-simulator-row {
+  position: relative;
+  height: 0;
+}
+
 .furimane-research-simulator-row td {
-  padding: 0 12px 14px !important;
-  background: rgba(10, 18, 32, 0.96);
+  position: relative;
+  height: 0;
+  padding: 0 !important;
+  border-bottom: 0 !important;
+  background: transparent;
 }
 
 .furimane-research-simulator {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  left: 12px;
+  z-index: 6;
   display: grid;
-  grid-template-columns: minmax(230px, 0.65fr) 1fr;
-  gap: 14px;
-  padding: 14px;
+  grid-template-columns: minmax(220px, 0.5fr) minmax(420px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid rgba(124, 58, 237, 0.22);
   border-radius: 8px;
-  background: rgba(13, 20, 35, 0.96);
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+  contain: layout paint style;
 }
 
 .furimane-research-simulator__form,
 .furimane-research-simulator__metrics {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .furimane-research-simulator__form {
@@ -815,20 +897,20 @@
 
 .furimane-research-simulator__label {
   display: grid;
-  gap: 6px;
-  color: #94a3b8;
+  gap: 5px;
+  color: #475569;
   font-size: 12px;
   font-weight: 700;
 }
 
 .furimane-research-simulator__input {
   width: 100%;
-  min-height: 38px;
-  padding: 8px 10px;
-  border: 1px solid rgba(71, 85, 105, 0.7);
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.7);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.92);
-  color: #e2e8f0;
+  background: #ffffff;
+  color: #111827;
   font-family: "Hiragino Sans", sans-serif;
   font-size: 13px;
   outline: none;
@@ -858,18 +940,19 @@
 .furimane-research-simulator__metric {
   display: grid;
   gap: 4px;
-  padding: 10px;
-  border: 1px solid rgba(45, 55, 72, 0.8);
+  min-height: 58px;
+  padding: 8px 10px;
+  border: 1px solid rgba(203, 213, 225, 0.8);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.74);
-  color: #94a3b8;
+  background: #f8fafc;
+  color: #475569;
   font-size: 12px;
   font-weight: 700;
 }
 
 .furimane-research-simulator__metric-value,
 .furimane-research-simulator__metric-rate {
-  color: #e2e8f0;
+  color: #111827;
   font-size: 15px;
   font-weight: 800;
 }
@@ -890,13 +973,62 @@
 .furimane-research-simulator__status,
 .furimane-research-simulator__save-status {
   margin: 0;
-  color: #94a3b8;
+  color: #475569;
   font-size: 12px;
   line-height: 1.6;
 }
 
+.furimane-research-simulator__actions {
+  display: grid;
+  justify-items: end;
+  align-self: end;
+  gap: 5px;
+  min-width: 108px;
+}
+
 .furimane-research-simulator__save-status {
-  align-self: center;
+  min-height: 18px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.furimane-research-simulator__save-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 104px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background-image: linear-gradient(90deg, #7c3aed 0%, #f97316 100%);
+  color: #ffffff;
+  cursor: pointer;
+  font-family: "Hiragino Sans", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 10px 22px rgba(124, 58, 237, 0.22);
+}
+
+.furimane-research-simulator__save-button:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+@media (max-width: 1100px) {
+  .furimane-research-simulator {
+    grid-template-columns: minmax(220px, 0.55fr) 1fr;
+  }
+
+  .furimane-research-simulator__actions {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    min-width: 0;
+  }
 }
 
 @media (max-width: 639px) {
@@ -909,7 +1041,9 @@
   }
 
   #furimane-research-overlay {
+    left: auto;
     margin: 12px auto;
+    transform: none;
   }
 
   .furimane-research-overlay__body {

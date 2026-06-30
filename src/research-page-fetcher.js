@@ -2,12 +2,22 @@
   const WATCH_REQUEST_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_REQUEST";
   const WATCH_RESPONSE_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_RESPONSE";
   const INSTALLED_KEY = "__furimaneResearchPageApiHookInstalled";
-  const WATCH_SETTLE_MS = 15000;
+  const WATCH_SETTLE_MS = 9000;
+  const DIRECT_FETCH_STATUS = "trading,sold_out";
+  const DIRECT_FETCH_FALLBACK_STATUS = null;
+  const DIRECT_FETCH_MAX_ITEMS = 1000;
+  const DIRECT_FETCH_MAX_PAGES_PER_STATUS = 40;
+  const DIRECT_FETCH_PAGE_LIMIT = 132;
   const watches = new Map();
+  const cachedPayloadsBySellerId = new Map();
+  const latestGetItemsUrlsBySellerId = new Map();
+  const latestGetItemsRequestSnapshotsBySellerId = new Map();
+  const directFetchRequestIds = new Set();
 
   const originalFetch = window.fetch.bind(window);
   const OriginalXhr = window.XMLHttpRequest;
   const originalXhrOpen = OriginalXhr.prototype.open;
+  const originalXhrSetRequestHeader = OriginalXhr.prototype.setRequestHeader;
   const originalXhrSend = OriginalXhr.prototype.send;
 
   if (window[INSTALLED_KEY]) {
@@ -64,6 +74,35 @@
     return null;
   }
 
+  function addHeadersToSnapshot(target, headers) {
+    if (!headers) {
+      return;
+    }
+
+    try {
+      new Headers(headers).forEach((value, key) => {
+        target[key] = value;
+      });
+    } catch (_error) {
+      // Some page-provided header shapes are not cloneable. Ignore and keep the direct fetch path alive.
+    }
+  }
+
+  function getFetchRequestSnapshot(input, init) {
+    const headers = {};
+
+    if (input instanceof Request) {
+      addHeadersToSnapshot(headers, input.headers);
+    }
+
+    addHeadersToSnapshot(headers, init?.headers);
+
+    return {
+      headers,
+      credentials: init?.credentials ?? (input instanceof Request ? input.credentials : null)
+    };
+  }
+
   function parseGetItemsUrl(rawUrl) {
     if (!rawUrl) {
       return null;
@@ -98,12 +137,32 @@
     return payload.data.filter(isObject);
   }
 
+  function attachRequestStatusToPayload(payload, requestStatus) {
+    if (!requestStatus || !isObject(payload) || !Array.isArray(payload.data)) {
+      return payload;
+    }
+
+    return {
+      ...payload,
+      data: payload.data.map((item) => (
+        isObject(item)
+          ? { ...item, __furimane_request_status: requestStatus }
+          : item
+      ))
+    };
+  }
+
   function getPayloadItemId(item) {
     return getStringValue(item?.id, item?.item_id, item?.itemId);
   }
 
   function getPayloadMeta(payload) {
     return isObject(payload?.meta) ? payload.meta : null;
+  }
+
+  function getPayloadHasNext(payload) {
+    const meta = getPayloadMeta(payload);
+    return meta?.has_next === true || meta?.hasNext === true;
   }
 
   function getPayloadPagerId(payload) {
@@ -148,6 +207,10 @@
     }
 
     return null;
+  }
+
+  function getNextPagerId(payload, items) {
+    return getMetaPagerId(payload) || getPayloadPagerId(payload) || getLastListingPagerId(items);
   }
 
   function getPagerIdLocation(payload, items) {
@@ -254,6 +317,17 @@
     watch.settleTimeoutId = null;
   }
 
+  function deleteOtherWatchesForSeller(sellerId, keepRequestId) {
+    for (const [requestId, watch] of watches.entries()) {
+      if (requestId === keepRequestId || normalizeSellerId(watch.sellerId) !== normalizeSellerId(sellerId)) {
+        continue;
+      }
+
+      clearWatchSettleTimeout(watch);
+      watches.delete(requestId);
+    }
+  }
+
   function flushWatch(requestId) {
     const watch = watches.get(requestId);
 
@@ -287,6 +361,41 @@
     });
   }
 
+  function cacheSellerPayload(sellerId, payload) {
+    const existing = cachedPayloadsBySellerId.get(sellerId);
+    const mergeResult = mergePayloadIntoWatch(existing?.payload ?? null, payload);
+
+    cachedPayloadsBySellerId.set(sellerId, {
+      sellerId,
+      payload: mergeResult.payload,
+      pageLikeIndex: (existing?.pageLikeIndex ?? 0) + 1,
+      lastMergedCount: mergeResult.mergedCount,
+      lastDedupedCount: mergeResult.dedupedCount,
+      lastTotalCount: mergeResult.totalCount
+    });
+  }
+
+  function replayCachedPayload(requestId, watch) {
+    const cached = cachedPayloadsBySellerId.get(watch.sellerId);
+
+    if (!cached?.payload) {
+      return;
+    }
+
+    watch.payload = cached.payload;
+    watch.pageLikeIndex = cached.pageLikeIndex;
+    watch.lastMergedCount = cached.lastMergedCount;
+    watch.lastDedupedCount = cached.lastDedupedCount;
+    watch.lastTotalCount = cached.lastTotalCount;
+
+    log("cached_payload_replayed", {
+      sellerId: watch.sellerId,
+      totalCount: watch.lastTotalCount
+    });
+    postWatchPayload(requestId, watch, true);
+    scheduleWatchFlush(requestId);
+  }
+
   function scheduleWatchFlush(requestId) {
     const watch = watches.get(requestId);
 
@@ -300,7 +409,183 @@
     }, WATCH_SETTLE_MS);
   }
 
-  async function handleMatchedPayload(url, payload) {
+  function buildDirectFetchUrl(sellerId, status, maxPagerId) {
+    const cachedUrl = latestGetItemsUrlsBySellerId.get(sellerId);
+    const url = cachedUrl
+      ? new URL(cachedUrl.toString())
+      : new URL("https://api.mercari.jp/items/get_items");
+
+    url.searchParams.set("seller_id", sellerId);
+    url.searchParams.set("limit", String(DIRECT_FETCH_PAGE_LIMIT));
+
+    if (status) {
+      url.searchParams.set("status", status);
+    } else {
+      url.searchParams.delete("status");
+    }
+
+    if (maxPagerId) {
+      url.searchParams.set("max_pager_id", maxPagerId);
+    } else {
+      url.searchParams.delete("max_pager_id");
+    }
+
+    return url;
+  }
+
+  function buildDirectFetchHeaders(sellerId) {
+    const snapshot = latestGetItemsRequestSnapshotsBySellerId.get(sellerId);
+    const headers = new Headers();
+
+    if (snapshot) {
+      for (const [key, value] of Object.entries(snapshot.headers)) {
+        try {
+          headers.set(key, value);
+        } catch (_error) {
+          // Skip headers that the browser does not allow content scripts/page scripts to set.
+        }
+      }
+    }
+
+    if (!headers.has("accept")) {
+      headers.set("accept", "application/json");
+    }
+
+    if (!headers.has("x-platform")) {
+      headers.set("x-platform", "web");
+    }
+
+    return headers;
+  }
+
+  function getDirectFetchCredentials(sellerId) {
+    return latestGetItemsRequestSnapshotsBySellerId.get(sellerId)?.credentials ?? "include";
+  }
+
+  async function fetchDirectSellerItems(requestId, watch) {
+    if (directFetchRequestIds.has(requestId)) {
+      return;
+    }
+
+    directFetchRequestIds.add(requestId);
+
+    try {
+      log("direct_fetch_started", {
+        sellerId: watch.sellerId,
+        status: DIRECT_FETCH_STATUS,
+        fallbackStatus: DIRECT_FETCH_FALLBACK_STATUS,
+        limit: DIRECT_FETCH_PAGE_LIMIT
+      });
+
+      let totalFetched = 0;
+
+      const fetchPages = async (status) => {
+        let fetchedCount = 0;
+        let maxPagerId = null;
+
+        for (let pageIndex = 0; pageIndex < DIRECT_FETCH_MAX_PAGES_PER_STATUS && totalFetched < DIRECT_FETCH_MAX_ITEMS; pageIndex += 1) {
+          const url = buildDirectFetchUrl(watch.sellerId, status, maxPagerId);
+          const response = await originalFetch(url.toString(), {
+            method: "GET",
+            headers: buildDirectFetchHeaders(watch.sellerId),
+            credentials: getDirectFetchCredentials(watch.sellerId)
+          });
+
+          if (!response.ok) {
+            log("direct_fetch_failed", {
+              sellerId: watch.sellerId,
+              status,
+              httpStatus: response.status
+            });
+            return { fetchedCount, failed: true };
+          }
+
+          let payload;
+
+          try {
+            payload = attachRequestStatusToPayload(await response.json(), status);
+          } catch (error) {
+            log("direct_fetch_failed", {
+              sellerId: watch.sellerId,
+              status,
+              jsonError: error instanceof Error ? error.message : String(error)
+            });
+            return { fetchedCount, failed: true };
+          }
+
+          const items = getPayloadData(payload);
+          const hasNext = getPayloadHasNext(payload);
+          const nextPagerId = getNextPagerId(payload, items);
+
+          log("direct_fetch_page_received", {
+            sellerId: watch.sellerId,
+            status,
+            pageIndex: pageIndex + 1,
+            itemCount: items.length,
+            hasNext,
+            hasNextPagerId: Boolean(nextPagerId)
+          });
+
+          if (items.length === 0) {
+            break;
+          }
+
+          await handleMatchedPayload(url, payload, { notify: false });
+          totalFetched += items.length;
+          fetchedCount += items.length;
+          maxPagerId = nextPagerId;
+
+          if (hasNext !== true || !maxPagerId) {
+            break;
+          }
+        }
+
+        return { fetchedCount, failed: false };
+      };
+
+      const primaryResult = await fetchPages(DIRECT_FETCH_STATUS);
+
+      if (primaryResult.failed || primaryResult.fetchedCount === 0) {
+        await fetchPages(DIRECT_FETCH_FALLBACK_STATUS);
+      }
+
+      log("direct_fetch_completed", {
+        sellerId: watch.sellerId,
+        totalFetched
+      });
+      if (!watch.payload) {
+        watches.delete(requestId);
+        postToContent(requestId, {
+          ok: false,
+          sellerId: watch.sellerId,
+          error: "direct_fetch_empty"
+        });
+        return;
+      }
+
+      flushWatch(requestId);
+    } catch (error) {
+      log("direct_fetch_error", {
+        sellerId: watch.sellerId,
+        message: error instanceof Error ? error.message : String(error)
+      });
+
+      if (!watch.payload) {
+        watches.delete(requestId);
+        postToContent(requestId, {
+          ok: false,
+          sellerId: watch.sellerId,
+          error: "direct_fetch_error"
+        });
+      } else {
+        flushWatch(requestId);
+      }
+    } finally {
+      directFetchRequestIds.delete(requestId);
+    }
+  }
+
+  async function handleMatchedPayload(url, payload, options = {}) {
     const detectedSellerIdRaw = url.searchParams.get("seller_id");
     const currentProfileSellerIdRaw = getCurrentProfileSellerId();
     const sellerId = normalizeSellerId(detectedSellerIdRaw);
@@ -329,6 +614,14 @@
       return;
     }
 
+    const requestStatus = url.searchParams.get("status");
+    const payloadWithRequestStatus = attachRequestStatusToPayload(payload, requestStatus);
+    latestGetItemsUrlsBySellerId.set(sellerId, url);
+    if (options.requestSnapshot) {
+      latestGetItemsRequestSnapshotsBySellerId.set(sellerId, options.requestSnapshot);
+    }
+    cacheSellerPayload(sellerId, payloadWithRequestStatus);
+
     const matchingWatches = Array.from(watches.entries()).filter(([, watch]) => normalizeSellerId(watch.sellerId) === sellerId);
     log("seller_id_compare_result", {
       currentProfileMatches: Boolean(currentProfileSellerId && sellerId === currentProfileSellerId),
@@ -350,11 +643,15 @@
       return;
     }
 
-    const items = getPayloadData(payload);
-    log("pager_diagnostic", buildPagerDiagnostic(payload, items));
+    const items = getPayloadData(payloadWithRequestStatus);
+    log("pager_diagnostic", buildPagerDiagnostic(payloadWithRequestStatus, items));
 
     for (const [requestId, watch] of matchingWatches) {
-      const mergeResult = mergePayloadIntoWatch(watch.payload, payload);
+      if (watch.directFetch && options.notify !== false) {
+        continue;
+      }
+
+      const mergeResult = mergePayloadIntoWatch(watch.payload, payloadWithRequestStatus);
       const beforePageLikeIndex = watch.pageLikeIndex ?? 0;
       watch.payload = mergeResult.payload;
       log("page_like_index_before_increment", {
@@ -387,12 +684,14 @@
         totalCount: mergeResult.totalCount
       });
 
-      postWatchPayload(requestId, watch, true);
-      scheduleWatchFlush(requestId);
+      if (options.notify !== false) {
+        postWatchPayload(requestId, watch, true);
+        scheduleWatchFlush(requestId);
+      }
     }
   }
 
-  function inspectFetchResponse(rawUrl, response) {
+  function inspectFetchResponse(rawUrl, response, requestSnapshot) {
     const url = parseGetItemsUrl(rawUrl);
 
     if (!url) {
@@ -401,7 +700,7 @@
 
     response.clone().json()
       .then((payload) => {
-        handleMatchedPayload(url, payload).catch(() => {
+        handleMatchedPayload(url, payload, { requestSnapshot }).catch(() => {
           // Ignore page-hook processing failures in this PoC.
         });
       })
@@ -413,8 +712,9 @@
   function installFetchHook() {
     window.fetch = async function furimaneResearchFetchHook(input, init) {
       const rawUrl = getRequestUrl(input);
+      const requestSnapshot = getFetchRequestSnapshot(input, init);
       const response = await originalFetch(input, init);
-      inspectFetchResponse(rawUrl, response);
+      inspectFetchResponse(rawUrl, response, requestSnapshot);
       return response;
     };
   }
@@ -423,7 +723,14 @@
     OriginalXhr.prototype.open = function furimaneResearchXhrOpen(method, url) {
       this.__furimaneResearchUrl = typeof url === "string" ? url : url?.toString?.() ?? null;
       this.__furimaneResearchMethod = method;
+      this.__furimaneResearchHeaders = {};
       return originalXhrOpen.apply(this, arguments);
+    };
+
+    OriginalXhr.prototype.setRequestHeader = function furimaneResearchXhrSetRequestHeader(name, value) {
+      this.__furimaneResearchHeaders = this.__furimaneResearchHeaders ?? {};
+      this.__furimaneResearchHeaders[name] = value;
+      return originalXhrSetRequestHeader.apply(this, arguments);
     };
 
     OriginalXhr.prototype.send = function furimaneResearchXhrSend() {
@@ -437,7 +744,12 @@
         try {
           const payload = JSON.parse(this.responseText);
 
-          handleMatchedPayload(url, payload).catch(() => {
+          handleMatchedPayload(url, payload, {
+            requestSnapshot: {
+              headers: this.__furimaneResearchHeaders ?? {},
+              credentials: "include"
+            }
+          }).catch(() => {
             // Ignore page-hook processing failures in this PoC.
           });
         } catch (_error) {
@@ -467,14 +779,28 @@
     const existingWatch = watches.get(data.requestId);
 
     clearWatchSettleTimeout(existingWatch);
-    watches.set(data.requestId, {
+    deleteOtherWatchesForSeller(data.sellerId, data.requestId);
+    const watch = {
       sellerId: data.sellerId,
+      directFetch: data.directFetch !== false,
       payload: null,
       pageLikeIndex: 0,
       lastMergedCount: 0,
       lastDedupedCount: 0,
       lastTotalCount: 0,
       settleTimeoutId: null
-    });
+    };
+
+    watches.set(data.requestId, watch);
+    if (data.directFetch === false) {
+      replayCachedPayload(data.requestId, watch);
+    } else {
+      fetchDirectSellerItems(data.requestId, watch).catch((error) => {
+        log("direct_fetch_unhandled_error", {
+          sellerId: watch.sellerId,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      });
+    }
   });
 })();

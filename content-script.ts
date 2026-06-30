@@ -66,9 +66,41 @@
     updatedAt: Date | null;
   };
 
+  type ListingDateCacheEntry = {
+    savedAt: number;
+    data: ListingDateInfo;
+  };
+
+  type SellerInfo = {
+    itemId: string;
+    sellerId: string | null;
+    name: string | null;
+    avatarUrl: string | null;
+    profileUrl: string | null;
+    ratingScore: number | null;
+    reviewCount: number | null;
+    goodCount: number | null;
+    normalCount: number | null;
+    badCount: number | null;
+    verified: boolean | null;
+    levelText: string | null;
+  };
+
+  type SellerInfoCacheEntry = {
+    savedAt: number;
+    data: SellerInfo | null;
+  };
+
+  type ListingSellerTarget = {
+    itemId: string;
+    itemUrl: string;
+    card: HTMLElement;
+  };
+
   type RuntimeResponse = {
     success?: boolean;
     message?: string;
+    data?: unknown;
   };
 
   type ChromeLike = {
@@ -100,12 +132,25 @@
   const TOOLBAR_KIND_ATTRIBUTE = "data-furimanager-action-kind";
   const TOOLBAR_BUTTONS_ATTRIBUTE = "data-furimanager-action-buttons";
   const LISTING_DATE_PANEL_ATTRIBUTE = "data-furimanager-listing-date-panel";
+  const LISTING_SELLER_PANEL_ATTRIBUTE = "data-furimanager-listing-seller-panel";
+  const LISTING_SELLER_PENDING_ATTRIBUTE = "data-furimanager-listing-seller-pending";
   const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
   const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
   const PRODUCT_PAGE_RELIST_PENDING_KEY = "furimanager_product_page_relist_pending";
+  const MERCARI_ITEM_DETAIL_MESSAGE_TYPE = "FETCH_MERCARI_ITEM_DETAIL";
+  const MERCARI_USER_PROFILE_MESSAGE_TYPE = "FETCH_MERCARI_USER_PROFILE";
+  const LISTING_DATE_API_CACHE_MS = 5 * 60 * 1000;
+  const LISTING_DATE_API_EMPTY_CACHE_MS = 10 * 1000;
+  const LISTING_SELLER_API_CACHE_MS = 10 * 60 * 1000;
+  const LISTING_SELLER_API_EMPTY_CACHE_MS = 30 * 1000;
+  const LISTING_SELLER_MAX_ITEMS_PER_PASS = 24;
   const COPY_LISTING_BUTTON_WAIT_TIMEOUT_MS = 10000;
   const COPY_LISTING_BUTTON_WAIT_INTERVAL_MS = 300;
   const OBSERVER_DEBOUNCE_MS = 250;
+  const listingDateApiCache = new Map<string, ListingDateCacheEntry>();
+  const listingDateApiRequests = new Map<string, Promise<ListingDateInfo>>();
+  const listingSellerApiCache = new Map<string, SellerInfoCacheEntry>();
+  const listingSellerApiRequests = new Map<string, Promise<SellerInfo | null>>();
 
   const PRODUCT_PATH_PATTERN = /^\/item\//;
   const HISTORY_PATH_MARKERS = [
@@ -380,18 +425,18 @@
       .furimanager-listing-date-panel {
         margin-top: 14px;
         padding: 12px 14px;
-        border: 1px solid rgba(124, 58, 237, 0.18);
-        border-left: 4px solid #7c3aed;
+        border: 1px solid rgba(236, 72, 153, 0.24);
+        border-left: 4px solid #ec4899;
         border-radius: 12px;
-        background: linear-gradient(135deg, rgba(124, 58, 237, 0.08), rgba(249, 115, 22, 0.06));
-        color: #333333;
+        background: linear-gradient(135deg, rgba(236, 72, 153, 0.10), rgba(225, 29, 72, 0.06));
+        color: #be123c;
         font-size: 13px;
         line-height: 1.45;
       }
 
       .furimanager-listing-date-panel__title {
         margin-bottom: 8px;
-        color: #5b21b6;
+        color: #be123c;
         font-size: 12px;
         font-weight: 700;
       }
@@ -405,7 +450,7 @@
       }
 
       .furimanager-listing-date-panel__label {
-        color: #555555;
+        color: #be123c;
         font-weight: 700;
       }
 
@@ -415,7 +460,7 @@
 
       .furimanager-listing-date-panel__absolute {
         display: block;
-        color: #333333;
+        color: #e11d48;
         font-weight: 600;
       }
 
@@ -425,6 +470,155 @@
         color: #ec4899;
         font-size: 12px;
         font-weight: 700;
+      }
+
+      .furimanager-listing-seller-panel {
+        box-sizing: border-box;
+        width: 100%;
+        margin-top: 7px;
+        padding: 0 2px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: #222222;
+        font-size: 12px;
+        line-height: 1.2;
+      }
+
+      .furimanager-listing-seller-panel--loading,
+      .furimanager-listing-seller-panel--empty {
+        min-height: 40px;
+        color: #6b7280;
+        font-weight: 700;
+      }
+
+      .furimanager-listing-seller-panel__content {
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+        min-width: 0;
+        min-height: 44px;
+      }
+
+      .furimanager-listing-seller-panel__avatar,
+      .furimanager-listing-seller-panel__avatar-placeholder {
+        width: 38px;
+        height: 38px;
+        flex: 0 0 38px;
+        border-radius: 999px;
+        object-fit: cover;
+        background: #e5e7eb;
+      }
+
+      .furimanager-listing-seller-panel__avatar-placeholder {
+        display: flex;
+        justify-content: center;
+        color: #9ca3af;
+        font-size: 17px;
+        font-weight: 800;
+        line-height: 38px;
+      }
+
+      .furimanager-listing-seller-panel__body {
+        display: grid;
+        gap: 1px;
+        min-width: 0;
+        padding-top: 1px;
+      }
+
+      .furimanager-listing-seller-panel__name {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-width: 0;
+        color: #222222;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .furimanager-listing-seller-panel__name-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .furimanager-listing-seller-panel__rating {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        min-width: 0;
+        white-space: nowrap;
+      }
+
+      .furimanager-listing-seller-panel__stars {
+        color: #fbbf24;
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: 0;
+        line-height: 1;
+      }
+
+      .furimanager-listing-seller-panel__review-count {
+        overflow: hidden;
+        color: #1a73e8;
+        font-size: 12px;
+        font-weight: 800;
+        text-overflow: ellipsis;
+      }
+
+      .furimanager-listing-seller-panel__breakdown {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+      }
+
+      .furimanager-listing-seller-panel__breakdown-item,
+      .furimanager-listing-seller-panel__verified {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        min-width: 0;
+        color: #333333;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.15;
+        white-space: nowrap;
+      }
+
+      .furimanager-listing-seller-panel__breakdown-icon {
+        width: 13px;
+        height: 13px;
+        flex: 0 0 13px;
+        color: currentColor;
+      }
+
+      .furimanager-listing-seller-panel__breakdown-icon--good {
+        color: #ff4f91;
+      }
+
+      .furimanager-listing-seller-panel__breakdown-icon--bad {
+        color: #60a5fa;
+      }
+
+      .furimanager-listing-seller-panel__verified {
+        flex: 0 0 auto;
+        color: #10b981;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .furimanager-listing-seller-panel__verified-icon {
+        width: 10px;
+        height: 10px;
+        flex: 0 0 10px;
+        border-radius: 3px 3px 5px 5px;
+        background: #10b981;
+        clip-path: polygon(50% 0, 94% 18%, 82% 82%, 50% 100%, 18% 82%, 6% 18%);
       }
 
       @media (max-width: 900px) {
@@ -437,6 +631,24 @@
 
         .furimanager-listing-date-panel__row {
           grid-template-columns: 76px minmax(0, 1fr);
+        }
+
+        .furimanager-listing-seller-panel {
+          margin-top: 6px;
+          padding: 0 1px;
+          font-size: 11px;
+        }
+
+        .furimanager-listing-seller-panel__content {
+          gap: 6px;
+        }
+
+        .furimanager-listing-seller-panel__avatar,
+        .furimanager-listing-seller-panel__avatar-placeholder {
+          width: 34px;
+          height: 34px;
+          flex-basis: 34px;
+          line-height: 34px;
         }
       }
 
@@ -478,16 +690,20 @@
 
     const pageKind = detectPageKind();
 
-    cleanupToolbarsForPageKind(pageKind);
+    const handledListingSellers = ensureSellerPanelsForListingPage(pageKind);
+
+    cleanupToolbarsForPageKind(pageKind, handledListingSellers);
 
     if (pageKind === "unknown" || pageKind === "browsingHistory") {
-      clearScheduledInjections();
+      if (!handledListingSellers) {
+        clearScheduledInjections();
+      }
       return;
     }
 
     if (pageKind === "ownProduct" || pageKind === "otherProduct") {
       injectStyles();
-      ensureListingDatePanel();
+      void ensureListingDatePanel();
     }
 
     const buttonDefinitions = getButtonDefinitions(pageKind);
@@ -519,18 +735,474 @@
     return [];
   }
 
-  function ensureListingDatePanel(): void {
+  function ensureSellerPanelsForListingPage(pageKind: MercariPageKind): boolean {
+    if (!isMercariListingPage(pageKind)) {
+      return false;
+    }
+
+    const targets = getListingSellerTargets();
+
+    if (targets.length === 0) {
+      return false;
+    }
+
+    injectStyles();
+
+    const pendingTargets = targets.filter((target) => {
+      const existingPanel = target.card.querySelector(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`);
+      return !existingPanel && target.card.getAttribute(LISTING_SELLER_PENDING_ATTRIBUTE) !== target.itemId;
+    });
+
+    // 一覧ページは件数が多いので、未処理カードだけを少しずつ取得する。
+    pendingTargets.slice(0, LISTING_SELLER_MAX_ITEMS_PER_PASS).forEach((target) => {
+      ensureSellerPanel(target);
+    });
+
+    return true;
+  }
+
+  function isMercariListingPage(pageKind: MercariPageKind): boolean {
+    if (pageKind !== "unknown") {
+      return false;
+    }
+
+    const path = window.location.pathname;
+
+    if (PRODUCT_PATH_PATTERN.test(path) || path.startsWith("/mypage") || path.startsWith("/sell") || path.startsWith("/user/profile")) {
+      return false;
+    }
+
+    return document.querySelectorAll('a[href*="/item/m"]').length >= 3;
+  }
+
+  function getListingSellerTargets(): ListingSellerTarget[] {
+    const seenItemIds = new Set<string>();
+    const targets: ListingSellerTarget[] = [];
+
+    safeQuerySelectorAll(document, 'a[href*="/item/m"]').forEach((element) => {
+      const link = element instanceof HTMLAnchorElement ? element : null;
+      const itemUrl = normalizeItemUrl(link?.href ?? null);
+      const itemId = extractMercariItemId(itemUrl);
+
+      if (!link || !itemUrl || !itemId || seenItemIds.has(itemId)) {
+        return;
+      }
+
+      const card = findListingItemCard(link);
+
+      if (!card) {
+        return;
+      }
+
+      seenItemIds.add(itemId);
+      targets.push({ itemId, itemUrl, card });
+    });
+
+    return targets;
+  }
+
+  function findListingItemCard(link: HTMLAnchorElement): HTMLElement | null {
+    const testIdCard = link.closest('[data-testid="item-cell"]');
+
+    if (testIdCard instanceof HTMLElement) {
+      return testIdCard;
+    }
+
+    const semanticCard = link.closest("li, article");
+
+    if (semanticCard instanceof HTMLElement && isLikelyListingItemCard(semanticCard)) {
+      return semanticCard;
+    }
+
+    let current = link.parentElement;
+
+    for (let depth = 0; current && depth < 6; depth += 1) {
+      if (isLikelyListingItemCard(current)) {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return null;
+  }
+
+  function isLikelyListingItemCard(element: HTMLElement): boolean {
+    const rect = element.getBoundingClientRect();
+    const itemLinkCount = new Set(
+      safeQuerySelectorAll(element, 'a[href*="/item/m"]')
+        .map((link) => link instanceof HTMLAnchorElement ? extractMercariItemId(link.href) : null)
+        .filter(Boolean)
+    ).size;
+
+    return itemLinkCount === 1 && rect.width >= 96 && rect.width <= 360 && rect.height >= 120 && rect.height <= 620;
+  }
+
+  function ensureSellerPanel(target: ListingSellerTarget): void {
+    const existingPanel = target.card.querySelector(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`);
+
+    if (existingPanel?.getAttribute("data-furimanager-item-id") === target.itemId) {
+      return;
+    }
+
+    if (target.card.getAttribute(LISTING_SELLER_PENDING_ATTRIBUTE) === target.itemId) {
+      return;
+    }
+
+    existingPanel?.remove();
+    target.card.setAttribute(LISTING_SELLER_PENDING_ATTRIBUTE, target.itemId);
+    renderSellerPanel(target, null, "loading");
+
+    void getSellerInfoForListingItem(target.itemId)
+      .then((sellerInfo) => {
+        if (target.card.getAttribute(LISTING_SELLER_PENDING_ATTRIBUTE) !== target.itemId) {
+          return;
+        }
+
+        target.card.removeAttribute(LISTING_SELLER_PENDING_ATTRIBUTE);
+        renderSellerPanel(target, sellerInfo, sellerInfo ? "ready" : "empty");
+      })
+      .catch((error) => {
+        console.debug("[furimanager] listing seller info skipped", error);
+
+        if (target.card.getAttribute(LISTING_SELLER_PENDING_ATTRIBUTE) !== target.itemId) {
+          return;
+        }
+
+        target.card.removeAttribute(LISTING_SELLER_PENDING_ATTRIBUTE);
+        renderSellerPanel(target, null, "empty");
+      });
+  }
+
+  async function getSellerInfoForListingItem(itemId: string): Promise<SellerInfo | null> {
+    const cached = listingSellerApiCache.get(itemId);
+    const cacheMs = cached && cached.data ? LISTING_SELLER_API_CACHE_MS : LISTING_SELLER_API_EMPTY_CACHE_MS;
+
+    if (cached && Date.now() - cached.savedAt < cacheMs) {
+      return cached.data;
+    }
+
+    const runningRequest = listingSellerApiRequests.get(itemId);
+
+    if (runningRequest) {
+      return runningRequest;
+    }
+
+    const request = requestMercariItemDetail(itemId)
+      .then(async (payload) => {
+        const sellerInfo = extractSellerInfoFromApiPayload(payload, itemId);
+        const verifiedSellerInfo = await supplementSellerVerifiedFromProfile(sellerInfo);
+        listingSellerApiCache.set(itemId, { savedAt: Date.now(), data: verifiedSellerInfo });
+        return verifiedSellerInfo;
+      })
+      .catch((error) => {
+        console.debug("[furimanager] mercari seller fetch skipped", error);
+        listingSellerApiCache.set(itemId, { savedAt: Date.now(), data: null });
+        return null;
+      })
+      .finally(() => {
+        listingSellerApiRequests.delete(itemId);
+      });
+
+    listingSellerApiRequests.set(itemId, request);
+    return request;
+  }
+
+  async function supplementSellerVerifiedFromProfile(sellerInfo: SellerInfo | null): Promise<SellerInfo | null> {
+    if (!sellerInfo?.sellerId || sellerInfo.verified === true) {
+      return sellerInfo;
+    }
+
+    const payload = await requestMercariUserProfile(sellerInfo.sellerId);
+    const root = toRecord(payload);
+    const profile = toRecord(root?.data) ?? root;
+    const verified = profile ? extractSellerVerifiedValue(profile) : null;
+
+    return verified === true ? { ...sellerInfo, verified: true } : sellerInfo;
+  }
+
+  function extractSellerInfoFromApiPayload(payload: unknown, itemId: string): SellerInfo | null {
+    const root = toRecord(payload);
+    const item = toRecord(root?.data) ?? root;
+    const seller = getSellerRecord(item);
+
+    if (!seller) {
+      return null;
+    }
+
+    const sellerId = extractStringValue(seller, ["id", "userId", "user_id", "sellerId", "seller_id"]);
+    const name = extractStringValue(seller, ["name", "nickname", "displayName", "display_name"]);
+    const avatarUrl = extractUrlValue(seller, ["photoThumbnailUrl", "photo_thumbnail_url", "photoUrl", "photo_url", "imageUrl", "image_url", "avatarUrl", "avatar_url", "thumbnail"]);
+    const reviewCount = extractNumberValue(seller, ["numRatings", "num_ratings", "ratingCount", "rating_count", "reviewCount", "review_count", "reviewsCount", "reviews_count"]);
+    const goodCount = extractNumberValue(seller, ["good", "goodCount", "good_count", "ratingsGood", "ratings_good"]);
+    const normalCount = extractNumberValue(seller, ["normal", "normalCount", "normal_count", "ratingsNormal", "ratings_normal"]);
+    const badCount = extractNumberValue(seller, ["bad", "badCount", "bad_count", "ratingsBad", "ratings_bad"]);
+
+    const verified = extractSellerVerifiedValue(seller) ?? extractSellerVerifiedValue(item);
+
+    return {
+      itemId,
+      sellerId,
+      name,
+      avatarUrl,
+      profileUrl: sellerId ? `https://jp.mercari.com/user/profile/${sellerId}` : null,
+      ratingScore: extractNumberValue(seller, ["rating", "ratingScore", "rating_score", "score", "star"]),
+      reviewCount: reviewCount ?? sumKnownCounts([goodCount, normalCount, badCount]),
+      goodCount,
+      normalCount,
+      badCount,
+      verified,
+      levelText: extractSellerLevelText(seller),
+    };
+  }
+
+  function getSellerRecord(item: Record<string, unknown> | null): Record<string, unknown> | null {
+    if (!item) {
+      return null;
+    }
+
+    for (const key of ["seller", "sellerInfo", "seller_info", "owner", "user"]) {
+      const seller = toRecord(item[key]);
+
+      if (seller) {
+        return seller;
+      }
+    }
+
+    const nestedSeller = findJsonRecordByKey(item, ["seller", "sellerInfo", "seller_info"], 0);
+    return nestedSeller;
+  }
+
+  function findJsonRecordByKey(source: unknown, keys: string[], depth: number): Record<string, unknown> | null {
+    if (depth > 4 || source === null || source === undefined || typeof source !== "object") {
+      return null;
+    }
+
+    if (!Array.isArray(source)) {
+      const objectValue = source as Record<string, unknown>;
+
+      for (const key of keys) {
+        const matched = toRecord(objectValue[key]);
+
+        if (matched) {
+          return matched;
+        }
+      }
+    }
+
+    const children = Array.isArray(source) ? source : Object.values(source as Record<string, unknown>);
+
+    for (const child of children) {
+      const matched = findJsonRecordByKey(child, keys, depth + 1);
+
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return null;
+  }
+
+  function renderSellerPanel(target: ListingSellerTarget, sellerInfo: SellerInfo | null, state: "loading" | "ready" | "empty"): void {
+    const existingPanel = target.card.querySelector(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`);
+    const panel = existingPanel instanceof HTMLElement ? existingPanel : document.createElement("div");
+    panel.className = `furimanager-listing-seller-panel furimanager-listing-seller-panel--${state}`;
+    panel.setAttribute(LISTING_SELLER_PANEL_ATTRIBUTE, "true");
+    panel.setAttribute("data-furimanager-item-id", target.itemId);
+    panel.innerHTML = "";
+
+    if (state === "loading") {
+      panel.textContent = "セラー情報を取得中";
+    } else if (!sellerInfo) {
+      panel.textContent = "セラー情報なし";
+    } else {
+      panel.appendChild(createSellerPanelContent(sellerInfo));
+    }
+
+    if (!existingPanel) {
+      target.card.appendChild(panel);
+    }
+  }
+
+  function createSellerPanelContent(sellerInfo: SellerInfo): HTMLElement {
+    const fragment = document.createElement("div");
+    fragment.className = "furimanager-listing-seller-panel__content";
+
+    if (sellerInfo.avatarUrl) {
+      const avatar = document.createElement("img");
+      avatar.className = "furimanager-listing-seller-panel__avatar";
+      avatar.src = sellerInfo.avatarUrl;
+      avatar.alt = sellerInfo.name ? `${sellerInfo.name}の画像` : "セラー画像";
+      avatar.loading = "lazy";
+      fragment.appendChild(avatar);
+    } else {
+      const avatar = document.createElement("div");
+      avatar.className = "furimanager-listing-seller-panel__avatar-placeholder";
+      avatar.textContent = sellerInfo.name ? sellerInfo.name.slice(0, 1).toUpperCase() : "";
+      fragment.appendChild(avatar);
+    }
+
+    const body = document.createElement("div");
+    body.className = "furimanager-listing-seller-panel__body";
+    body.appendChild(createSellerNameRow(sellerInfo));
+    body.appendChild(createSellerRatingRow(sellerInfo));
+
+    const breakdown = createSellerBreakdownRow(sellerInfo);
+
+    if (breakdown) {
+      body.appendChild(breakdown);
+    }
+
+    if (sellerInfo.verified === true) {
+      body.appendChild(createSellerVerifiedBadge());
+    }
+
+    fragment.appendChild(body);
+    return fragment;
+  }
+
+  function createSellerNameRow(sellerInfo: SellerInfo): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "furimanager-listing-seller-panel__name";
+
+    const name = document.createElement("span");
+    name.className = "furimanager-listing-seller-panel__name-text";
+    name.textContent = sellerInfo.name ?? "セラー名なし";
+    row.appendChild(name);
+
+    return row;
+  }
+
+  function createSellerRatingRow(sellerInfo: SellerInfo): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "furimanager-listing-seller-panel__rating";
+
+    const stars = document.createElement("span");
+    stars.className = "furimanager-listing-seller-panel__stars";
+    stars.textContent = "★★★★★";
+
+    const reviewCount = document.createElement("span");
+    reviewCount.className = "furimanager-listing-seller-panel__review-count";
+    reviewCount.textContent = String(sellerInfo.reviewCount ?? sellerInfo.ratingScore ?? 0);
+
+    row.append(stars, reviewCount);
+    return row;
+  }
+
+  function createSellerBreakdownRow(sellerInfo: SellerInfo): HTMLElement | null {
+    const counts = [
+      { type: "good", value: sellerInfo.goodCount },
+      { type: "bad", value: sellerInfo.badCount },
+    ].filter((item) => item.value !== null);
+
+    if (counts.length === 0) {
+      return null;
+    }
+
+    const row = document.createElement("div");
+    row.className = "furimanager-listing-seller-panel__breakdown";
+
+    counts.forEach((item) => {
+      const element = document.createElement("span");
+      element.className = "furimanager-listing-seller-panel__breakdown-item";
+
+      const icon = createSellerFaceIcon(item.type);
+      icon.setAttribute("class", `furimanager-listing-seller-panel__breakdown-icon furimanager-listing-seller-panel__breakdown-icon--${item.type}`);
+
+      const count = document.createElement("span");
+      count.textContent = String(item.value);
+
+      element.append(icon, count);
+      row.appendChild(element);
+    });
+
+    return row;
+  }
+
+  function createSellerFaceIcon(type: string): SVGSVGElement {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2.4");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", "12");
+    circle.setAttribute("r", "10");
+    svg.appendChild(circle);
+
+    const leftEye = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    leftEye.setAttribute("d", "M9 9h.01");
+    svg.appendChild(leftEye);
+
+    const rightEye = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    rightEye.setAttribute("d", "M15 9h.01");
+    svg.appendChild(rightEye);
+
+    const mouth = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    mouth.setAttribute("d", type === "good" ? "M8 14s1.5 2 4 2 4-2 4-2" : "M16 16s-1.5-2-4-2-4 2-4 2");
+    svg.appendChild(mouth);
+
+    return svg;
+  }
+
+  function createSellerVerifiedBadge(): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "furimanager-listing-seller-panel__verified";
+
+    const icon = document.createElement("span");
+    icon.className = "furimanager-listing-seller-panel__verified-icon";
+
+    const text = document.createElement("span");
+    text.textContent = "本人確認済";
+
+    row.append(icon, text);
+    return row;
+  }
+
+  async function ensureListingDatePanel(): Promise<void> {
     if (!PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
       return;
     }
 
-    const dateInfo = extractListingDateInfo(document);
+    const itemId = extractMercariItemId(window.location.href);
     const existingPanel = document.querySelector(`[${LISTING_DATE_PANEL_ATTRIBUTE}="true"]`);
 
-    if (!dateInfo.listedAt && !dateInfo.updatedAt) {
+    if (!itemId) {
       existingPanel?.remove();
       return;
     }
+
+    const dateInfo = extractListingDateInfo(document);
+
+    if (hasListingDateInfo(dateInfo)) {
+      renderListingDatePanel(dateInfo, itemId);
+    } else if (existingPanel?.getAttribute("data-furimanager-item-id") !== itemId) {
+      existingPanel?.remove();
+    }
+
+    const apiDateInfo = await getListingDateInfoFromMercariApi(itemId);
+
+    if (extractMercariItemId(window.location.href) !== itemId) {
+      return;
+    }
+
+    const latestDateInfo = mergeListingDateInfo(apiDateInfo, dateInfo);
+
+    if (!hasListingDateInfo(latestDateInfo)) {
+      existingPanel?.remove();
+      return;
+    }
+
+    renderListingDatePanel(latestDateInfo, itemId);
+  }
+
+  function renderListingDatePanel(dateInfo: ListingDateInfo, itemId: string): void {
+    const existingPanel = document.querySelector(`[${LISTING_DATE_PANEL_ATTRIBUTE}="true"]`);
 
     const mount = findListingDatePanelMount();
 
@@ -541,6 +1213,7 @@
     const panel = existingPanel instanceof HTMLElement ? existingPanel : document.createElement("div");
     panel.className = "furimanager-listing-date-panel";
     panel.setAttribute(LISTING_DATE_PANEL_ATTRIBUTE, "true");
+    panel.setAttribute("data-furimanager-item-id", itemId);
     panel.innerHTML = "";
 
     const title = document.createElement("div");
@@ -556,9 +1229,329 @@
       panel.appendChild(createListingDateRow("更新日時", dateInfo.updatedAt));
     }
 
+    const policyCard = findListingDatePanelAnchor();
+
+    if (policyCard?.parentElement) {
+      policyCard.parentElement.insertBefore(panel, policyCard);
+      return;
+    }
+
     if (panel.parentElement !== mount) {
       mount.appendChild(panel);
     }
+  }
+
+  function hasListingDateInfo(dateInfo: ListingDateInfo): boolean {
+    return dateInfo.listedAt !== null || dateInfo.updatedAt !== null;
+  }
+
+  function mergeListingDateInfo(primary: ListingDateInfo, fallback: ListingDateInfo): ListingDateInfo {
+    return {
+      listedAt: primary.listedAt ?? fallback.listedAt,
+      updatedAt: primary.updatedAt ?? fallback.updatedAt,
+    };
+  }
+
+  async function getListingDateInfoFromMercariApi(itemId: string): Promise<ListingDateInfo> {
+    const cached = listingDateApiCache.get(itemId);
+
+    const cacheMs = cached && hasListingDateInfo(cached.data) ? LISTING_DATE_API_CACHE_MS : LISTING_DATE_API_EMPTY_CACHE_MS;
+
+    if (cached && Date.now() - cached.savedAt < cacheMs) {
+      return cached.data;
+    }
+
+    const runningRequest = listingDateApiRequests.get(itemId);
+
+    if (runningRequest) {
+      return runningRequest;
+    }
+
+    const request = requestMercariItemDetail(itemId)
+      .then((payload) => {
+        const dateInfo = extractListingDateInfoFromApiPayload(payload);
+        listingDateApiCache.set(itemId, { savedAt: Date.now(), data: dateInfo });
+        return dateInfo;
+      })
+      .catch((error) => {
+        console.debug("[furimanager] mercari item date fetch skipped", error);
+        return { listedAt: null, updatedAt: null };
+      })
+      .finally(() => {
+        listingDateApiRequests.delete(itemId);
+      });
+
+    listingDateApiRequests.set(itemId, request);
+    return request;
+  }
+
+  function requestMercariItemDetail(itemId: string): Promise<unknown> {
+    return new Promise((resolve) => {
+      if (!chromeApi?.runtime?.sendMessage) {
+        resolve(null);
+        return;
+      }
+
+      chromeApi.runtime.sendMessage(
+        {
+          type: MERCARI_ITEM_DETAIL_MESSAGE_TYPE,
+          itemId,
+          accessToken: readMercariAccessToken(),
+        },
+        (response) => {
+          if (chromeApi.runtime?.lastError || !response?.success) {
+            resolve(null);
+            return;
+          }
+
+          resolve(response.data ?? null);
+        }
+      );
+    });
+  }
+
+  function requestMercariUserProfile(userId: string): Promise<unknown> {
+    return new Promise((resolve) => {
+      if (!chromeApi?.runtime?.sendMessage) {
+        resolve(null);
+        return;
+      }
+
+      chromeApi.runtime.sendMessage(
+        {
+          type: MERCARI_USER_PROFILE_MESSAGE_TYPE,
+          userId,
+          accessToken: readMercariAccessToken(),
+        },
+        (response) => {
+          if (chromeApi.runtime?.lastError || !response?.success) {
+            resolve(null);
+            return;
+          }
+
+          resolve(response.data ?? null);
+        }
+      );
+    });
+  }
+
+  function readMercariAccessToken(): string | null {
+    try {
+      const rawValue = localStorage.getItem("authTokenData");
+
+      if (!rawValue) {
+        return null;
+      }
+
+      const parsed = JSON.parse(rawValue) as { accessToken?: unknown };
+      return typeof parsed.accessToken === "string" && parsed.accessToken ? parsed.accessToken : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractListingDateInfoFromApiPayload(payload: unknown): ListingDateInfo {
+    const root = toRecord(payload);
+    const item = toRecord(root?.data) ?? root;
+
+    return {
+      listedAt: extractApiDateValue(item, ["created", "created_at", "createdAt", "createTime", "createdTime"]),
+      updatedAt: extractApiDateValue(item, ["updated", "updated_at", "updatedAt", "updateTime", "updatedTime"]),
+    };
+  }
+
+  function extractApiDateValue(source: Record<string, unknown> | null, keys: string[]): Date | null {
+    if (!source) {
+      return null;
+    }
+
+    for (const key of keys) {
+      const date = parseMercariDateValue(source[key]);
+
+      if (date) {
+        return date;
+      }
+    }
+
+    return extractJsonDateValue(source, keys);
+  }
+
+  function toRecord(value: unknown): Record<string, unknown> | null {
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  }
+
+  function extractStringValue(source: Record<string, unknown>, keys: string[]): string | null {
+    for (const key of keys) {
+      const value = findJsonValueByKey(source, key);
+
+      if (typeof value === "string" && normalizeText(value)) {
+        return normalizeText(value);
+      }
+
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return String(value);
+      }
+    }
+
+    return null;
+  }
+
+  function extractUrlValue(source: Record<string, unknown>, keys: string[]): string | null {
+    for (const key of keys) {
+      const value = findJsonValueByKey(source, key);
+
+      if (typeof value === "string" && /^https?:\/\//.test(value)) {
+        return value;
+      }
+
+      const imageUrl = getImageUrlFromJsonValue(value);
+
+      if (imageUrl) {
+        return imageUrl;
+      }
+    }
+
+    return null;
+  }
+
+  function getImageUrlFromJsonValue(value: unknown, depth = 0): string | null {
+    if (depth > 4 || value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value === "string") {
+      return /^https?:\/\//.test(value) && /mercdn|mercari|\.(?:jpe?g|png|webp)(?:\?|$)/i.test(value) ? value : null;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const matched = getImageUrlFromJsonValue(item, depth + 1);
+
+        if (matched) {
+          return matched;
+        }
+      }
+
+      return null;
+    }
+
+    if (typeof value !== "object") {
+      return null;
+    }
+
+    const objectValue = value as Record<string, unknown>;
+
+    for (const key of ["url", "src", "thumbnail", "thumbnailUrl", "thumbnail_url"]) {
+      const matched = getImageUrlFromJsonValue(objectValue[key], depth + 1);
+
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return null;
+  }
+
+  function extractNumberValue(source: Record<string, unknown>, keys: string[]): number | null {
+    for (const key of keys) {
+      const numberValue = normalizeNumberValue(findJsonValueByKey(source, key));
+
+      if (numberValue !== null) {
+        return numberValue;
+      }
+    }
+
+    return null;
+  }
+
+  function normalizeNumberValue(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const numberValue = Number(value.replace(/,/g, ""));
+      return Number.isFinite(numberValue) ? numberValue : null;
+    }
+
+    return null;
+  }
+
+  function extractBooleanValue(source: Record<string, unknown>, keys: string[]): boolean | null {
+    for (const key of keys) {
+      const value = findJsonValueByKey(source, key);
+
+      if (typeof value === "boolean") {
+        return value;
+      }
+
+      if (typeof value === "string") {
+        const normalized = normalizeText(value).toLowerCase();
+
+        if (["true", "1", "yes", "verified", "certificated"].includes(normalized)) {
+          return true;
+        }
+
+        if (["false", "0", "no"].includes(normalized)) {
+          return false;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function extractSellerVerifiedValue(source: Record<string, unknown>): boolean | null {
+    const directValue = extractBooleanValue(source, [
+      "isVerified",
+      "is_verified",
+      "isCertificated",
+      "is_certificated",
+      "isIdentityVerified",
+      "is_identity_verified",
+      "identityVerified",
+      "identity_verified",
+      "identityVerification",
+      "identity_verification",
+      "identityVerificationStatus",
+      "identity_verification_status",
+      "verificationStatus",
+      "verification_status",
+      "verification",
+      "verified",
+      "certificated",
+    ]);
+
+    if (directValue !== null) {
+      return directValue;
+    }
+
+    const serialized = JSON.stringify(source).toLowerCase();
+
+    if (/本人確認前|unverified|not_verified|not verified|un-certificated|uncertificated/.test(serialized)) {
+      return false;
+    }
+
+    if (/本人確認済|verified|certificated|identity_verified|identityverified|identity_verification.*(complete|completed|approved|accepted)|identityverification.*(complete|completed|approved|accepted)/.test(serialized)) {
+      return true;
+    }
+
+    return null;
+  }
+
+  function extractSellerLevelText(source: Record<string, unknown>): string | null {
+    const rawLevel = extractStringValue(source, ["sellerLevel", "seller_level", "level", "rank"]);
+
+    if (!rawLevel) {
+      return null;
+    }
+
+    return /^出品者レベル/.test(rawLevel) ? rawLevel : `Lv ${rawLevel}`;
+  }
+
+  function sumKnownCounts(values: Array<number | null>): number | null {
+    const knownValues = values.filter((value): value is number => value !== null);
+    return knownValues.length > 0 ? knownValues.reduce((total, value) => total + value, 0) : null;
   }
 
   function findListingDatePanelMount(): HTMLElement | null {
@@ -587,6 +1580,10 @@
     const headingMount = heading?.closest("section, div");
 
     return headingMount instanceof HTMLElement ? headingMount : null;
+  }
+
+  function findListingDatePanelAnchor(): HTMLElement | null {
+    return toHTMLElement(document.querySelector('[data-testid="user-protection-policy"]'));
   }
 
   function createListingDateRow(labelText: string, date: Date): HTMLElement {
@@ -961,10 +1958,14 @@
     }
   }
 
-  function cleanupToolbarsForPageKind(pageKind: MercariPageKind): void {
-    if (pageKind === "browsingHistory" || pageKind === "unknown") {
+  function cleanupToolbarsForPageKind(pageKind: MercariPageKind, keepListingSellerPanels = false): void {
+    if (pageKind === "browsingHistory" || (pageKind === "unknown" && !keepListingSellerPanels)) {
       removeAllToolbars();
       return;
+    }
+
+    if (!keepListingSellerPanels) {
+      removeAllListingSellerPanels();
     }
 
     if (pageKind !== "otherProduct" && pageKind !== "ownProduct") {
@@ -988,6 +1989,16 @@
     });
     safeQuerySelectorAll(document, `[${LISTING_DATE_PANEL_ATTRIBUTE}="true"]`).forEach((panel) => {
       panel.remove();
+    });
+    removeAllListingSellerPanels();
+  }
+
+  function removeAllListingSellerPanels(): void {
+    safeQuerySelectorAll(document, `[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`).forEach((panel) => {
+      panel.remove();
+    });
+    safeQuerySelectorAll(document, `[${LISTING_SELLER_PENDING_ATTRIBUTE}]`).forEach((card) => {
+      card.removeAttribute(LISTING_SELLER_PENDING_ATTRIBUTE);
     });
   }
 

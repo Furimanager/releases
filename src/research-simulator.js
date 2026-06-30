@@ -75,12 +75,25 @@ async function saveFurimaneSimulatorValue(item, options, purchaseInput, shipping
     return;
   }
 
-  await window.FurimanagerResearchApi?.savePurchasePrice?.({
+  if (!window.FurimanagerResearchApi?.savePurchasePrice) {
+    throw new Error("仕入れ値保存APIを読み込めませんでした");
+  }
+
+  const response = await window.FurimanagerResearchApi.savePurchasePrice({
     platform: getFurimaneSimulatorPlatform(item, options),
     itemId: item.item_id,
     purchasePrice,
     shippingFee
   });
+
+  if (!response?.success) {
+    throw new Error("仕入れ値の保存に失敗しました");
+  }
+
+  const savedPrice = { purchasePrice, shippingFee };
+  options.savedPrice = savedPrice;
+  await options.onSave?.(savedPrice);
+  return response;
 }
 
 async function renderFurimaneSimulator(rowElement, item, options = {}) {
@@ -128,6 +141,8 @@ async function renderFurimaneSimulator(rowElement, item, options = {}) {
     const monthlyProfitValue = createFurimaneSimulatorElement("strong", "furimane-research-simulator__metric-value");
     const purchaseHint = createFurimaneSimulatorElement("p", "furimane-research-simulator__hint", "仕入れ値を入力してください");
     const saveStatus = createFurimaneSimulatorElement("p", "furimane-research-simulator__save-status", "");
+    const saveButton = createFurimaneSimulatorElement("button", "furimane-research-simulator__save-button", "保存する");
+    saveButton.type = "button";
 
     const recalculate = () => {
       const hasPurchasePrice = purchaseInput.value.trim().length > 0;
@@ -154,24 +169,40 @@ async function renderFurimaneSimulator(rowElement, item, options = {}) {
 
     const save = async () => {
       if (!purchaseInput.value.trim()) {
-        saveStatus.textContent = "";
+        saveStatus.textContent = "仕入れ値を入力してください";
         return;
       }
 
       try {
+        saveButton.disabled = true;
+        saveButton.textContent = "保存中...";
         saveStatus.textContent = "保存中...";
-        await saveFurimaneSimulatorValue(item, options, purchaseInput, shippingInput);
-        saveStatus.textContent = purchaseInput.value.trim() ? "保存しました" : "";
+        const response = await saveFurimaneSimulatorValue(item, options, purchaseInput, shippingInput);
+        saveStatus.textContent = response?.localOnly ? "ブラウザに保存しました" : "保存しました";
+        saveButton.textContent = "保存済み";
       } catch (error) {
         console.error("[furimane-research] simulator save failed", error);
         saveStatus.textContent = "保存に失敗しました";
+        saveButton.textContent = "保存する";
+      } finally {
+        saveButton.disabled = false;
       }
     };
 
-    purchaseInput.addEventListener("input", recalculate);
-    shippingInput.addEventListener("input", recalculate);
-    purchaseInput.addEventListener("blur", save);
-    shippingInput.addEventListener("blur", save);
+    const markUnsaved = () => {
+      saveButton.textContent = "保存する";
+      saveStatus.textContent = purchaseInput.value.trim() ? "未保存" : "";
+    };
+
+    purchaseInput.addEventListener("input", () => {
+      recalculate();
+      markUnsaved();
+    });
+    shippingInput.addEventListener("input", () => {
+      recalculate();
+      markUnsaved();
+    });
+    saveButton.addEventListener("click", save);
 
     const form = createFurimaneSimulatorElement("div", "furimane-research-simulator__form");
     const purchaseLabel = createFurimaneSimulatorElement("label", "furimane-research-simulator__label");
@@ -196,8 +227,10 @@ async function renderFurimaneSimulator(rowElement, item, options = {}) {
     monthlyProfitMetric.append(createFurimaneSimulatorElement("span", undefined, "月間予想利益"), monthlyProfitValue);
 
     metrics.append(feeMetric, profitMetric, rateMetric, monthlyProfitMetric);
+    const actions = createFurimaneSimulatorElement("div", "furimane-research-simulator__actions");
+    actions.append(saveStatus, saveButton);
 
-    root.replaceChildren(form, metrics, saveStatus);
+    root.replaceChildren(form, metrics, actions);
     recalculate();
   } catch (error) {
     console.error("[furimane-research] simulator load failed", error);

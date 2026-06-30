@@ -9,6 +9,7 @@
   },
   "host_permissions": [
     "https://jp.mercari.com/*",
+    "https://api.mercari.jp/*",
     "https://*.mercdn.net/*",
     "https://*.supabase.co/*",
     "https://furimanager.com/*",
@@ -34,10 +35,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://jp.mercari.com/user/profile/*",
-        "https://jp.mercari.com/shops/profile/*"
-      ],
+      "matches": ["https://jp.mercari.com/*"],
       "css": ["src/research-overlay.css"],
       "js": [
         "config.js",
@@ -48,7 +46,7 @@
         "src/research-table.js",
         "src/research-overlay.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": [
@@ -58,6 +56,12 @@
       ],
       "js": ["src/extension-installed-detector.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/research-page-fetcher.js", "icons/icon-48.png"],
+      "matches": ["https://jp.mercari.com/*"]
     }
   ],
   "action": {
