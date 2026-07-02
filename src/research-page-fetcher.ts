@@ -1,12 +1,25 @@
 (function () {
   const WATCH_REQUEST_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_REQUEST";
   const WATCH_RESPONSE_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_RESPONSE";
+  const WATCH_CANCEL_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_CANCEL";
   const WATCH_SETTLE_MS = 9000;
   const DIRECT_FETCH_STATUS = "trading,sold_out";
   const DIRECT_FETCH_FALLBACK_STATUS: string | null = null;
-  const DIRECT_FETCH_MAX_ITEMS = 1000;
-  const DIRECT_FETCH_MAX_PAGES_PER_STATUS = 40;
+  const DIRECT_FETCH_MAX_PAGES_PER_STATUS = 500;
   const DIRECT_FETCH_PAGE_LIMIT = 132;
+  const DIRECT_FETCH_MIN_FULL_PAGE_COUNT = 100;
+  const DIRECT_FETCH_SNAPSHOT_WAIT_MS = 400;
+  const DIRECT_FETCH_SNAPSHOT_POLL_MS = 100;
+  const PAGE_HOOK_ALWAYS_LOG_STEPS = new Set([
+    "hook_installed",
+    "direct_fetch_started",
+    "direct_fetch_completed",
+    "direct_fetch_missing_snapshot",
+    "direct_fetch_failed",
+    "direct_fetch_error",
+    "direct_fetch_unhandled_error",
+    "watch_cancelled"
+  ]);
 
   type PageHookWindow = Window & {
     __furimaneResearchPageApiHookInstalled?: boolean;
@@ -17,6 +30,7 @@
     requestId?: string;
     sellerId?: string;
     directFetch?: boolean;
+    reason?: string;
   };
 
   type HookedXhr = XMLHttpRequest & {
@@ -62,7 +76,19 @@
 
   pageWindow.__furimaneResearchPageApiHookInstalled = true;
 
+  function isDebugLogEnabled() {
+    try {
+      return window.localStorage.getItem("furimane-research-page-hook-debug") === "true";
+    } catch (_error) {
+      return false;
+    }
+  }
+
   function log(step: string, payload?: Record<string, unknown>) {
+    if (!isDebugLogEnabled() && !PAGE_HOOK_ALWAYS_LOG_STEPS.has(step)) {
+      return;
+    }
+
     console.log(`[furimane-research][page-hook] ${step}`, payload ?? {});
   }
 
@@ -80,6 +106,10 @@
 
   function getStringValue(...candidates: unknown[]) {
     for (const candidate of candidates) {
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        return String(candidate);
+      }
+
       if (typeof candidate !== "string") {
         continue;
       }
@@ -196,9 +226,48 @@
     return isObject(payload) && isObject(payload.meta) ? payload.meta : null;
   }
 
+  function normalizeHasNextValue(value: unknown) {
+    if (typeof value === "boolean") {
+      return value;
+    }
+
+    if (typeof value === "number") {
+      return value === 1;
+    }
+
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+
+      if (normalized === "true" || normalized === "1") {
+        return true;
+      }
+
+      if (normalized === "false" || normalized === "0") {
+        return false;
+      }
+    }
+
+    return null;
+  }
+
   function getPayloadHasNext(payload: unknown) {
+    if (!isObject(payload)) {
+      return null;
+    }
+
+    const topLevelValue = normalizeHasNextValue(payload.has_next ?? payload.hasNext);
+
+    if (topLevelValue !== null) {
+      return topLevelValue;
+    }
+
     const meta = getPayloadMeta(payload);
-    return meta?.has_next === true || meta?.hasNext === true;
+
+    if (!meta) {
+      return null;
+    }
+
+    return normalizeHasNextValue(meta.has_next ?? meta.hasNext);
   }
 
   function getPayloadPagerId(payload: unknown) {
@@ -368,6 +437,10 @@
     }
   }
 
+  function isCurrentWatch(requestId: string, watch: WatchState) {
+    return watches.get(requestId) === watch;
+  }
+
   function flushWatch(requestId: string) {
     const watch = watches.get(requestId);
 
@@ -401,6 +474,19 @@
     });
   }
 
+  function postWatchProgress(requestId: string, watch: WatchState) {
+    postToContent(requestId, {
+      ok: true,
+      status: 200,
+      partial: true,
+      sellerId: watch.sellerId,
+      pageLikeIndex: watch.pageLikeIndex,
+      mergedCount: watch.lastMergedCount,
+      dedupedCount: watch.lastDedupedCount,
+      totalCount: watch.lastTotalCount
+    });
+  }
+
   function cacheSellerPayload(sellerId: string, payload: unknown) {
     const existing = cachedPayloadsBySellerId.get(sellerId);
     const mergeResult = mergePayloadIntoWatch(existing?.payload ?? null, payload);
@@ -412,6 +498,21 @@
       lastMergedCount: mergeResult.mergedCount,
       lastDedupedCount: mergeResult.dedupedCount,
       lastTotalCount: mergeResult.totalCount
+    });
+  }
+
+  function cacheWatchPayload(watch: WatchState) {
+    if (!watch.payload) {
+      return;
+    }
+
+    cachedPayloadsBySellerId.set(watch.sellerId, {
+      sellerId: watch.sellerId,
+      payload: watch.payload,
+      pageLikeIndex: watch.pageLikeIndex,
+      lastMergedCount: watch.lastMergedCount,
+      lastDedupedCount: watch.lastDedupedCount,
+      lastTotalCount: watch.lastTotalCount
     });
   }
 
@@ -502,6 +603,18 @@
     return latestGetItemsRequestSnapshotsBySellerId.get(sellerId)?.credentials ?? "include";
   }
 
+  function sleep(ms: number) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function waitForDirectFetchSnapshot(sellerId: string) {
+    const startedAt = Date.now();
+
+    while (!latestGetItemsRequestSnapshotsBySellerId.has(sellerId) && Date.now() - startedAt < DIRECT_FETCH_SNAPSHOT_WAIT_MS) {
+      await sleep(DIRECT_FETCH_SNAPSHOT_POLL_MS);
+    }
+  }
+
   async function fetchDirectSellerItems(requestId: string, watch: WatchState) {
     if (directFetchRequestIds.has(requestId)) {
       return;
@@ -510,11 +623,31 @@
     directFetchRequestIds.add(requestId);
 
     try {
+      await waitForDirectFetchSnapshot(watch.sellerId);
+
+      if (!isCurrentWatch(requestId, watch)) {
+        return;
+      }
+
+      if (!latestGetItemsRequestSnapshotsBySellerId.has(watch.sellerId)) {
+        log("direct_fetch_missing_snapshot", {
+          sellerId: watch.sellerId
+        });
+        watches.delete(requestId);
+        postToContent(requestId, {
+          ok: false,
+          sellerId: watch.sellerId,
+          error: "direct_fetch_missing_snapshot"
+        });
+        return;
+      }
+
       log("direct_fetch_started", {
         sellerId: watch.sellerId,
         status: DIRECT_FETCH_STATUS,
         fallbackStatus: DIRECT_FETCH_FALLBACK_STATUS,
-        limit: DIRECT_FETCH_PAGE_LIMIT
+        limit: DIRECT_FETCH_PAGE_LIMIT,
+        hasRequestSnapshot: latestGetItemsRequestSnapshotsBySellerId.has(watch.sellerId)
       });
 
       let totalFetched = 0;
@@ -522,8 +655,13 @@
       const fetchPages = async (status: string | null) => {
         let fetchedCount = 0;
         let maxPagerId: string | null = null;
+        const seenPagerIds = new Set<string>();
 
-        for (let pageIndex = 0; pageIndex < DIRECT_FETCH_MAX_PAGES_PER_STATUS && totalFetched < DIRECT_FETCH_MAX_ITEMS; pageIndex += 1) {
+        for (let pageIndex = 0; pageIndex < DIRECT_FETCH_MAX_PAGES_PER_STATUS; pageIndex += 1) {
+          if (!isCurrentWatch(requestId, watch)) {
+            break;
+          }
+
           const url = buildDirectFetchUrl(watch.sellerId, status, maxPagerId);
           const response = await originalFetch(url.toString(), {
             method: "GET",
@@ -553,9 +691,16 @@
             return { fetchedCount, failed: true };
           }
 
+          if (!isCurrentWatch(requestId, watch)) {
+            break;
+          }
+
           const items = getPayloadData(payload);
           const hasNext = getPayloadHasNext(payload);
           const nextPagerId = getNextPagerId(payload, items);
+          const pagerIdLocation = getPagerIdLocation(payload, items);
+          const isLikelyFullPage = items.length >= DIRECT_FETCH_MIN_FULL_PAGE_COUNT;
+          const shouldContinue = Boolean(nextPagerId) && (hasNext === true || (isLikelyFullPage && hasNext !== false));
 
           log("direct_fetch_page_received", {
             sellerId: watch.sellerId,
@@ -563,21 +708,32 @@
             pageIndex: pageIndex + 1,
             itemCount: items.length,
             hasNext,
-            hasNextPagerId: Boolean(nextPagerId)
+            hasNextPagerId: Boolean(nextPagerId),
+            pagerIdLocation,
+            isLikelyFullPage,
+            continueByFullPage: hasNext !== true && shouldContinue
           });
 
           if (items.length === 0) {
             break;
           }
 
-          await handleMatchedPayload(url, payload, { notify: false });
+          await handleMatchedPayload(url, payload, { notify: false, targetRequestId: requestId, cache: false });
           totalFetched += items.length;
           fetchedCount += items.length;
-          maxPagerId = nextPagerId;
 
-          if (hasNext !== true || !maxPagerId) {
+          if (!isCurrentWatch(requestId, watch)) {
             break;
           }
+
+          postWatchProgress(requestId, watch);
+
+          if (!shouldContinue || !nextPagerId || seenPagerIds.has(nextPagerId)) {
+            break;
+          }
+
+          seenPagerIds.add(nextPagerId);
+          maxPagerId = nextPagerId;
         }
 
         return { fetchedCount, failed: false };
@@ -585,14 +741,24 @@
 
       const primaryResult = await fetchPages(DIRECT_FETCH_STATUS);
 
+      if (!isCurrentWatch(requestId, watch)) {
+        return;
+      }
+
       if (primaryResult.failed || primaryResult.fetchedCount === 0) {
         await fetchPages(DIRECT_FETCH_FALLBACK_STATUS);
       }
+
+      cacheWatchPayload(watch);
 
       log("direct_fetch_completed", {
         sellerId: watch.sellerId,
         totalFetched
       });
+      if (!isCurrentWatch(requestId, watch)) {
+        return;
+      }
+
       if (!watch.payload) {
         watches.delete(requestId);
         postToContent(requestId, {
@@ -610,6 +776,10 @@
         message: error instanceof Error ? error.message : String(error)
       });
 
+      if (!isCurrentWatch(requestId, watch)) {
+        return;
+      }
+
       if (!watch.payload) {
         watches.delete(requestId);
         postToContent(requestId, {
@@ -625,7 +795,11 @@
     }
   }
 
-  async function handleMatchedPayload(url: URL, payload: unknown, options: { notify?: boolean; requestSnapshot?: RequestSnapshot } = {}) {
+  async function handleMatchedPayload(
+    url: URL,
+    payload: unknown,
+    options: { notify?: boolean; requestSnapshot?: RequestSnapshot; targetRequestId?: string; cache?: boolean } = {}
+  ) {
     const detectedSellerIdRaw = url.searchParams.get("seller_id");
     const currentProfileSellerIdRaw = getCurrentProfileSellerId();
     const sellerId = normalizeSellerId(detectedSellerIdRaw);
@@ -654,15 +828,27 @@
       return;
     }
 
+    if (options.targetRequestId && !watches.has(options.targetRequestId)) {
+      log("matched_seller_id_skipped_reason", {
+        reason: "stale_direct_fetch_request"
+      });
+      return;
+    }
+
     latestGetItemsUrlsBySellerId.set(sellerId, url);
     if (options.requestSnapshot) {
       latestGetItemsRequestSnapshotsBySellerId.set(sellerId, options.requestSnapshot);
     }
     const requestStatus = url.searchParams.get("status");
     const payloadWithRequestStatus = attachRequestStatusToPayload(payload, requestStatus);
-    cacheSellerPayload(sellerId, payloadWithRequestStatus);
 
-    const matchingWatches = Array.from(watches.entries()).filter(([, watch]) => normalizeSellerId(watch.sellerId) === sellerId);
+    if (options.cache !== false) {
+      cacheSellerPayload(sellerId, payloadWithRequestStatus);
+    }
+
+    const matchingWatches = Array.from(watches.entries()).filter(([requestId, watch]) => (
+      normalizeSellerId(watch.sellerId) === sellerId && (!options.targetRequestId || requestId === options.targetRequestId)
+    ));
     log("seller_id_compare_result", {
       currentProfileMatches: Boolean(currentProfileSellerId && sellerId === currentProfileSellerId),
       activeWatchCount: watches.size,
@@ -814,6 +1000,18 @@
     }
 
     const data = event.data as PageApiWatchRequest | null;
+
+    if (data?.type === WATCH_CANCEL_TYPE && typeof data.requestId === "string") {
+      const existingWatch = watches.get(data.requestId);
+      clearWatchSettleTimeout(existingWatch);
+      watches.delete(data.requestId);
+      directFetchRequestIds.delete(data.requestId);
+      log("watch_cancelled", {
+        requestId: data.requestId,
+        reason: data.reason ?? null
+      });
+      return;
+    }
 
     if (!data || data.type !== WATCH_REQUEST_TYPE || typeof data.requestId !== "string" || typeof data.sellerId !== "string") {
       return;

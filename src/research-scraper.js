@@ -1,6 +1,5 @@
 ﻿const FURIMANE_MERCARI_PROFILE_URL_PATTERN = /\/user\/profile\/([^/?#]+)/;
 const FURIMANE_MERCARI_SHOPS_PROFILE_URL_PATTERN = /\/shops\/profile\/([^/?#]+)/;
-const FURIMANE_MAX_RESEARCH_LISTINGS = 1000;
 const FURIMANE_MAX_SCROLL_ATTEMPTS = 40;
 const FURIMANE_STABLE_SCROLL_LIMIT = 3;
 const FURIMANE_THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -9,27 +8,35 @@ const FURIMANE_PAGE_FETCHER_SCRIPT_ID = "furimane-research-page-fetcher";
 const FURIMANE_PAGE_FETCHER_SCRIPT_PATH = "src/research-page-fetcher.js";
 const FURIMANE_PAGE_FETCH_REQUEST_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_REQUEST";
 const FURIMANE_PAGE_FETCH_RESPONSE_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_RESPONSE";
-const FURIMANE_PAGE_FETCH_TIMEOUT_MS = 15000;
+const FURIMANE_PAGE_FETCH_CANCEL_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_CANCEL";
+const FURIMANE_PAGE_FETCH_TIMEOUT_MS = 30000;
 const FURIMANE_DOM_FETCH_LOG_PREFIX = "[furimane-research][dom-fetch]";
 const FURIMANE_PRICE_TEXT_PATTERN = /(?:[\u00a5\uffe5]\s*([\d,]+)|([\d,]+)\s*\u5186)/;
 const FURIMANE_PRICE_TEXT_TAIL_PATTERN = /(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186).*$/;
 const FURIMANE_PRICE_TEXT_PREFIX_PATTERN = /^(?:SOLD\s*)?(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186)\s*/i;
 const FURIMANE_API_AUTO_MORE_MAX_CLICKS = 5;
-const FURIMANE_API_AUTO_MORE_OLD_ITEM_STOP_COUNT = 3;
 const FURIMANE_API_AUTO_MORE_PROGRESS_TIMEOUT_MS = 8000;
 const FURIMANE_API_AUTO_MORE_POLL_MS = 200;
 const FURIMANE_API_AUTO_MORE_CLICK_DELAY_MS = 300;
 const FURIMANE_API_AUTO_MORE_AFTER_CLICK_MS = 800;
+const FURIMANE_SELLER_CONTEXT_RETRY_COUNT = 6;
+const FURIMANE_SELLER_CONTEXT_RETRY_DELAY_MS = 250;
 const FURIMANE_API_ALWAYS_LOG_STEPS = new Set([
   "api_mode_entered",
-  "fallback_to_dom",
   "period_analysis",
   "payload_received",
   "mappedCount",
   "timeout_waiting_page_api",
-  "auto_more_stop_by_period",
-  "auto_more_stop_by_safety_limit",
+  "direct_fetch_failed_warm_page_api",
+  "direct_fetch_retry_after_warmup",
+  "direct_fetch_warmup_failed_retry_page_api",
   "auto_more_assist_completed"
+]);
+const FURIMANE_API_VERBOSE_LOG_STEPS = new Set([
+  "pager_diagnostic",
+  "period_item_diagnostics",
+  "period_basis_compare_summary",
+  "period_status_compare_summary"
 ]);
 let hasLoggedFurimaneApiPagerDiagnostic = false;
 let furimanePageFetcherInjectPromise = null;
@@ -115,7 +122,44 @@ function emitFurimaneApiProgressFromPagePayload(seller, options, data) {
   const apiPayload = data.payload;
 
   if (!isFurimaneResearchObject(apiPayload) || !Array.isArray(apiPayload.data)) {
-    return null;
+    const progressCount = typeof data.totalCount === "number"
+      ? data.totalCount
+      : typeof data.dedupedCount === "number"
+        ? data.dedupedCount
+        : typeof data.mergedCount === "number"
+          ? data.mergedCount
+          : null;
+
+    if (progressCount !== null) {
+      options.onProgress?.(progressCount, {
+        totalCount: progressCount,
+        pageLikeIndex: data.pageLikeIndex ?? null,
+        partial: Boolean(data.partial),
+        phase: data.partial ? "api_progress" : "api_done"
+      });
+    }
+
+    return progressCount;
+  }
+
+  if (data.partial) {
+    const rawCount = apiPayload.data.length;
+    const progressCount = typeof data.totalCount === "number"
+      ? data.totalCount
+      : typeof data.dedupedCount === "number"
+        ? data.dedupedCount
+        : typeof data.mergedCount === "number"
+          ? data.mergedCount
+          : rawCount;
+
+    options.onProgress?.(progressCount, {
+      totalCount: progressCount,
+      pageLikeIndex: data.pageLikeIndex ?? null,
+      partial: true,
+      phase: "api_progress"
+    });
+
+    return progressCount;
   }
 
   const rawListings = apiPayload.data.filter(isFurimaneResearchObject);
@@ -209,6 +253,13 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
   promise = new Promise((resolve, reject) => {
     const requestId = createFurimaneResearchRequestId();
     let timeoutId = null;
+    const cancelPageRequest = (reason) => {
+      window.postMessage({
+        type: FURIMANE_PAGE_FETCH_CANCEL_TYPE,
+        requestId,
+        reason
+      }, window.location.origin);
+    };
     const clearPayloadRequest = () => {
       if (furimanePageApiPayloadRequest?.promise === promise) {
         furimanePageApiPayloadRequest = null;
@@ -220,6 +271,7 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
       }
 
       timeoutId = window.setTimeout(() => {
+        cancelPageRequest("timeout");
         cleanup();
         clearPayloadRequest();
         logFurimaneApiFetch("info", "timeout_waiting_page_api", {
@@ -243,6 +295,7 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
     };
 
     const handleAbort = () => {
+      cancelPageRequest("abort");
       cleanup();
       clearPayloadRequest();
       reject(new DOMException("Aborted", "AbortError"));
@@ -277,6 +330,15 @@ async function waitFurimaneMercariApiPayloadFromPage(seller, options = {}) {
           totalCount: data.totalCount ?? null,
           mappedCount
         });
+
+        if (options.resolveOnFirstPartial) {
+          cancelPageRequest("warmup_completed");
+          cleanup();
+          clearPayloadRequest();
+          resolve(data.payload);
+          return;
+        }
+
         resetTimeout();
         return;
       }
@@ -594,6 +656,22 @@ function createFurimaneDomCollectDiagnostics(platform) {
   };
 }
 
+async function waitForFurimaneSellerContextFromCurrentPage(signal) {
+  for (let attempt = 0; attempt <= FURIMANE_SELLER_CONTEXT_RETRY_COUNT; attempt += 1) {
+    const seller = getFurimaneSellerContextFromCurrentPage();
+
+    if (seller) {
+      return seller;
+    }
+
+    if (attempt < FURIMANE_SELLER_CONTEXT_RETRY_COUNT) {
+      await sleepForFurimaneResearch(FURIMANE_SELLER_CONTEXT_RETRY_DELAY_MS, signal);
+    }
+  }
+
+  return null;
+}
+
 function logFurimaneDomCollectDiagnostics(step, diagnostics) {
   console.log(`${FURIMANE_DOM_FETCH_LOG_PREFIX} ${step}`, diagnostics);
 }
@@ -777,7 +855,7 @@ function getFurimaneApiPeriodDateCandidate(rawListing) {
     ["purchased_at", rawListing.purchased_at],
     ["purchasedAt", rawListing.purchasedAt]
   ];
-  // API取得分は競合に近い期間分類へ寄せるため、売却日時が無い場合は作成日時を優先する。
+  // 売却日時が無いAPI取得分は、期間集計用の推定日として作成日時を優先する。
   const estimatedCandidates = [
     ["created", rawListing.created],
     ["created_at", rawListing.created_at],
@@ -842,11 +920,8 @@ function getFurimaneApiAutoMorePeriodState(progress) {
   const oldestDaysAgo = oldestTimeMs === null
     ? null
     : Math.floor((Date.now() - oldestTimeMs) / (24 * 60 * 60 * 1000));
-  const shouldStop = observedDateCount > 0 && olderCount >= FURIMANE_API_AUTO_MORE_OLD_ITEM_STOP_COUNT;
 
   return {
-    shouldStop,
-    reason: shouldStop ? "period_cutoff_reached" : "period_cutoff_not_reached",
     observedDateCount,
     newerCount,
     olderCount,
@@ -862,8 +937,6 @@ async function runFurimaneApiAutoMoreAssist(seller, signal) {
 
   logFurimaneApiFetch("info", "auto_more_assist_started", {
     maxClicks: FURIMANE_API_AUTO_MORE_MAX_CLICKS,
-    safeMaxListings: FURIMANE_MAX_RESEARCH_LISTINGS,
-    oldItemStopCount: FURIMANE_API_AUTO_MORE_OLD_ITEM_STOP_COUNT,
     progressTimeoutMs: FURIMANE_API_AUTO_MORE_PROGRESS_TIMEOUT_MS
   });
 
@@ -893,28 +966,6 @@ async function runFurimaneApiAutoMoreAssist(seller, signal) {
       totalCount,
       ...periodState
     });
-
-    if (periodState.shouldStop) {
-      logFurimaneApiFetch("info", "auto_more_stop_by_period", {
-        clickedCount,
-        pageLikeIndex: handledPageLikeIndex,
-        totalCount,
-        reason: periodState.reason,
-        olderCount: periodState.olderCount,
-        oldestDaysAgo: periodState.oldestDaysAgo
-      });
-      return;
-    }
-
-    if (totalCount !== null && totalCount >= FURIMANE_MAX_RESEARCH_LISTINGS) {
-      logFurimaneApiFetch("info", "auto_more_stop_by_safety_limit", {
-        clickedCount,
-        pageLikeIndex: handledPageLikeIndex,
-        totalCount,
-        safeMaxListings: FURIMANE_MAX_RESEARCH_LISTINGS
-      });
-      return;
-    }
 
     await sleepForFurimaneResearch(FURIMANE_API_AUTO_MORE_CLICK_DELAY_MS, signal);
 
@@ -947,10 +998,10 @@ async function runFurimaneApiAutoMoreAssist(seller, signal) {
   });
 }
 
-async function triggerFurimaneApiFetchAfterWatch(seller, signal) {
+async function triggerFurimaneApiFetchAfterWatch(seller, signal, force = false) {
   await sleepForFurimaneResearch(FURIMANE_API_AUTO_MORE_CLICK_DELAY_MS, signal);
 
-  if (getFurimaneLatestApiProgressForSeller(seller)) {
+  if (!force && getFurimaneLatestApiProgressForSeller(seller)) {
     logFurimaneApiFetch("info", "api_kickoff_skipped_existing_progress", {
       sellerId: seller.seller_id
     });
@@ -975,13 +1026,25 @@ async function triggerFurimaneApiFetchAfterWatch(seller, signal) {
   await sleepForFurimaneResearch(FURIMANE_API_AUTO_MORE_AFTER_CLICK_MS, signal);
 }
 
+async function warmFurimaneDirectFetchHeadersFromPageApi(seller, options) {
+  const warmupPromise = waitFurimaneMercariApiPayloadFromPage(seller, {
+    ...options,
+    directFetch: false,
+    resolveOnFirstPartial: true,
+    onProgress: undefined
+  });
+
+  await triggerFurimaneApiFetchAfterWatch(seller, options.signal, true);
+  await warmupPromise;
+}
+
 async function runFurimaneApiAssistAfterWatch(seller, signal) {
   await triggerFurimaneApiFetchAfterWatch(seller, signal);
   await runFurimaneApiAutoMoreAssist(seller, signal);
 }
 
 function isFurimaneDirectFetchFailure(error) {
-  return error instanceof Error && ["direct_fetch_empty", "direct_fetch_error"].includes(error.message);
+  return error instanceof Error && ["direct_fetch_empty", "direct_fetch_error", "direct_fetch_missing_snapshot"].includes(error.message);
 }
 
 function runFurimaneApiAssistAfterWatchSafe(seller, signal) {
@@ -994,19 +1057,6 @@ function runFurimaneApiAssistAfterWatchSafe(seller, signal) {
       reason: error instanceof Error ? error.message : String(error)
     });
   });
-}
-
-function hasReachedFurimaneResearchThreeMonthLimit(listings) {
-  const cutoff = Date.now() - FURIMANE_THREE_MONTHS_MS;
-  const periodTimes = listings
-    .map(getFurimaneListingPeriodDateMs)
-    .filter((time) => typeof time === "number" && Number.isFinite(time));
-
-  if (periodTimes.length === 0) {
-    return false;
-  }
-
-  return Math.min(...periodTimes) < cutoff;
 }
 
 function filterFurimaneResearchListingsWithinThreeMonths(listings) {
@@ -1025,7 +1075,6 @@ function filterFurimaneResearchListingsWithinThreeMonths(listings) {
 
 function normalizeFurimaneFetchedListings(listings, platform) {
   return filterFurimaneResearchListingsWithinThreeMonths(listings)
-    .slice(0, FURIMANE_MAX_RESEARCH_LISTINGS)
     .map((listing) => ({
       ...listing,
       platform: listing.platform ?? platform
@@ -1257,6 +1306,11 @@ function getFurimaneApiItemUrl(itemId) {
 
 function logFurimaneApiFetch(_level, step, payload = {}) {
   const isDebugLogEnabled = localStorage.getItem("furimane-research-debug") === "true";
+  const isVerboseLogEnabled = localStorage.getItem("furimane-research-verbose") === "true";
+
+  if (FURIMANE_API_VERBOSE_LOG_STEPS.has(step) && !isVerboseLogEnabled) {
+    return;
+  }
 
   if (!isDebugLogEnabled && !FURIMANE_API_ALWAYS_LOG_STEPS.has(step)) {
     return;
@@ -1712,10 +1766,6 @@ async function fetchFurimaneSellerListingsByDom(options = {}) {
   for (let attempt = 0; attempt < FURIMANE_MAX_SCROLL_ATTEMPTS; attempt += 1) {
     throwIfFurimaneResearchAborted(options.signal);
 
-    if (listings.length >= FURIMANE_MAX_RESEARCH_LISTINGS || hasReachedFurimaneResearchThreeMonthLimit(listings)) {
-      break;
-    }
-
     const beforeCount = listings.length;
     // 隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ縺ｫ繝夲ｿｽE繧ｸ菴咲ｽｮ繧貞･ｪ繧上↑縺・・ｽ・ｽ繧√∵僑蠑ｵ蛛ｴ縺九ｉ閾ｪ蜍輔せ繧ｯ繝ｭ繝ｼ繝ｫ縺励↑縺・・ｽ・ｽE    // 縺薙％縺ｧ縺ｯ迴ｾ蝨ｨDOM縺ｫ謠冗判貂医∩縺ｮ蝠・・ｽ・ｽ縺縺代ｒ螳会ｿｽE縺ｫ蜀榊庶髮・・ｽ・ｽ繧九・    await sleepForFurimaneResearch(1000, options.signal);
 
@@ -1734,7 +1784,7 @@ async function fetchFurimaneSellerListingsByDom(options = {}) {
 
 
 async function fetchFurimaneSellerListingsByApiPoc(options = {}) {
-  const seller = getFurimaneSellerContextFromCurrentPage();
+  const seller = await waitForFurimaneSellerContextFromCurrentPage(options.signal);
 
   if (!seller) {
     throw new Error("seller_id_not_found");
@@ -1765,14 +1815,45 @@ async function fetchFurimaneSellerListingsByApiPoc(options = {}) {
       throw error;
     }
 
-    logFurimaneApiFetch("warn", "direct_fetch_failed_retry_page_api", {
+    logFurimaneApiFetch("warn", "direct_fetch_failed_warm_page_api", {
       reason: error instanceof Error ? error.message : String(error)
     });
-    apiPayloadPromise = waitFurimaneMercariApiPayloadFromPage(seller, { ...options, directFetch: false });
-    runFurimaneApiAssistAfterWatchSafe(seller, options.signal);
-    apiPayload = await apiPayloadPromise;
+
+    try {
+      await warmFurimaneDirectFetchHeadersFromPageApi(seller, options);
+    } catch (warmupError) {
+      logFurimaneApiFetch("warn", "direct_fetch_warmup_failed_retry_page_api", {
+        reason: warmupError instanceof Error ? warmupError.message : String(warmupError)
+      });
+      apiPayloadPromise = waitFurimaneMercariApiPayloadFromPage(seller, { ...options, directFetch: false });
+      runFurimaneApiAssistAfterWatchSafe(seller, options.signal);
+      apiPayload = await apiPayloadPromise;
+      return normalizeFurimaneApiPayloadToResearchListings(apiPayload, seller, options);
+    }
+
+    logFurimaneApiFetch("info", "direct_fetch_retry_after_warmup", {
+      sellerId: seller.seller_id
+    });
+    try {
+      apiPayload = await waitFurimaneMercariApiPayloadFromPage(seller, options);
+    } catch (retryError) {
+      if (!isFurimaneDirectFetchFailure(retryError)) {
+        throw retryError;
+      }
+
+      logFurimaneApiFetch("warn", "direct_fetch_failed_retry_page_api", {
+        reason: retryError instanceof Error ? retryError.message : String(retryError)
+      });
+      apiPayloadPromise = waitFurimaneMercariApiPayloadFromPage(seller, { ...options, directFetch: false });
+      runFurimaneApiAssistAfterWatchSafe(seller, options.signal);
+      apiPayload = await apiPayloadPromise;
+    }
   }
 
+  return normalizeFurimaneApiPayloadToResearchListings(apiPayload, seller, options);
+}
+
+function normalizeFurimaneApiPayloadToResearchListings(apiPayload, seller, options) {
   if (!isFurimaneResearchObject(apiPayload) || !Array.isArray(apiPayload.data)) {
     throw new Error("mercari_api_invalid_response");
   }
@@ -1785,7 +1866,6 @@ async function fetchFurimaneSellerListingsByApiPoc(options = {}) {
   logFurimaneApiPeriodAnalysis(normalizedListings, "page_api_payload_received");
   logFurimaneApiPeriodDiagnostics(rawListings, normalizedListings);
   options.onProgress?.(normalizedListings.length, {
-    listings: normalizedListings,
     totalCount: normalizedListings.length,
     pageLikeIndex: null,
     partial: false,
@@ -1800,36 +1880,18 @@ async function fetchFurimaneSellerListingsByApiPoc(options = {}) {
 }
 
 async function fetchFurimaneSellerResearchData(options = {}) {
-  const seller = getFurimaneSellerContextFromCurrentPage();
+  const seller = await waitForFurimaneSellerContextFromCurrentPage(options.signal);
 
   if (!seller) {
     throw new Error("seller_id_not_found");
   }
 
-  const strategy = options.strategy ?? "dom";
+  const strategy = options.strategy ?? "api";
   let listings;
   let resolvedStrategy = strategy;
 
   if (strategy === "api") {
-    try {
-      listings = await fetchFurimaneSellerListingsByApiPoc(options);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
-
-      logFurimaneApiFetch("warn", "fallback_to_dom", {
-        reason: error instanceof Error ? error.message : String(error)
-      });
-      options.onProgress?.(0, {
-        totalCount: 0,
-        pageLikeIndex: null,
-        partial: false,
-        phase: "dom_fallback"
-      });
-      listings = await fetchFurimaneSellerListingsByDom(options);
-      resolvedStrategy = "dom";
-    }
+    listings = await fetchFurimaneSellerListingsByApiPoc(options);
   } else {
     logFurimaneApiFetch("info", "api_branch_not_entered", {
       sellerId: seller.seller_id,
@@ -1874,8 +1936,7 @@ window.FurimanagerResearchScraper = {
 };
 
 try {
-  const shouldStartPageApiWatch = localStorage.getItem("furimane-research-fetch-strategy") !== "dom";
-  const seller = shouldStartPageApiWatch ? getFurimaneSellerContextFromCurrentPage() : null;
+  const seller = getFurimaneSellerContextFromCurrentPage();
 
   if (seller?.platform === "mercari") {
     waitFurimaneMercariApiPayloadFromPage(seller, { directFetch: false }).catch(() => {

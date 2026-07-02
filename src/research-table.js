@@ -3,6 +3,10 @@ const PERIOD_DEFINITIONS = [
     { key: "period2", label: "31〜60日", shortLabel: "31〜60日", accentClass: "period2" },
     { key: "period3", label: "61〜90日", shortLabel: "61〜90日", accentClass: "period3" }
 ];
+const TABLE_INITIAL_ROW_LIMIT = 300;
+const TABLE_ROW_INCREMENT = 300;
+const PURCHASE_PRICE_PREFETCH_ROW_LIMIT = 300;
+let researchTableRenderSequence = 0;
 function formatResearchPrice(price) {
     return `¥${Math.round(price).toLocaleString("ja-JP")}`;
 }
@@ -294,6 +298,17 @@ function setBookmarkButtonState(button, isSaved) {
     button.textContent = isSaved ? "★" : "☆";
     button.setAttribute("aria-label", isSaved ? "ブックマーク解除" : "ブックマーク保存");
 }
+function createBookmarkPeriodSales(row) {
+    return {
+        period1: { ...row.periods.period1 },
+        period2: { ...row.periods.period2 },
+        period3: { ...row.periods.period3 },
+        total: {
+            count: row.totalCount,
+            revenue: row.totalSales
+        }
+    };
+}
 function createPendingBookmark(row) {
     return {
         id: `pending:${row.platform}:${row.listing.item_id}`,
@@ -303,8 +318,15 @@ function createPendingBookmark(row) {
         title: row.title,
         price: row.price,
         thumbnail_url: row.thumbnailUrl,
-        item_url: row.listing.item_url
+        item_url: row.listing.item_url,
+        period_sales: createBookmarkPeriodSales(row)
     };
+}
+
+function assertBookmarkSuccess(response, fallbackMessage) {
+    if (response.success === false) {
+        throw new Error(response.message || fallbackMessage);
+    }
 }
 async function loadResearchBookmarks() {
     try {
@@ -325,7 +347,7 @@ async function loadResearchBookmarks() {
     }
 }
 async function loadResearchPurchasePrices(rows, platform) {
-    const itemIds = rows.map((row) => row.listing.item_id).filter(Boolean);
+    const itemIds = Array.from(new Set(rows.slice(0, PURCHASE_PRICE_PREFETCH_ROW_LIMIT).map((row) => row.listing.item_id).filter(Boolean)));
     if (itemIds.length === 0 || !window.FurimanagerResearchApi?.getPurchasePricesBatch) {
         return {};
     }
@@ -335,6 +357,18 @@ async function loadResearchPurchasePrices(rows, platform) {
     catch (error) {
         console.error("[furimane-research] purchase prices batch load failed", error);
         return {};
+    }
+}
+async function loadResearchPurchasePriceForRow(row, purchasePrices) {
+    const itemId = row.listing.item_id;
+    if (!itemId || purchasePrices[itemId] || !window.FurimanagerResearchApi?.getPurchasePricesBatch) {
+        return;
+    }
+    try {
+        Object.assign(purchasePrices, await window.FurimanagerResearchApi.getPurchasePricesBatch(row.platform, [itemId]));
+    }
+    catch (error) {
+        console.error("[furimane-research] purchase price lazy load failed", error);
     }
 }
 function createSortTabs(currentSort, hasDatedListings, onChange) {
@@ -376,17 +410,21 @@ function createResearchHero(seller, dashboard, options, bookmarkState) {
     const wrapper = createElement("section", "furimane-research-table__hero");
     const main = createElement("div", "furimane-research-table__hero-main");
     const eyebrow = createElement("div", "furimane-research-table__eyebrow");
-    const brand = createElement("h3", "furimane-research-table__brand", "フリマネ リサーチ");
-    const platformBadge = createElement("span", dashboard.platform === "mercari_shops"
-        ? "furimane-research-table__platform-badge furimane-research-table__platform-badge--shops"
-        : "furimane-research-table__platform-badge", getResearchPlatformLabel(dashboard.platform));
+    const brand = createElement("h3", "furimane-research-table__brand");
+    const brandLogo = document.createElement("img");
+    brandLogo.className = "furimane-research-table__brand-logo";
+    brandLogo.src = chrome.runtime.getURL("icons/icon-48.png");
+    brandLogo.alt = "";
+    brandLogo.decoding = "async";
+    const brandText = createElement("span", undefined, "フリマネ リサーチ");
+    brand.append(brandLogo, brandText);
     const sellerName = createElement("h2", "furimane-research-table__seller-name", dashboard.sellerName);
     const meta = createElement("div", "furimane-research-table__meta-row");
     meta.append(createMetaItem("状態", dashboard.sourceLabel), createMetaItem("最終取得", dashboard.fetchedAtLabel), createMetaItem("取得件数", `${dashboard.totals.count}件`), createMetaItem("売上合計（取得分）", formatResearchPrice(dashboard.totals.revenue), true), createMetaItem("期間集計", dashboard.usesEstimatedPeriodDates ? "推定" : dashboard.hasDatedListings ? "確定" : "未取得"));
-    eyebrow.append(brand, platformBadge);
+    eyebrow.append(brand);
     main.append(eyebrow, sellerName, meta);
     const actions = createElement("div", "furimane-research-table__hero-actions");
-    const bookmarkCount = createElement("span", "furimane-research-table__bookmark-count", `ブックマーク ${bookmarkState.count} / ${bookmarkState.limit}`);
+    const bookmarkCount = createElement("span", "furimane-research-table__bookmark-count", bookmarkState.loading ? "ブックマーク 読込中" : `ブックマーク ${bookmarkState.count} / ${bookmarkState.limit}`);
     const refreshButton = createElement("button", "furimane-research-table__action-button", "更新");
     refreshButton.type = "button";
     refreshButton.addEventListener("click", async () => {
@@ -458,6 +496,7 @@ function createBookmarkButton(row, bookmarkState, onUpdated) {
         ? "furimane-research-table__bookmark-button furimane-research-table__bookmark-button--saved"
         : "furimane-research-table__bookmark-button", existingBookmark ? "★" : "☆");
     button.type = "button";
+    button.disabled = bookmarkState.loading === true;
     button.setAttribute("aria-label", existingBookmark ? "ブックマーク解除" : "ブックマーク保存");
     button.addEventListener("click", async () => {
         if (!window.FurimanagerResearchApi?.addBookmark || !window.FurimanagerResearchApi?.removeBookmark) {
@@ -475,6 +514,7 @@ function createBookmarkButton(row, bookmarkState, onUpdated) {
                 bookmarkState.count = Math.max(0, bookmarkState.count - 1);
                 onUpdated();
                 const response = await window.FurimanagerResearchApi.removeBookmark(existingBookmark.id);
+                assertBookmarkSuccess(response, "ブックマーク解除に失敗しました");
                 bookmarkState.count = response.count;
                 bookmarkState.limit = response.limit;
                 onUpdated();
@@ -500,15 +540,18 @@ function createBookmarkButton(row, bookmarkState, onUpdated) {
                     title: row.title,
                     price: row.price,
                     thumbnail_url: row.thumbnailUrl,
-                    item_url: row.listing.item_url
+                    item_url: row.listing.item_url,
+                    period_sales: createBookmarkPeriodSales(row)
                 });
+                assertBookmarkSuccess(response, "ブックマーク保存に失敗しました");
                 const newBookmark = response.item ?? response.bookmark;
-                if (newBookmark) {
-                    bookmarkState.items = [
-                        newBookmark,
-                        ...bookmarkState.items.filter((bookmark) => bookmark.id !== newBookmark.id && bookmark.id !== pendingBookmark.id)
-                    ];
+                if (!newBookmark) {
+                    throw new Error("ブックマーク保存結果を確認できませんでした");
                 }
+                bookmarkState.items = [
+                    newBookmark,
+                    ...bookmarkState.items.filter((bookmark) => bookmark.id !== newBookmark.id && bookmark.id !== pendingBookmark.id)
+                ];
                 bookmarkState.count = response.count;
                 bookmarkState.limit = response.limit;
                 onUpdated();
@@ -557,15 +600,18 @@ async function addBookmarkFromSimulation(row, bookmarkState) {
             title: row.title,
             price: row.price,
             thumbnail_url: row.thumbnailUrl,
-            item_url: row.listing.item_url
+            item_url: row.listing.item_url,
+            period_sales: createBookmarkPeriodSales(row)
         });
+        assertBookmarkSuccess(response, "ブックマーク追加に失敗しました");
         const newBookmark = response.item ?? response.bookmark;
-        if (newBookmark) {
-            bookmarkState.items = [
-                newBookmark,
-                ...bookmarkState.items.filter((bookmark) => bookmark.id !== newBookmark.id && bookmark.id !== pendingBookmark.id)
-            ];
+        if (!newBookmark) {
+            throw new Error("ブックマーク保存結果を確認できませんでした");
         }
+        bookmarkState.items = [
+            newBookmark,
+            ...bookmarkState.items.filter((bookmark) => bookmark.id !== newBookmark.id && bookmark.id !== pendingBookmark.id)
+        ];
         bookmarkState.count = response.count;
         bookmarkState.limit = response.limit;
         showBookmarkToast("仕入れ値を保存し、ブックマークにも追加しました");
@@ -640,7 +686,7 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
         titleLink.href = sanitizeResearchUrl(row.listing.item_url);
         titleLink.target = "_blank";
         titleLink.rel = "noopener noreferrer";
-        const titleMeta = createElement("p", "furimane-research-table__title-meta", `合計 ${row.totalCount}件 / 合計売上 ${formatResearchPrice(row.totalSales)}`);
+        const titleMeta = createElement("p", "furimane-research-table__title-meta", `合計 ${row.totalCount}件 / 合計売上 ${formatResearchPrice(row.totalSales)}${row.totalCount > 1 ? " / 操作は代表商品" : ""}`);
         titleWrap.append(titleLink, titleMeta);
         titleCell.appendChild(titleWrap);
         const priceCell = createElement("td", "furimane-research-table__price", formatResearchPrice(row.price));
@@ -656,7 +702,6 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
         const actionCell = document.createElement("td");
         const actionWrapper = createElement("div", "furimane-research-table__row-actions");
         const bookmarkButton = createBookmarkButton(row, bookmarkState, rerender);
-        const savedPrice = purchasePrices[row.listing.item_id] ?? { purchasePrice: null, shippingFee: null };
         const simulateButton = createElement("button", "furimane-research-table__simulate-button", "シミュレート");
         simulateButton.type = "button";
         simulateButton.addEventListener("click", async () => {
@@ -669,6 +714,8 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
                 showBookmarkToast("シミュレーターを読み込めませんでした");
                 return;
             }
+            await loadResearchPurchasePriceForRow(row, purchasePrices);
+            const savedPrice = purchasePrices[row.listing.item_id] ?? { purchasePrice: null, shippingFee: null };
             await window.FurimanagerResearchSimulator.renderSimulator(tr, row.listing, {
                 savedPrice,
                 platform: row.platform,
@@ -702,35 +749,67 @@ function createResearchTableColGroup() {
     }
     return colgroup;
 }
+function createRowsLimitNotice(totalRows, visibleRows, onShowMore) {
+    const wrapper = createElement("div", "furimane-research-table__stats-note");
+    const text = createElement("span", undefined, `表示高速化のため、表は ${visibleRows} / ${totalRows} 件を表示中です。集計は全件で計算済みです。`);
+    const button = createElement("button", "furimane-research-table__action-button", "さらに表示");
+    button.type = "button";
+    button.addEventListener("click", onShowMore);
+    wrapper.append(text, button);
+    return wrapper;
+}
 async function renderResearchTable(container, seller, listings, options = {}) {
     const normalizedListings = listings.map((listing) => ({
         ...listing,
         platform: getResearchPlatform(seller, listing)
     }));
+    const renderSequence = ++researchTableRenderSequence;
+    const isCurrentRender = () => renderSequence === researchTableRenderSequence;
     const dashboard = buildDashboardData(seller, normalizedListings, options);
-    const bookmarkState = { items: [], count: 0, limit: 50 };
+    const bookmarkState = { items: [], count: 0, limit: 50, loading: true };
     const purchasePrices = {};
+    let visibleRowLimit = Math.min(dashboard.rows.length, TABLE_INITIAL_ROW_LIMIT);
     const render = () => {
+        if (!isCurrentRender()) {
+            return;
+        }
         const root = createElement("div", "furimane-research-table-root");
         const mobileMessage = createElement("div", "furimane-research-table__mobile-message", "リサーチ機能はPC専用です。PC幅でご利用ください。");
         const desktop = createElement("div", "furimane-research-table__desktop");
+        const visibleRows = dashboard.rows.slice(0, visibleRowLimit);
         desktop.append(createResearchHero(seller, dashboard, options, bookmarkState), createPeriodCards(dashboard));
         if (!dashboard.hasDatedListings) {
             desktop.appendChild(createStatsPendingNotice());
         }
-        desktop.appendChild(createResearchTable(dashboard.rows, dashboard, bookmarkState, purchasePrices, render));
+        desktop.appendChild(createResearchTable(visibleRows, dashboard, bookmarkState, purchasePrices, render));
+        if (visibleRows.length < dashboard.rows.length) {
+            desktop.appendChild(createRowsLimitNotice(dashboard.rows.length, visibleRows.length, () => {
+                visibleRowLimit = Math.min(dashboard.rows.length, visibleRowLimit + TABLE_ROW_INCREMENT);
+                render();
+            }));
+        }
         root.append(mobileMessage, desktop);
         container.replaceChildren(root);
     };
     render();
     void loadResearchBookmarks().then((nextBookmarkState) => {
+        if (!isCurrentRender()) {
+            return;
+        }
         bookmarkState.items = nextBookmarkState.items;
         bookmarkState.count = nextBookmarkState.count;
         bookmarkState.limit = nextBookmarkState.limit;
+        bookmarkState.loading = false;
         render();
     });
     void loadResearchPurchasePrices(dashboard.rows, dashboard.platform).then((nextPurchasePrices) => {
-        Object.assign(purchasePrices, nextPurchasePrices);
+        if (!isCurrentRender()) {
+            return;
+        }
+        if (Object.keys(nextPurchasePrices).length > 0) {
+            Object.assign(purchasePrices, nextPurchasePrices);
+            render();
+        }
     });
 }
 window.FurimanagerResearchTable = {
