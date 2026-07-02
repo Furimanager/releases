@@ -11,11 +11,15 @@
   const DIRECT_FETCH_MIN_FULL_PAGE_COUNT = 100;
   const DIRECT_FETCH_SNAPSHOT_WAIT_MS = 400;
   const DIRECT_FETCH_SNAPSHOT_POLL_MS = 100;
+  const DIRECT_FETCH_THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
+  const DIRECT_FETCH_OLD_PAGE_STOP_COUNT = 2;
+  const DIRECT_FETCH_MIN_DATED_ITEMS_FOR_PERIOD_STOP = 20;
   const PAGE_HOOK_ALWAYS_LOG_STEPS = new Set([
     "hook_installed",
     "direct_fetch_started",
     "direct_fetch_completed",
     "direct_fetch_missing_snapshot",
+    "direct_fetch_stop_by_period",
     "direct_fetch_failed",
     "direct_fetch_error",
     "direct_fetch_unhandled_error",
@@ -164,6 +168,90 @@
     }
 
     return payload.data.filter(isObject);
+  }
+
+  function getTimestampMs(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value > 100000000000 ? value : value * 1000;
+    }
+
+    if (typeof value !== "string") {
+      return null;
+    }
+
+    const trimmed = value.trim();
+
+    if (!trimmed) {
+      return null;
+    }
+
+    if (/^\d+$/.test(trimmed)) {
+      const numericValue = Number(trimmed);
+      return Number.isFinite(numericValue)
+        ? numericValue > 100000000000 ? numericValue : numericValue * 1000
+        : null;
+    }
+
+    const parsedValue = Date.parse(trimmed);
+    return Number.isFinite(parsedValue) ? parsedValue : null;
+  }
+
+  function getItemPeriodTimestampMs(item) {
+    const candidates = [
+      item.sold_at,
+      item.soldAt,
+      item.purchased_at,
+      item.purchasedAt,
+      item.created,
+      item.created_at,
+      item.createdAt,
+      item.updated,
+      item.updated_at,
+      item.updatedAt
+    ];
+
+    for (const candidate of candidates) {
+      const timestampMs = getTimestampMs(candidate);
+
+      if (timestampMs !== null && Number.isFinite(timestampMs)) {
+        return timestampMs;
+      }
+    }
+
+    return null;
+  }
+
+  function getDirectFetchPeriodState(items) {
+    const cutoff = Date.now() - DIRECT_FETCH_THREE_MONTHS_MS;
+    let newerCount = 0;
+    let olderCount = 0;
+    let missingDateCount = 0;
+
+    for (const item of items) {
+      const timestampMs = getItemPeriodTimestampMs(item);
+
+      if (timestampMs === null) {
+        missingDateCount += 1;
+        continue;
+      }
+
+      if (timestampMs < cutoff) {
+        olderCount += 1;
+      } else {
+        newerCount += 1;
+      }
+    }
+
+    const datedCount = newerCount + olderCount;
+    const minDatedCount = Math.min(DIRECT_FETCH_MIN_DATED_ITEMS_FOR_PERIOD_STOP, items.length);
+
+    return {
+      newerCount,
+      olderCount,
+      missingDateCount,
+      datedCount,
+      oldOnlyPage: items.length > 0 && datedCount >= minDatedCount && newerCount === 0 && olderCount > 0
+    };
   }
 
   function attachRequestStatusToPayload(payload, requestStatus) {
@@ -614,6 +702,9 @@
       const fetchPages = async (status) => {
         let fetchedCount = 0;
         let maxPagerId = null;
+        let oldOnlyPageCount = 0;
+        let pageCount = 0;
+        let stopReason = "pager_completed";
         const seenPagerIds = new Set();
 
         for (let pageIndex = 0; pageIndex < DIRECT_FETCH_MAX_PAGES_PER_STATUS; pageIndex += 1) {
@@ -634,7 +725,7 @@
               status,
               httpStatus: response.status
             });
-            return { fetchedCount, failed: true };
+            return { fetchedCount, failed: true, pageCount, stopReason: "http_failed" };
           }
 
           let payload;
@@ -647,7 +738,7 @@
               status,
               jsonError: error instanceof Error ? error.message : String(error)
             });
-            return { fetchedCount, failed: true };
+            return { fetchedCount, failed: true, pageCount, stopReason: "json_failed" };
           }
 
           if (!isCurrentWatch(requestId, watch)) {
@@ -660,6 +751,7 @@
           const pagerIdLocation = getPagerIdLocation(payload, items);
           const isLikelyFullPage = items.length >= DIRECT_FETCH_MIN_FULL_PAGE_COUNT;
           const shouldContinue = Boolean(nextPagerId) && (hasNext === true || (isLikelyFullPage && hasNext !== false));
+          const periodState = getDirectFetchPeriodState(items);
 
           log("direct_fetch_page_received", {
             sellerId: watch.sellerId,
@@ -670,12 +762,16 @@
             hasNextPagerId: Boolean(nextPagerId),
             pagerIdLocation,
             isLikelyFullPage,
+            periodState,
             continueByFullPage: hasNext !== true && shouldContinue
           });
 
           if (items.length === 0) {
+            stopReason = "empty_page";
             break;
           }
+
+          pageCount += 1;
 
           await handleMatchedPayload(url, payload, { notify: false, targetRequestId: requestId, cache: false });
           totalFetched += items.length;
@@ -687,7 +783,22 @@
 
           postWatchProgress(requestId, watch);
 
+          oldOnlyPageCount = periodState.oldOnlyPage ? oldOnlyPageCount + 1 : 0;
+
+          if (oldOnlyPageCount >= DIRECT_FETCH_OLD_PAGE_STOP_COUNT) {
+            stopReason = "period_old_pages";
+            log("direct_fetch_stop_by_period", {
+              sellerId: watch.sellerId,
+              status,
+              pageIndex: pageIndex + 1,
+              oldOnlyPageCount,
+              ...periodState
+            });
+            break;
+          }
+
           if (!shouldContinue || !nextPagerId || seenPagerIds.has(nextPagerId)) {
+            stopReason = seenPagerIds.has(nextPagerId) ? "duplicate_pager" : "pager_completed";
             break;
           }
 
@@ -695,24 +806,30 @@
           maxPagerId = nextPagerId;
         }
 
-        return { fetchedCount, failed: false };
+        return { fetchedCount, failed: false, pageCount, stopReason };
       };
 
       const primaryResult = await fetchPages(DIRECT_FETCH_STATUS);
+      let finalStopReason = primaryResult.stopReason;
+      let totalPageCount = primaryResult.pageCount;
 
       if (!isCurrentWatch(requestId, watch)) {
         return;
       }
 
       if (primaryResult.failed || primaryResult.fetchedCount === 0) {
-        await fetchPages(DIRECT_FETCH_FALLBACK_STATUS);
+        const fallbackResult = await fetchPages(DIRECT_FETCH_FALLBACK_STATUS);
+        finalStopReason = fallbackResult.stopReason;
+        totalPageCount += fallbackResult.pageCount;
       }
 
       cacheWatchPayload(watch);
 
       log("direct_fetch_completed", {
         sellerId: watch.sellerId,
-        totalFetched
+        totalFetched,
+        pageCount: totalPageCount,
+        stopReason: finalStopReason
       });
       if (!isCurrentWatch(requestId, watch)) {
         return;
