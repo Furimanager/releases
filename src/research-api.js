@@ -3,6 +3,10 @@ const FURIMANE_RESEARCH_API_TIMEOUT_MS = 30000;
 const FURIMANE_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const FURIMANE_LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
 
+function hasSavedFurimanePurchasePrice(price) {
+  return price?.purchasePrice != null || price?.shippingFee != null;
+}
+
 function getFurimaneAppUrl() {
   return (window.FurimanagerConfig?.APP_URL ?? FURIMANE_DEFAULT_APP_URL).replace(/\/$/, "");
 }
@@ -411,10 +415,16 @@ async function getFurimaneResearchPurchasePricesBatch(platform, itemIds, options
     console.warn("[furimane-research] purchase prices batch API failed; using local fallback", error);
   }
 
-  return {
-    ...serverPrices,
-    ...await getFurimaneLocalPurchasePricesBatch(platform, itemIds)
-  };
+  const localPrices = await getFurimaneLocalPurchasePricesBatch(platform, itemIds);
+
+  return itemIds.reduce((result, itemId) => {
+    const serverPrice = serverPrices[itemId];
+    const localPrice = localPrices[itemId];
+    result[itemId] = hasSavedFurimanePurchasePrice(serverPrice)
+      ? serverPrice
+      : localPrice ?? serverPrice ?? { purchasePrice: null, shippingFee: null };
+    return result;
+  }, {});
 }
 
 window.FurimanagerResearchApi = {

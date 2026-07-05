@@ -27,6 +27,19 @@ type ResearchBookmark = {
   thumbnail_url: string | null;
   item_url: string | null;
   created_at?: string;
+  period_sales?: ResearchBookmarkPeriodSales;
+};
+
+type ResearchBookmarkPeriodStats = {
+  count: number;
+  revenue: number;
+};
+
+type ResearchBookmarkPeriodSales = {
+  period1: ResearchBookmarkPeriodStats;
+  period2: ResearchBookmarkPeriodStats;
+  period3: ResearchBookmarkPeriodStats;
+  total: ResearchBookmarkPeriodStats;
 };
 
 type ResearchBookmarkPayload = {
@@ -36,6 +49,7 @@ type ResearchBookmarkPayload = {
   price: number;
   thumbnail_url: string | null;
   item_url: string | null;
+  period_sales?: ResearchBookmarkPeriodSales;
 };
 
 type ResearchRequestOptions = {
@@ -166,6 +180,10 @@ const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_API_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
+
+function hasSavedPurchasePrice(price: ResearchPurchasePrice | undefined) {
+  return price?.purchasePrice != null || price?.shippingFee != null;
+}
 
 function getAppUrl() {
   return (window.FurimanagerConfig?.APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, "");
@@ -586,10 +604,16 @@ async function getPurchasePricesBatch(
     console.warn("[furimane-research] purchase prices batch API failed; using local fallback", error);
   }
 
-  return {
-    ...serverPrices,
-    ...await getLocalPurchasePricesBatch(platform, itemIds)
-  };
+  const localPrices = await getLocalPurchasePricesBatch(platform, itemIds);
+
+  return itemIds.reduce<ResearchPurchasePriceMap>((result, itemId) => {
+    const serverPrice = serverPrices[itemId];
+    const localPrice = localPrices[itemId];
+    result[itemId] = hasSavedPurchasePrice(serverPrice)
+      ? serverPrice
+      : localPrice ?? serverPrice ?? { purchasePrice: null, shippingFee: null };
+    return result;
+  }, {});
 }
 
 window.FurimanagerResearchApi = {

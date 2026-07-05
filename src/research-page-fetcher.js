@@ -18,7 +18,6 @@
     "hook_installed",
     "direct_fetch_started",
     "direct_fetch_completed",
-    "direct_fetch_missing_snapshot",
     "direct_fetch_stop_by_period",
     "direct_fetch_failed",
     "direct_fetch_error",
@@ -170,6 +169,30 @@
     return payload.data.filter(isObject);
   }
 
+  function getNestedPayloadItem(item) {
+    if (!item) {
+      return null;
+    }
+
+    for (const key of ["item", "itemData", "item_data", "itemDetail", "item_detail", "listing", "product"]) {
+      const value = item[key];
+
+      if (isObject(value)) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  function getPayloadItemSource(item) {
+    const nestedItem = getNestedPayloadItem(item);
+
+    return item && nestedItem
+      ? { ...item, ...nestedItem }
+      : item;
+  }
+
   function getTimestampMs(value) {
     if (typeof value === "number" && Number.isFinite(value)) {
       return value > 100000000000 ? value : value * 1000;
@@ -197,17 +220,18 @@
   }
 
   function getItemPeriodTimestampMs(item) {
+    const source = getPayloadItemSource(item) ?? item;
     const candidates = [
-      item.sold_at,
-      item.soldAt,
-      item.purchased_at,
-      item.purchasedAt,
-      item.created,
-      item.created_at,
-      item.createdAt,
-      item.updated,
-      item.updated_at,
-      item.updatedAt
+      source.sold_at,
+      source.soldAt,
+      source.purchased_at,
+      source.purchasedAt,
+      source.created,
+      source.created_at,
+      source.createdAt,
+      source.updated,
+      source.updated_at,
+      source.updatedAt
     ];
 
     for (const candidate of candidates) {
@@ -270,7 +294,8 @@
   }
 
   function getPayloadItemId(item) {
-    return getStringValue(item?.id, item?.item_id, item?.itemId);
+    const source = getPayloadItemSource(item);
+    return getStringValue(source?.id, source?.item_id, source?.itemId);
   }
 
   function getPayloadMeta(payload) {
@@ -673,19 +698,6 @@
       await waitForDirectFetchSnapshot(watch.sellerId);
 
       if (!isCurrentWatch(requestId, watch)) {
-        return;
-      }
-
-      if (!latestGetItemsRequestSnapshotsBySellerId.has(watch.sellerId)) {
-        log("direct_fetch_missing_snapshot", {
-          sellerId: watch.sellerId
-        });
-        watches.delete(requestId);
-        postToContent(requestId, {
-          ok: false,
-          sellerId: watch.sellerId,
-          error: "direct_fetch_missing_snapshot"
-        });
         return;
       }
 

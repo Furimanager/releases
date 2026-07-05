@@ -10,11 +10,13 @@ const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
 const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
 const FURIMANE_LOCAL_RESEARCH_CACHE_PREFIX = "furimane-research-local-cache:";
 const FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const FURIMANE_ACCESS_CACHE_TTL_MS = 5 * 60 * 1000;
 let currentAbortController = null;
 let currentResearchPageKey = null;
 let routeSyncTimerId = null;
 let lastObservedUrl = window.location.href;
 let overlayInsertRetryCount = 0;
+let cachedResearchAccess = null;
 
 function showResearchNotice(message) {
     document.querySelector(".furimane-research-table__toast")?.remove();
@@ -339,8 +341,35 @@ function getResearchErrorKind(error) {
 function getResearchErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
+function canContinueResearchWithoutAccessCheck(error, api) {
+    const message = getResearchErrorMessage(error);
+    const appUrl = api.getAppUrl?.() ?? "";
+    return ((message === "network_error" || message === "api_timeout") &&
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(appUrl));
+}
 function getResearchFetchFunction(scraper) {
     return scraper.fetchSellerResearchData ?? scraper.scrapeSellerPage ?? null;
+}
+async function checkResearchAccessWithCache(api, signal) {
+    if (cachedResearchAccess && Date.now() - cachedResearchAccess.savedAt < FURIMANE_ACCESS_CACHE_TTL_MS) {
+        return cachedResearchAccess.value;
+    }
+    const access = await api.checkAccess({ signal });
+    cachedResearchAccess = {
+        savedAt: Date.now(),
+        value: access
+    };
+    return access;
+}
+function createChildAbortController(parentSignal) {
+    const controller = new AbortController();
+    if (parentSignal.aborted) {
+        controller.abort();
+    }
+    else {
+        parentSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    return controller;
 }
 function getResearchErrorCopy(kind) {
     switch (kind) {
@@ -500,7 +529,6 @@ async function runResearchFlow(container, options = {}) {
     const api = getOverlayWindow().FurimanagerResearchApi;
     const scraper = getOverlayWindow().FurimanagerResearchScraper;
     let renderedCache = false;
-    let renderedCacheHasPeriodData = false;
     if (!api || !scraper) {
         renderError(container, "リサーチ機能の読み込みに失敗しました。", () => runResearchFlow(container));
         return;
@@ -515,7 +543,7 @@ async function runResearchFlow(container, options = {}) {
         const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
         let access;
         try {
-            access = await api.checkAccess({ signal });
+            access = await checkResearchAccessWithCache(api, signal);
         }
         catch (error) {
             if (error instanceof DOMException && error.name === "AbortError") {
@@ -526,7 +554,13 @@ async function runResearchFlow(container, options = {}) {
                 renderedCache = true;
                 return;
             }
-            throw error;
+            if (canContinueResearchWithoutAccessCheck(error, api)) {
+                console.warn("[furimane-research] access check failed; continuing in local dev mode", error);
+                access = { canUseResearch: true };
+            }
+            else {
+                throw error;
+            }
         }
         if (!(access.canUseResearch ?? access.canUse)) {
             renderAccessLocked(container);
@@ -599,7 +633,6 @@ async function runResearchFlowSafe(container, options = {}) {
     const api = getOverlayWindow().FurimanagerResearchApi;
     const scraper = getOverlayWindow().FurimanagerResearchScraper;
     let renderedCache = false;
-    let renderedCacheHasPeriodData = false;
     if (!api || !scraper) {
         const error = new Error("scraping_failed");
         console.error("[furimane-research] modules missing", { hasApi: Boolean(api), hasScraper: Boolean(scraper) });
@@ -618,7 +651,7 @@ async function runResearchFlowSafe(container, options = {}) {
         const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
         let access;
         try {
-            access = await api.checkAccess({ signal });
+            access = await checkResearchAccessWithCache(api, signal);
         }
         catch (error) {
             if (error instanceof DOMException && error.name === "AbortError") {
@@ -626,77 +659,102 @@ async function runResearchFlowSafe(container, options = {}) {
             }
             if (hasRenderableResearchData(localCachedData)) {
                 renderResults(container, localCachedData, "ブラウザキャッシュ");
-                renderedCache = true;
-                renderedCacheHasPeriodData = hasResearchPeriodData(localCachedData);
                 return;
             }
-            throw error;
+            if (canContinueResearchWithoutAccessCheck(error, api)) {
+                console.warn("[furimane-research] access check failed; continuing in local dev mode", error);
+                access = { canUseResearch: true };
+            }
+            else {
+                throw error;
+            }
         }
         if (!(access.canUseResearch ?? access.canUse)) {
             renderResearchError(container, new Error("plan_required"), retry, retryCount);
             return;
         }
         if (hasRenderableResearchData(localCachedData)) {
-            renderResults(container, localCachedData, "\u30d6\u30e9\u30a6\u30b6\u30ad\u30e3\u30c3\u30b7\u30e5");
-            renderedCache = true;
-            renderedCacheHasPeriodData = hasResearchPeriodData(localCachedData);
-        }
-        if (!renderedCache) {
-            renderLoading(container, options.forceRefresh ? "\u6700\u65b0\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u4e2d..." : "\u30ad\u30e3\u30c3\u30b7\u30e5\u78ba\u8a8d\u4e2d...");
-        }
-        const cachePromise = options.forceRefresh
-            ? Promise.resolve(null)
-            : api.checkCache(seller.seller_id, seller.platform, { signal }).catch((error) => {
-                console.warn("[furimane-research] cache check failed; continuing with live fetch", error);
-                return null;
-            });
-        const cache = await cachePromise;
-        const cachedData = getCachedResearchData(cache);
-        if (shouldRenderCacheData(cachedData, renderedCache, renderedCacheHasPeriodData)) {
-            const cachedDataHasPeriodData = hasResearchPeriodData(cachedData);
-            renderResults(container, cachedData, "24\u6642\u9593\u4ee5\u5185\u306e\u30ad\u30e3\u30c3\u30b7\u30e5");
-            if (cachedDataHasPeriodData || !renderedCacheHasPeriodData) {
-                writeLocalResearchCache(cachedData);
-            }
-            renderedCache = true;
-            renderedCacheHasPeriodData = cachedDataHasPeriodData;
-        }
-        else if (cachedData && renderedCache) {
-            console.info("[furimane-research] skipped lower quality server cache");
+            renderResults(container, localCachedData, "ブラウザキャッシュ");
+            return;
         }
         const strategy = getResearchFetchStrategy();
         console.log("[furimane-research] fetch strategy selected", {
             strategy,
             sellerId: seller.seller_id
         });
-        if (!renderedCache) {
-            renderLoading(container, strategy === "api"
-                ? "\u30ea\u30b5\u30fc\u30c1\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u4e2d... \u53d6\u5f97\u3067\u304d\u305f\u5206\u304b\u3089\u53cd\u6620\u3057\u307e\u3059"
-                : "\u901a\u5e38\u53d6\u5f97\u4e2d... \u73fe\u5728 0\u4ef6");
-        }
-        let progressMode = strategy;
         const fetchResearchData = getResearchFetchFunction(scraper);
         if (!fetchResearchData) {
             throw new Error("research_scraper_method_missing");
         }
-        const scraped = await fetchResearchData({
+        renderLoading(container, options.forceRefresh ? "最新データを取得中..." : "リサーチデータを取得中...");
+        let cacheDecisionDone = options.forceRefresh === true;
+        let flowSettled = false;
+        let progressMode = strategy;
+        const liveAbortController = createChildAbortController(signal);
+        const liveFetchPromise = fetchResearchData({
             strategy,
-            signal,
+            signal: liveAbortController.signal,
             onProgress: (count, details) => {
                 if (details?.phase === "dom_fallback") {
                     progressMode = "dom_fallback";
                 }
-                if (renderedCache) {
+                if (!cacheDecisionDone || flowSettled) {
                     return;
                 }
                 renderResearchProgress(container, seller, count, details, progressMode);
             }
-        });
+        }).then((scraped) => ({ type: "live", scraped }), (error) => ({ type: "live_error", error }));
+        const cachePromise = options.forceRefresh
+            ? Promise.resolve({ type: "cache", cachedData: null })
+            : api.checkCache(seller.seller_id, seller.platform, { signal })
+                .then((cache) => ({ type: "cache", cachedData: getCachedResearchData(cache) }))
+                .catch((error) => {
+                if (error instanceof DOMException && error.name === "AbortError") {
+                    throw error;
+                }
+                console.warn("[furimane-research] cache check failed; continuing with live fetch", error);
+                return { type: "cache", cachedData: null };
+            });
+        const firstResult = await Promise.race([cachePromise, liveFetchPromise]);
+        if (firstResult.type === "cache") {
+            cacheDecisionDone = true;
+            if (hasRenderableResearchData(firstResult.cachedData)) {
+                flowSettled = true;
+                liveAbortController.abort();
+                renderResults(container, firstResult.cachedData, "24時間以内のキャッシュ");
+                writeLocalResearchCache(firstResult.cachedData);
+                return;
+            }
+            renderLoading(container, strategy === "api"
+                ? "リサーチデータを取得中... 取得できた分から反映します"
+                : "通常取得中... 現在 0件");
+            const liveResult = await liveFetchPromise;
+            if (liveResult.type === "live_error") {
+                throw liveResult.error;
+            }
+            const scraped = liveResult.scraped;
+            const finalSourceLabel = strategy === "api" && scraped.strategy === "api"
+                ? "取得完了"
+                : strategy === "api" && scraped.strategy === "dom"
+                    ? "通常取得で表示"
+                    : "新規取得";
+            flowSettled = true;
+            scraped.seller.fetched_at = new Date().toISOString();
+            renderResults(container, scraped, finalSourceLabel);
+            persistResearchDataAfterPaint(scraped, signal);
+            return;
+        }
+        if (firstResult.type === "live_error") {
+            throw firstResult.error;
+        }
+        flowSettled = true;
+        cacheDecisionDone = true;
+        const scraped = firstResult.scraped;
         const finalSourceLabel = strategy === "api" && scraped.strategy === "api"
-            ? "\u53d6\u5f97\u5b8c\u4e86"
+            ? "取得完了"
             : strategy === "api" && scraped.strategy === "dom"
-                ? "\u901a\u5e38\u53d6\u5f97\u3067\u8868\u793a"
-                : "\u65b0\u898f\u53d6\u5f97";
+                ? "通常取得で表示"
+                : "新規取得";
         scraped.seller.fetched_at = new Date().toISOString();
         renderResults(container, scraped, finalSourceLabel);
         persistResearchDataAfterPaint(scraped, signal);

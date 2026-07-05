@@ -11,6 +11,9 @@
     const METADATA_SELECT_WAIT_MS = 250;
     const SELECTION_POLL_MS = 75;
     const SAFE_CLICK_SETTLE_MS = 150;
+    const FINAL_ACTION_AFTER_COMPLETE_WAIT_MS = 1000;
+    const FINAL_ACTION_MIN_WAIT_MS = 10000;
+    const FINAL_ACTION_DOM_STABLE_MS = 800;
     const IMAGE_DONE_KEY = "furimanager_relist_image_done";
     const SIZE_DONE_KEY = "furimanager_relist_size_done";
     const BRAND_DONE_KEY = "furimanager_relist_brand_done";
@@ -23,9 +26,13 @@
     const CATEGORY_ID_PATH_KEY = "furimanager_relist_category_id_path";
     const INITIAL_CREATE_VISITED_KEY = "furimanager_relist_initial_create_visited";
     const DRAFT_SAVE_DONE_KEY = "furimanager_relist_draft_save_done";
+    const LISTING_SUBMIT_DONE_KEY = "furimanager_relist_submit_done";
     const ENABLE_DOM_DEBUG = false;
     const ENABLE_METADATA_AUTOFILL = true;
     let imageFillAttempted = false;
+    let sellFormMutationObserver = null;
+    let observedSellFormMutationRoot = null;
+    let lastSellFormMutationAt = Date.now();
     if (mountedWindow.__furimanagerRelistAutofillMounted) {
         return;
     }
@@ -289,6 +296,7 @@
     }
     async function waitForFormAndFill(item) {
         resetSelectionSessionIfNeeded(item);
+        observeSellFormMutations();
         if (ENABLE_DOM_DEBUG && isMercariSellDebugPath()) {
             return;
         }
@@ -308,14 +316,26 @@
             const result = await fillAvailableFields(item);
             hasFilledAnyField = result.filled || hasFilledAnyField;
             if (result.complete) {
-                if (item.mode === "draft") {
-                    await saveDraftAfterFill();
+                await sleep(FINAL_ACTION_AFTER_COMPLETE_WAIT_MS);
+                if (!isFinalActionReady(item)) {
+                    await sleep(RETRY_INTERVAL_MS);
+                    continue;
                 }
+                if (item.mode === "draft") {
+                    await saveDraftAfterFill(item);
+                }
+                else if (item.mode === "relist") {
+                    await submitListingAfterFill(item);
+                }
+                return;
+            }
+            if (hasFilledAnyField && Date.now() - startedAt > FINAL_ACTION_MIN_WAIT_MS && await clickVisibleFinalActionIfReady(item, { requireStableDom: false })) {
                 return;
             }
             await sleep(RETRY_INTERVAL_MS);
         }
         if (hasFilledAnyField) {
+            await clickVisibleFinalActionIfReady(item, { requireStableDom: false });
             return;
         }
         if (isInitialSellLandingPage()) {
@@ -323,18 +343,94 @@
         }
         showToast("フリマネの出品データを読み込みましたが、入力できる欄が見つかりませんでした");
     }
+    function observeSellFormMutations() {
+        const root = document.querySelector("form") ?? document.querySelector("main") ?? document.body;
+        if (!root || observedSellFormMutationRoot === root) {
+            return;
+        }
+        sellFormMutationObserver?.disconnect();
+        lastSellFormMutationAt = Date.now();
+        observedSellFormMutationRoot = root;
+        sellFormMutationObserver = new MutationObserver(() => {
+            lastSellFormMutationAt = Date.now();
+        });
+        sellFormMutationObserver.observe(root, {
+            attributes: true,
+            childList: true,
+            subtree: true,
+        });
+    }
     function resetSelectionSessionIfNeeded(item) {
         const sessionKey = item.savedAt ?? item.itemUrl ?? item.itemId ?? "unknown";
         if (sessionStorage.getItem(SESSION_ITEM_KEY) === sessionKey) {
             return;
         }
-        [IMAGE_DONE_KEY, SIZE_DONE_KEY, BRAND_DONE_KEY, SHIPPING_FROM_DONE_KEY, CATEGORY_STEP_KEY, CATEGORY_DONE_KEY, CONDITION_DONE_KEY, SHIPPING_METHOD_DONE_KEY, CATEGORY_ID_PATH_KEY, INITIAL_CREATE_VISITED_KEY, DRAFT_SAVE_DONE_KEY].forEach((key) => sessionStorage.removeItem(key));
+        [IMAGE_DONE_KEY, SIZE_DONE_KEY, BRAND_DONE_KEY, SHIPPING_FROM_DONE_KEY, CATEGORY_STEP_KEY, CATEGORY_DONE_KEY, CONDITION_DONE_KEY, SHIPPING_METHOD_DONE_KEY, CATEGORY_ID_PATH_KEY, INITIAL_CREATE_VISITED_KEY, DRAFT_SAVE_DONE_KEY, LISTING_SUBMIT_DONE_KEY].forEach((key) => sessionStorage.removeItem(key));
         sessionStorage.setItem(SESSION_ITEM_KEY, sessionKey);
     }
-    async function saveDraftAfterFill() {
-        if (sessionStorage.getItem(DRAFT_SAVE_DONE_KEY) === "true") {
+    async function submitListingAfterFill(item) {
+        if (sessionStorage.getItem(LISTING_SUBMIT_DONE_KEY) === "true" && !findFinalListingSubmitButton()) {
             return;
         }
+        await ensurePriceBeforeFinalAction(item);
+        await sleep(SAFE_CLICK_SETTLE_MS);
+        const button = await waitForFinalListingSubmitButton();
+        if (!button) {
+            showToast("「出品する」ボタンが見つかりませんでした");
+            return;
+        }
+        sessionStorage.setItem(LISTING_SUBMIT_DONE_KEY, "true");
+        clickButtonLike(button);
+        chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
+        showToast("フリマネが出品ボタンを押しました");
+    }
+    async function waitForFinalListingSubmitButton() {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < MAX_WAIT_MS) {
+            const button = findFinalListingSubmitButton();
+            if (button && isClickableButtonLike(button)) {
+                return button;
+            }
+            await sleep(RETRY_INTERVAL_MS);
+        }
+        return null;
+    }
+    function findFinalListingSubmitButton() {
+        if (window.location.pathname !== "/sell/create") {
+            return null;
+        }
+        const selectors = [
+            'button[data-testid="list-item-button"]',
+            'button[type="submit"][data-testid="list-item-button"]',
+            '[data-location="listing:footer:exit_buttons:list"] button',
+            '[data-location="listing:footer:exit_buttons:list"]',
+            'button[type="submit"]',
+            'button[data-testid*="submit"]',
+            '[data-testid*="submit"] button',
+            '[data-location*="submit"] button',
+            '[data-location*="listing"] button',
+            'mer-button button',
+        ];
+        const candidates = selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)));
+        return Array.from(new Set(candidates))
+            .filter((element) => element instanceof HTMLElement && isVisible(element))
+            .find((element) => {
+            const joinedText = normalizeText([
+                getElementSearchText(element),
+                element.getAttribute("data-testid"),
+                element.getAttribute("data-location"),
+                element.getAttribute("aria-label"),
+                element.id,
+                element.className?.toString?.(),
+            ].filter(Boolean).join(" "));
+            return /出品する|公開する|確認する/.test(joinedText) || joinedText.toLowerCase().includes("submit");
+        }) ?? null;
+    }
+    async function saveDraftAfterFill(item) {
+        if (sessionStorage.getItem(DRAFT_SAVE_DONE_KEY) === "true" && !findDraftSaveButton()) {
+            return;
+        }
+        await ensurePriceBeforeFinalAction(item);
         await sleep(SAFE_CLICK_SETTLE_MS);
         const button = await waitForDraftSaveButton();
         if (!button) {
@@ -344,7 +440,56 @@
         // 入力完了後、画像のDOMにある最後の下書き保存ボタンを1回だけ押す。
         sessionStorage.setItem(DRAFT_SAVE_DONE_KEY, "true");
         clickButtonLike(button);
+        await clickDraftSaveConfirmationIfVisible();
         chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
+    }
+    async function clickVisibleFinalActionIfReady(item, options = {}) {
+        if (!isFinalActionReady(item, options)) {
+            return false;
+        }
+        if (item.mode === "draft") {
+            await saveDraftAfterFill(item);
+            return true;
+        }
+        if (item.mode === "relist") {
+            await submitListingAfterFill(item);
+            return true;
+        }
+        return false;
+    }
+    async function clickDraftSaveConfirmationIfVisible() {
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+            const button = findDraftSaveConfirmationButton();
+            if (button && isClickableButtonLike(button)) {
+                clickButtonLike(button);
+                return;
+            }
+            await sleep(SELECTION_POLL_MS);
+        }
+    }
+    function findDraftSaveConfirmationButton() {
+        const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-testid*="modal"], [class*="modal"], [class*="Modal"]'))
+            .filter((element) => element instanceof HTMLElement && isVisible(element));
+        for (const dialog of dialogs) {
+            const button = Array.from(dialog.querySelectorAll('button, [role="button"]'))
+                .filter((element) => element instanceof HTMLElement && isVisible(element))
+                .find((element) => /保存する|下書きに保存する|決定|OK/.test(getElementSearchText(element)));
+            if (button) {
+                return button;
+            }
+        }
+        return null;
+    }
+    async function ensurePriceBeforeFinalAction(item) {
+        if (typeof item.price !== "number") {
+            return;
+        }
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            if (fillPriceField(item.price)) {
+                return;
+            }
+            await sleep(RETRY_INTERVAL_MS);
+        }
     }
     async function waitForDraftSaveButton() {
         const startedAt = Date.now();
@@ -445,7 +590,7 @@
         }
         if (typeof item.price === "number") {
             targetCount += 1;
-            filledCount += setFieldValue(findPriceField(), String(item.price)) ? 1 : 0;
+            filledCount += fillPriceField(item.price) ? 1 : 0;
         }
         if (item.description) {
             targetCount += 1;
@@ -456,10 +601,34 @@
         const metadataResult = basicFieldsComplete ? await fillMetadataFields(item) : { targetCount: 0, filledCount: 0 };
         targetCount += metadataResult.targetCount;
         filledCount += metadataResult.filledCount;
+        const valuesComplete = targetCount > 0 && filledCount === targetCount;
         return {
             filled: filledCount > 0,
-            complete: targetCount > 0 && filledCount === targetCount,
+            complete: valuesComplete && isFinalActionReady(item),
         };
+    }
+    function isFinalActionReady(item, options = {}) {
+        if (window.location.pathname !== "/sell/create") {
+            return false;
+        }
+        if (isImageUploadDialogOpen() || isAiSupportDialogOpen() || findActivePickerRoot() !== document) {
+            return false;
+        }
+        if ((options.requireStableDom ?? true) && Date.now() - lastSellFormMutationAt < FINAL_ACTION_DOM_STABLE_MS) {
+            return false;
+        }
+        if (typeof item.price === "number" && !isPriceReady(item.price)) {
+            return false;
+        }
+        const button = item.mode === "draft" ? findDraftSaveButton() : item.mode === "relist" ? findFinalListingSubmitButton() : null;
+        return button !== null && isClickableButtonLike(button);
+    }
+    function isPriceReady(price) {
+        const field = findPriceField();
+        if (field && parsePriceValue(field.value || field.getAttribute("value") || "") === price) {
+            return true;
+        }
+        return isPriceAlreadyDisplayed(price);
     }
     async function fillImageField(imageUrls) {
         if (sessionStorage.getItem(IMAGE_DONE_KEY) === "true") {
@@ -543,9 +712,9 @@
     function isClickableButtonLike(element) {
         const button = element instanceof HTMLButtonElement ? element : element.querySelector("button");
         if (button instanceof HTMLButtonElement) {
-            return !button.disabled && isVisible(button);
+            return !button.disabled && button.getAttribute("aria-disabled") !== "true" && isVisible(button);
         }
-        return isVisible(element);
+        return element.getAttribute("aria-disabled") !== "true" && isVisible(element);
     }
     function getImageUploadDialog() {
         const dialog = document.querySelector('[role="dialog"][aria-label="出品画像"], [data-testid="image-upload-step"]');
@@ -1279,9 +1448,18 @@
     function clickButtonLike(element) {
         const innerButton = element instanceof HTMLButtonElement ? element : element.querySelector("button");
         if (innerButton instanceof HTMLElement) {
-            innerButton.click();
+            innerButton.scrollIntoView({ block: "center", inline: "center" });
+            dispatchRealisticClick(innerButton);
             return;
         }
+        element.scrollIntoView({ block: "center", inline: "center" });
+        dispatchRealisticClick(element);
+    }
+    function dispatchRealisticClick(element) {
+        element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerType: "mouse" }));
+        element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerType: "mouse" }));
+        element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
         element.click();
     }
     function clickLinkOrInnerButton(link) {
@@ -1593,15 +1771,52 @@
         ]);
     }
     function findPriceField() {
-        return findInputLike([
+        const directField = findInputLike([
             'input[name="price"]',
             'input[name*="price"]',
-            'input[inputmode="numeric"]',
             'input[placeholder*="価格"]',
             'input[aria-label*="価格"]',
             '[data-testid*="price"] input',
             '[data-testid*="Price"] input',
         ]);
+        if (directField) {
+            return directField;
+        }
+        const inputs = Array.from(document.querySelectorAll('input[inputmode="numeric"], input[type="number"], input[type="text"]'))
+            .filter((input) => input instanceof HTMLInputElement && isVisible(input));
+        return inputs.find((input) => {
+            const text = normalizeText([
+                input.getAttribute("aria-label"),
+                input.getAttribute("placeholder"),
+                getNearbySearchText(input),
+            ].filter(Boolean).join(" "));
+            return /価格|販売価格|開始価格/.test(text);
+        }) ?? inputs.find((input) => input.inputMode === "numeric") ?? null;
+    }
+    function fillPriceField(price) {
+        const field = findPriceField();
+        if (field) {
+            setFieldValue(field, String(price));
+            return true;
+        }
+        return isPriceAlreadyDisplayed(price);
+    }
+    function isPriceAlreadyDisplayed(price) {
+        const candidates = Array.from(document.querySelectorAll('[data-testid*="price"], [aria-label*="価格"], section, div'))
+            .filter((element) => element instanceof HTMLElement && isVisible(element));
+        return candidates.some((element) => {
+            const text = normalizeText(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""}`);
+            return /価格|販売価格|開始価格/.test(text) && parseFirstYenPrice(text) === price;
+        });
+    }
+    function parseFirstYenPrice(value) {
+        const matched = value.match(/(?:¥|￥)\s*([0-9０-９,，]+)/);
+        if (!matched) {
+            return null;
+        }
+        const normalized = matched[1].replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0)).replace(/[^\d]/g, "");
+        const price = Number.parseInt(normalized, 10);
+        return Number.isFinite(price) ? price : null;
     }
     function findDescriptionField() {
         return findInputLike([
@@ -1629,6 +1844,7 @@
         if (field instanceof HTMLSelectElement) {
             return setSelectValue(field, value);
         }
+        field.focus();
         const prototype = Object.getPrototypeOf(field);
         const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
         if (descriptor?.set) {
@@ -1637,8 +1853,11 @@
         else {
             field.value = value;
         }
+        field.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: value }));
         field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
         field.dispatchEvent(new Event("change", { bubbles: true }));
+        field.blur();
         return true;
     }
     function setSelectValue(field, value) {

@@ -125,32 +125,38 @@ async function renderFurimaneSimulator(rowElement, item, options = {}) {
     purchaseInput.min = "0";
     purchaseInput.inputMode = "numeric";
     purchaseInput.value = savedPrice.purchasePrice === null ? "" : String(savedPrice.purchasePrice);
-    purchaseInput.placeholder = "例: 1200";
+    purchaseInput.placeholder = "仕入れ値を入力してください";
     purchaseInput.className = "furimane-research-simulator__input";
 
     const shippingInput = document.createElement("input");
     shippingInput.type = "number";
     shippingInput.min = "0";
     shippingInput.inputMode = "numeric";
-    shippingInput.value = savedPrice.shippingFee === null ? "0" : String(savedPrice.shippingFee);
+    shippingInput.value = savedPrice.shippingFee === null ? "" : String(savedPrice.shippingFee);
+    shippingInput.placeholder = "任意";
     shippingInput.className = "furimane-research-simulator__input";
+
+    const monthlySalesInput = document.createElement("input");
+    monthlySalesInput.type = "number";
+    monthlySalesInput.min = "0";
+    monthlySalesInput.inputMode = "numeric";
+    monthlySalesInput.placeholder = "任意";
+    monthlySalesInput.className = "furimane-research-simulator__input";
 
     const feeValue = createFurimaneSimulatorElement("strong", "furimane-research-simulator__metric-value");
     const profitValue = createFurimaneSimulatorElement("strong", "furimane-research-simulator__metric-value");
     const rateValue = createFurimaneSimulatorElement("strong", "furimane-research-simulator__metric-rate");
     const monthlyProfitValue = createFurimaneSimulatorElement("strong", "furimane-research-simulator__metric-value");
-    const purchaseHint = createFurimaneSimulatorElement("p", "furimane-research-simulator__hint", "仕入れ値を入力してください");
     const saveStatus = createFurimaneSimulatorElement("p", "furimane-research-simulator__save-status", "");
     const saveButton = createFurimaneSimulatorElement("button", "furimane-research-simulator__save-button", "保存する");
     saveButton.type = "button";
 
     const recalculate = () => {
-      const hasPurchasePrice = purchaseInput.value.trim().length > 0;
       const purchasePrice = normalizeFurimaneSimulatorAmount(purchaseInput.value);
       const shippingFee = normalizeFurimaneSimulatorAmount(shippingInput.value);
-      const result = calculateFurimaneSimulatorProfit(item.price, purchasePrice, shippingFee, platform, options.monthlySalesCount ?? 0);
+      const monthlySalesCount = normalizeFurimaneSimulatorAmount(monthlySalesInput.value);
+      const result = calculateFurimaneSimulatorProfit(item.price, purchasePrice, shippingFee, platform, monthlySalesCount);
 
-      purchaseHint.hidden = hasPurchasePrice;
       feeValue.textContent = formatFurimaneSimulatorPrice(result.fee);
       profitValue.textContent = formatFurimaneSimulatorPrice(result.netProfit);
       profitValue.classList.toggle("furimane-research-simulator__metric-value--positive", result.netProfit >= 0);
@@ -169,7 +175,7 @@ async function renderFurimaneSimulator(rowElement, item, options = {}) {
 
     const save = async () => {
       if (!purchaseInput.value.trim()) {
-        saveStatus.textContent = "仕入れ値を入力してください";
+        saveStatus.textContent = "未入力";
         return;
       }
 
@@ -202,16 +208,23 @@ async function renderFurimaneSimulator(rowElement, item, options = {}) {
       recalculate();
       markUnsaved();
     });
+
+    monthlySalesInput.addEventListener("input", () => {
+      recalculate();
+    });
     saveButton.addEventListener("click", save);
 
     const form = createFurimaneSimulatorElement("div", "furimane-research-simulator__form");
     const purchaseLabel = createFurimaneSimulatorElement("label", "furimane-research-simulator__label");
-    purchaseLabel.append(createFurimaneSimulatorElement("span", undefined, "仕入れ値"), purchaseInput, purchaseHint);
+    purchaseLabel.append(createFurimaneSimulatorElement("span", undefined, "仕入れ値"), purchaseInput);
 
     const shippingLabel = createFurimaneSimulatorElement("label", "furimane-research-simulator__label");
     shippingLabel.append(createFurimaneSimulatorElement("span", undefined, "送料"), shippingInput);
 
-    form.append(purchaseLabel, shippingLabel);
+    const monthlySalesLabel = createFurimaneSimulatorElement("label", "furimane-research-simulator__label");
+    monthlySalesLabel.append(createFurimaneSimulatorElement("span", undefined, "予想販売個数"), monthlySalesInput);
+
+    form.append(purchaseLabel, shippingLabel, monthlySalesLabel);
 
     const metrics = createFurimaneSimulatorElement("div", "furimane-research-simulator__metrics");
     const feeMetric = createFurimaneSimulatorElement("div", "furimane-research-simulator__metric");

@@ -967,20 +967,22 @@ function getApiPeriodDateCandidate(rawListing: ResearchApiRawListing): ApiPeriod
     return null;
   }
 
+  const listing = getApiListingSource(rawListing);
+
   const confirmedCandidates: Array<[string, unknown]> = [
-    ["sold_at", rawListing.sold_at],
-    ["soldAt", rawListing.soldAt],
-    ["purchased_at", rawListing.purchased_at],
-    ["purchasedAt", rawListing.purchasedAt]
+    ["sold_at", listing.sold_at],
+    ["soldAt", listing.soldAt],
+    ["purchased_at", listing.purchased_at],
+    ["purchasedAt", listing.purchasedAt]
   ];
   // 売却日時が無いAPI取得分は、期間集計用の推定日として作成日時を優先する。
   const estimatedCandidates: Array<[string, unknown]> = [
-    ["created", rawListing.created],
-    ["created_at", rawListing.created_at],
-    ["createdAt", rawListing.createdAt],
-    ["updated", rawListing.updated],
-    ["updated_at", rawListing.updated_at],
-    ["updatedAt", rawListing.updatedAt]
+    ["created", listing.created],
+    ["created_at", listing.created_at],
+    ["createdAt", listing.createdAt],
+    ["updated", listing.updated],
+    ["updated_at", listing.updated_at],
+    ["updatedAt", listing.updatedAt]
   ];
 
   for (const [source, value] of [...confirmedCandidates, ...estimatedCandidates]) {
@@ -1205,6 +1207,10 @@ function isResearchObject(value: unknown): value is Record<string, unknown> {
 
 function getStringValue(...values: unknown[]) {
   for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+
     if (typeof value !== "string") {
       continue;
     }
@@ -1301,6 +1307,34 @@ function getArrayValue(...values: unknown[]) {
   return [];
 }
 
+function getNestedApiListing(rawListing: ResearchApiRawListing | null) {
+  if (!rawListing) {
+    return null;
+  }
+
+  for (const key of ["item", "itemData", "item_data", "itemDetail", "item_detail", "listing", "product"]) {
+    const value = rawListing[key];
+
+    if (isResearchObject(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function getApiListingSource(rawListing: ResearchApiRawListing) {
+  const nestedListing = getNestedApiListing(rawListing);
+
+  return nestedListing
+    ? {
+        ...rawListing,
+        ...nestedListing,
+        __furimane_request_status: nestedListing["__furimane_request_status"] ?? rawListing["__furimane_request_status"]
+      }
+    : rawListing;
+}
+
 function getApiMeta(payload: Record<string, unknown>) {
   return isResearchObject(payload["meta"]) ? payload["meta"] : null;
 }
@@ -1389,7 +1423,8 @@ function logApiPagerDiagnostic(payload: Record<string, unknown>, rawListings: Re
 }
 
 function getApiThumbnailUrl(rawListing: ResearchApiRawListing) {
-  const thumbnails = getArrayValue(rawListing["thumbnails"]);
+  const listing = getApiListingSource(rawListing);
+  const thumbnails = getArrayValue(listing["thumbnails"], listing["photos"], listing["images"]);
 
   for (const thumbnail of thumbnails) {
     const url = typeof thumbnail === "string"
@@ -1409,12 +1444,12 @@ function getApiThumbnailUrl(rawListing: ResearchApiRawListing) {
   }
 
   return getHttpUrlValue(
-    rawListing["thumbnail_url"],
-    rawListing["thumbnailUrl"],
-    rawListing["image_url"],
-    rawListing["imageUrl"],
-    rawListing["photo_url"],
-    rawListing["photoUrl"]
+    listing["thumbnail_url"],
+    listing["thumbnailUrl"],
+    listing["image_url"],
+    listing["imageUrl"],
+    listing["photo_url"],
+    listing["photoUrl"]
   );
 }
 
@@ -1539,21 +1574,26 @@ function addPeriodRevenue(summary: ReturnType<typeof createPeriodRevenueSummary>
 }
 
 function getRawApiItemPrice(rawListing: ResearchApiRawListing) {
-  return getNumberValue(rawListing["price"], rawListing["amount"], rawListing["sold_price"], rawListing["soldPrice"]);
+  const listing = getApiListingSource(rawListing);
+  return getNumberValue(listing["price"], listing["amount"], listing["sold_price"], listing["soldPrice"]);
 }
 
 function getRawApiItemTitle(rawListing: ResearchApiRawListing) {
-  return getStringValue(rawListing["name"], rawListing["title"], rawListing["item_name"], rawListing["itemName"]);
+  const listing = getApiListingSource(rawListing);
+  return getStringValue(listing["name"], listing["title"], listing["item_name"], listing["itemName"]);
 }
 
 function getRawApiItemId(rawListing: ResearchApiRawListing) {
-  return getStringValue(rawListing["id"], rawListing["item_id"], rawListing["itemId"]);
+  const listing = getApiListingSource(rawListing);
+  return getStringValue(listing["id"], listing["item_id"], listing["itemId"]);
 }
 
 function getRawApiDateValue(rawListing: ResearchApiRawListing, keys: string[]) {
+  const listing = getApiListingSource(rawListing);
+
   for (const key of keys) {
-    if (rawListing[key] !== undefined && rawListing[key] !== null) {
-      return rawListing[key];
+    if (listing[key] !== undefined && listing[key] !== null) {
+      return listing[key];
     }
   }
 
@@ -1561,7 +1601,8 @@ function getRawApiDateValue(rawListing: ResearchApiRawListing, keys: string[]) {
 }
 
 function getRawApiStatus(rawListing: ResearchApiRawListing) {
-  return getStringValue(rawListing["status"], rawListing["item_status"], rawListing["itemStatus"]);
+  const listing = getApiListingSource(rawListing);
+  return getStringValue(listing["status"], listing["item_status"], listing["itemStatus"]);
 }
 
 function summarizeRawApiItemsByDateField(rawListings: ResearchApiRawListing[], keys: string[]) {
@@ -1735,17 +1776,18 @@ function logApiPeriodAnalysis(listings: ResearchListingRecord[], stopReason: str
 }
 
 function getApiListingStatus(rawListing: ResearchApiRawListing, soldAt: string | null) {
+  const listing = getApiListingSource(rawListing);
   const status = getStringValue(
-    rawListing["status"],
-    rawListing["item_status"],
-    rawListing["itemStatus"]
+    listing["status"],
+    listing["item_status"],
+    listing["itemStatus"]
   );
 
   if (status) {
     return status;
   }
 
-  const requestStatus = getStringValue(rawListing["__furimane_request_status"]);
+  const requestStatus = getStringValue(listing["__furimane_request_status"]);
 
   if (requestStatus) {
     const normalizedRequestStatus = requestStatus.toLowerCase();
@@ -1770,49 +1812,50 @@ function mapApiListingToResearchListing(
   rawListing: ResearchApiRawListing,
   platform: ResearchPlatform
 ): ResearchListingRecord | null {
+  const listing = getApiListingSource(rawListing);
   const itemId = getStringValue(
-    rawListing["id"],
-    rawListing["item_id"],
-    rawListing["itemId"],
+    listing["id"],
+    listing["item_id"],
+    listing["itemId"],
     getItemIdFromUrl(
       getHttpUrlValue(
-        rawListing["item_url"],
-        rawListing["itemUrl"],
-        rawListing["url"],
-        rawListing["webUrl"]
+        listing["item_url"],
+        listing["itemUrl"],
+        listing["url"],
+        listing["webUrl"]
       ) ?? ""
     )
   );
   const title = getStringValue(
-    rawListing["name"],
-    rawListing["title"],
-    rawListing["item_name"],
-    rawListing["itemName"]
+    listing["name"],
+    listing["title"],
+    listing["item_name"],
+    listing["itemName"]
   );
   const price = getNumberValue(
-    rawListing["price"],
-    rawListing["amount"],
-    rawListing["sold_price"],
-    rawListing["soldPrice"]
+    listing["price"],
+    listing["amount"],
+    listing["sold_price"],
+    listing["soldPrice"]
   );
 
   if (!itemId || !title || price === null) {
     return null;
   }
 
-  const seller = isResearchObject(rawListing["seller"]) ? rawListing["seller"] : null;
+  const seller = isResearchObject(listing["seller"]) ? listing["seller"] : null;
   const soldAt = getIsoDateValue(
-    rawListing["sold_at"],
-    rawListing["soldAt"],
-    rawListing["purchased_at"],
-    rawListing["purchasedAt"]
+    listing["sold_at"],
+    listing["soldAt"],
+    listing["purchased_at"],
+    listing["purchasedAt"]
   );
   const periodDate = getApiPeriodDateCandidate(rawListing);
   const itemUrl = getHttpUrlValue(
-    rawListing["item_url"],
-    rawListing["itemUrl"],
-    rawListing["url"],
-    rawListing["webUrl"],
+    listing["item_url"],
+    listing["itemUrl"],
+    listing["url"],
+    listing["webUrl"],
     getApiItemUrl(itemId)
   );
   return {
@@ -1825,8 +1868,8 @@ function mapApiListingToResearchListing(
     period_date_estimated: periodDate?.isEstimated ?? false,
     thumbnail_url: getApiThumbnailUrl(rawListing),
     item_url: itemUrl,
-    seller_id: getStringValue(rawListing["seller_id"], rawListing["sellerId"], seller?.["id"]),
-    seller_name: getStringValue(rawListing["seller_name"], rawListing["sellerName"], seller?.["name"]),
+    seller_id: getStringValue(listing["seller_id"], listing["sellerId"], seller?.["id"]),
+    seller_name: getStringValue(listing["seller_name"], listing["sellerName"], seller?.["name"]),
     status: getApiListingStatus(rawListing, soldAt),
     platform
   };
@@ -1978,6 +2021,10 @@ function normalizeApiPayloadToResearchListings(
   const listings = mapApiListingsToResearchListings(rawListings, seller.platform);
   const normalizedListings = normalizeFetchedListings(listings, seller.platform);
 
+  if (rawListings.length > 0 && normalizedListings.length === 0) {
+    throw new Error("mercari_api_mapping_empty");
+  }
+
   logApiPagerDiagnostic(apiPayload, rawListings);
   logApiPeriodAnalysis(normalizedListings, "page_api_payload_received");
   logApiPeriodDiagnostics(rawListings, normalizedListings);
@@ -2007,7 +2054,25 @@ async function fetchSellerResearchData(options: ResearchFetchOptions = {}): Prom
   let resolvedStrategy: ResearchFetchStrategy = strategy;
 
   if (strategy === "api") {
-    listings = await fetchSellerListingsByApiPoc(options);
+    try {
+      listings = await fetchSellerListingsByApiPoc(options);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
+
+      logApiFetch("warn", "fallback_to_dom", {
+        reason: error instanceof Error ? error.message : String(error)
+      });
+      options.onProgress?.(0, {
+        totalCount: 0,
+        pageLikeIndex: null,
+        partial: false,
+        phase: "dom_fallback"
+      });
+      listings = await fetchSellerListingsByDom(options);
+      resolvedStrategy = "dom";
+    }
   } else {
     logApiFetch("info", "api_branch_not_entered", {
       sellerId: seller.seller_id,

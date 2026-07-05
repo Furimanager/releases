@@ -20,6 +20,8 @@
     "https://furimanager.com/*",
     "https://www.furimanager.com/*",
     "http://localhost:3000/*",
+    "http://localhost:3001/*",
+    "http://127.0.0.1:3001/*",
     "https://*.supabase.co/*"
   ],
   "content_scripts": [

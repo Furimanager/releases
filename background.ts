@@ -19,6 +19,8 @@
   const MOCK_RELIST_PATH = "mock/mercari-relist.html";
   const REAL_RELIST_DETECTION_TIMEOUT_MS = 15000;
   const REAL_RELIST_DETECTION_RETRY_MS = 700;
+  const REAL_RELIST_PENDING_CREATE_TIMEOUT_MS = 30000;
+  const REAL_RELIST_SUBMIT_TIMEOUT_MS = 120000;
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   const AUTH_STORAGE_KEYS = [
     "supabaseAccessToken",
@@ -27,6 +29,7 @@
     "supabaseTokenExpiresAt"
   ];
   const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+  const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
   const authState: {
     accessToken: string | null;
     refreshToken: string | null;
@@ -39,6 +42,7 @@
     tokenExpiresAt: null
   };
   let isRunningRakurakuTask = false;
+  let mercariDpopKeyPair: CryptoKeyPair | null = null;
 
   if (!chromeApi?.runtime?.onMessage) {
     return;
@@ -65,6 +69,11 @@
 
     if (message?.type === "FETCH_MERCARI_USER_PROFILE") {
       void handleFetchMercariUserProfile(message, respond);
+      return true;
+    }
+
+    if (message?.type === "FETCH_MERCARI_USER_IDENTITY_BADGE") {
+      void handleFetchMercariUserIdentityBadge(message, respond);
       return true;
     }
 
@@ -123,6 +132,7 @@
       const url = new URL("https://api.mercari.jp/items/get");
       url.searchParams.set("id", itemId);
       url.searchParams.set("_item_photo_format", "detail");
+      url.searchParams.set("include_product_page_component", "true");
 
       const headers: Record<string, string> = {
         "x-platform": "web"
@@ -188,6 +198,122 @@
       console.warn("[furimanager-extension] mercari user profile fetch failed", error);
       respond({ success: false, message: "メルカリユーザー情報の取得に失敗しました" });
     }
+  }
+
+  async function handleFetchMercariUserIdentityBadge(message: any, respond: (response: any) => void) {
+    try {
+      const userId = typeof message?.userId === "string" ? message.userId.trim() : "";
+
+      if (!/^\d+$/.test(userId)) {
+        respond({ success: false, message: "繝｡繝ｫ繧ｫ繝ｪ繝ｦ繝ｼ繧ｶ繝ｼID繧堤｢ｺ隱阪〒縺阪∪縺帙ｓ縺ｧ縺励◆" });
+        return;
+      }
+
+      const url = new URL("https://api.mercari.jp/services/usersocialjp/v1/stats/has_identity_verified_badge");
+
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "x-platform": "web"
+      };
+      const dpopProof = await createMercariDpopProofJwt(url.toString(), "POST");
+
+      if (dpopProof) {
+        headers.DPoP = dpopProof;
+      }
+
+      const accessToken = typeof message?.accessToken === "string" ? message.accessToken.trim() : "";
+
+      if (accessToken) {
+        headers.authorization = accessToken;
+      }
+
+      const response = await fetch(url.toString(), {
+        method: "POST",
+        headers,
+        credentials: "omit",
+        body: JSON.stringify({ userId })
+      });
+
+      if (!response.ok) {
+        respond({ success: false, message: `繝｡繝ｫ繧ｫ繝ｪ譛ｬ莠ｺ遒ｺ隱阪ヰ繝・ず縺ｮ蜿門ｾ励↓螟ｱ謨励＠縺ｾ縺励◆ (${response.status})` });
+        return;
+      }
+
+      respond({ success: true, data: await response.json() });
+    } catch (error) {
+      console.warn("[furimanager-extension] mercari user identity badge fetch failed", error);
+      respond({ success: false, message: "繝｡繝ｫ繧ｫ繝ｪ譛ｬ莠ｺ遒ｺ隱阪ヰ繝・ず縺ｮ蜿門ｾ励↓螟ｱ謨励＠縺ｾ縺励◆" });
+    }
+  }
+
+  async function createMercariDpopProofJwt(htu: string, htm: string): Promise<string | null> {
+    try {
+      const keyPair = await getMercariDpopKeyPair();
+      const exportedKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+      const header = {
+        typ: "dpop+jwt",
+        alg: "ES256",
+        jwk: {
+          kty: exportedKey.kty,
+          crv: exportedKey.crv,
+          x: exportedKey.x,
+          y: exportedKey.y
+        }
+      };
+      const payload = {
+        iat: Math.floor(Date.now() / 1000),
+        jti: typeof crypto.randomUUID === "function" ? crypto.randomUUID() : createFallbackUuid(),
+        htu,
+        htm,
+        uuid: MERCARI_DPOP_ANONYMOUS_UUID
+      };
+      const unsignedToken = `${base64UrlEncodeText(JSON.stringify(header))}.${base64UrlEncodeText(JSON.stringify(payload))}`;
+      const signature = await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        keyPair.privateKey,
+        new TextEncoder().encode(unsignedToken)
+      );
+
+      return `${unsignedToken}.${base64UrlEncodeBytes(new Uint8Array(signature))}`;
+    } catch (error) {
+      console.warn("[furimanager-extension] mercari dpop proof skipped", error);
+      return null;
+    }
+  }
+
+  async function getMercariDpopKeyPair(): Promise<CryptoKeyPair> {
+    if (mercariDpopKeyPair) {
+      return mercariDpopKeyPair;
+    }
+
+    mercariDpopKeyPair = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    );
+    return mercariDpopKeyPair;
+  }
+
+  function base64UrlEncodeText(value: string): string {
+    return base64UrlEncodeBytes(new TextEncoder().encode(value));
+  }
+
+  function base64UrlEncodeBytes(bytes: Uint8Array): string {
+    let binary = "";
+
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte);
+    });
+
+    return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  }
+
+  function createFallbackUuid(): string {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
   async function handleSetRelistPending(payload: any, respond: (response: any) => void) {
@@ -363,38 +489,33 @@
     if (typeof tab?.id !== "number") {
       throw new Error("real-copy-listing: item page tab could not be opened");
     }
-    // 商品ページを開けた時点でタスクを消化済みにし、同じページを自動で開き直さない。
-    const completed = await completeTask(task.id, true, "real-copy-listing: Mercari item page opened once; automatic retry disabled");
-    const completedTask = completed?.task
-      ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload }
-      : { ...task, status: "succeeded" };
+    await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
+    await sleep(1200);
 
-    try {
-      await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
-      await sleep(1200);
-      const result = await sendTabMessageWithRetry(tab.id, {
-        type: "CLICK_FURIMANE_COPY_LISTING_BUTTON",
-        taskId: task.id,
-        mercariItemId
-      });
-      console.log("[rakuraku] real relist action result", {
-        taskId: task.id,
-        mercariItemId,
-        itemUrl,
-        detected: result?.detected === true,
-        clicked: result?.clicked === true,
-        action: result?.action,
-        reason: result?.reason
-      });
-    } catch (error) {
-      console.warn("[rakuraku] relist action stopped after one page open", {
-        taskId: task.id,
-        mercariItemId,
-        message: error instanceof Error ? error.message : "relist action stopped"
-      });
+    const result = await sendTabMessageWithRetry(tab.id, {
+      type: "CLICK_FURIMANE_COPY_LISTING_BUTTON",
+      taskId: task.id,
+      mercariItemId
+    });
+
+    console.log("[rakuraku] real relist action result", {
+      taskId: task.id,
+      mercariItemId,
+      itemUrl,
+      detected: result?.detected === true,
+      clicked: result?.clicked === true,
+      action: result?.action,
+      reason: result?.reason
+    });
+
+    if (result?.action !== "relist") {
+      throw new Error("real-copy-listing: relist button was not clicked");
     }
 
-    return completedTask;
+    await waitForRelistSubmitCompletion(mercariItemId);
+
+    const completed = await completeTask(task.id, true, "relist: listing submit clicked");
+    return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
   }
 
   async function executePriceDropTask(task: any) {
@@ -563,6 +684,51 @@
       await sleep(REAL_RELIST_DETECTION_RETRY_MS);
     }
     throw lastError instanceof Error ? lastError : new Error("real-copy-listing: content script did not respond");
+  }
+
+  async function waitForRelistSubmitCompletion(mercariItemId: string) {
+    const createStartedAt = Date.now();
+    let matchedPending = false;
+
+    while (Date.now() - createStartedAt < REAL_RELIST_PENDING_CREATE_TIMEOUT_MS) {
+      if (matchesRelistPendingItem(await getRelistPendingItem(), mercariItemId)) {
+        matchedPending = true;
+        break;
+      }
+
+      await sleep(REAL_RELIST_DETECTION_RETRY_MS);
+    }
+
+    if (!matchedPending) {
+      throw new Error("real-copy-listing: relist pending was not created");
+    }
+
+    const submitStartedAt = Date.now();
+
+    while (Date.now() - submitStartedAt < REAL_RELIST_SUBMIT_TIMEOUT_MS) {
+      if (!matchesRelistPendingItem(await getRelistPendingItem(), mercariItemId)) {
+        return;
+      }
+
+      await sleep(REAL_RELIST_DETECTION_RETRY_MS);
+    }
+
+    throw new Error("real-copy-listing: listing submit did not finish");
+  }
+
+  async function getRelistPendingItem() {
+    const items = await getLocalStorage([RELIST_PENDING_KEY]);
+    return items[RELIST_PENDING_KEY] ?? null;
+  }
+
+  function matchesRelistPendingItem(item: any, mercariItemId: string) {
+    if (!item || typeof item !== "object" || item.mode !== "relist") {
+      return false;
+    }
+
+    const itemId = normalizeMercariItemId(item.itemId);
+    const itemUrl = typeof item.itemUrl === "string" ? item.itemUrl : "";
+    return itemId === mercariItemId || itemUrl.includes(mercariItemId);
   }
 
   function sendTabMessage(tabId: number, message: Record<string, unknown>) {

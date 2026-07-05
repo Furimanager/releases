@@ -10,16 +10,21 @@
     const TOOLBAR_BUTTONS_ATTRIBUTE = "data-furimanager-action-buttons";
     const LISTING_DATE_PANEL_ATTRIBUTE = "data-furimanager-listing-date-panel";
     const LISTING_SELLER_PANEL_ATTRIBUTE = "data-furimanager-listing-seller-panel";
+    const LISTING_SELLER_PANEL_VERSION_ATTRIBUTE = "data-furimanager-listing-seller-version";
     const LISTING_SELLER_PENDING_ATTRIBUTE = "data-furimanager-listing-seller-pending";
+    const LISTING_SELLER_PANEL_VERSION = "compact-overlay-v14";
     const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
     const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
     const PRODUCT_PAGE_RELIST_PENDING_KEY = "furimanager_product_page_relist_pending";
     const MERCARI_ITEM_DETAIL_MESSAGE_TYPE = "FETCH_MERCARI_ITEM_DETAIL";
     const MERCARI_USER_PROFILE_MESSAGE_TYPE = "FETCH_MERCARI_USER_PROFILE";
+    const MERCARI_USER_IDENTITY_BADGE_MESSAGE_TYPE = "FETCH_MERCARI_USER_IDENTITY_BADGE";
     const LISTING_DATE_API_CACHE_MS = 5 * 60 * 1000;
     const LISTING_DATE_API_EMPTY_CACHE_MS = 10 * 1000;
     const LISTING_SELLER_API_CACHE_MS = 10 * 60 * 1000;
     const LISTING_SELLER_API_EMPTY_CACHE_MS = 30 * 1000;
+    const SELLER_IDENTITY_BADGE_API_CACHE_MS = 10 * 60 * 1000;
+    const SELLER_IDENTITY_BADGE_API_EMPTY_CACHE_MS = 30 * 1000;
     const LISTING_SELLER_MAX_ITEMS_PER_PASS = 24;
     const COPY_LISTING_BUTTON_WAIT_TIMEOUT_MS = 10000;
     const COPY_LISTING_BUTTON_WAIT_INTERVAL_MS = 300;
@@ -28,7 +33,10 @@
     const listingDateApiRequests = new Map();
     const listingSellerApiCache = new Map();
     const listingSellerApiRequests = new Map();
+    const sellerIdentityBadgeApiCache = new Map();
+    const sellerIdentityBadgeApiRequests = new Map();
     const PRODUCT_PATH_PATTERN = /^\/item\//;
+    const TRANSACTION_PATH_PATTERN = /^\/transaction\//;
     const HISTORY_PATH_MARKERS = [
         "/mypage/listings/sold",
         "/mypage/listings/completed",
@@ -174,7 +182,7 @@
         }
         if (ACTIVE_LISTING_PATH_MARKERS.some((marker) => matchesPathMarker(path, marker))) {
             const selectedTab = getSelectedListingsTabText();
-            return selectedTab ? selectedTab.includes("出品中") : true;
+            return selectedTab ? ["出品中", "取引中"].some((label) => selectedTab.includes(label)) : true;
         }
         if (!path.includes("/mypage")) {
             return false;
@@ -323,6 +331,7 @@
       .furimanager-listing-seller-panel {
         box-sizing: border-box;
         width: 100%;
+        min-height: 51px;
         margin-top: 7px;
         padding: 0 2px;
         border: 0;
@@ -335,7 +344,7 @@
 
       .furimanager-listing-seller-panel--loading,
       .furimanager-listing-seller-panel--empty {
-        min-height: 40px;
+        min-height: 51px;
         color: #6b7280;
         font-weight: 700;
       }
@@ -371,25 +380,47 @@
         display: grid;
         gap: 1px;
         min-width: 0;
+        flex: 1 1 auto;
         padding-top: 1px;
       }
 
+      .furimanager-listing-seller-panel__placeholder-line {
+        display: block;
+        width: 88px;
+        height: 10px;
+        border-radius: 999px;
+        background: #e5e7eb;
+      }
+
+      .furimanager-listing-seller-panel__placeholder-line--rating {
+        width: 94px;
+        margin-top: 2px;
+      }
+
+      .furimanager-listing-seller-panel__placeholder-line--breakdown {
+        width: 58px;
+        margin-top: 2px;
+      }
+
       .furimanager-listing-seller-panel__name {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 4px;
         min-width: 0;
         color: #222222;
         font-size: 12px;
-        font-weight: 800;
+        font-weight: 700;
         line-height: 1.2;
         text-overflow: ellipsis;
         white-space: nowrap;
+        cursor: pointer;
       }
 
       .furimanager-listing-seller-panel__name-text {
         min-width: 0;
         overflow: hidden;
+        flex: 0 1 auto;
         text-overflow: ellipsis;
       }
 
@@ -402,18 +433,35 @@
       }
 
       .furimanager-listing-seller-panel__stars {
-        color: #fbbf24;
+        display: inline-flex;
+        align-items: center;
+        gap: 0;
         font-size: 14px;
         font-weight: 800;
         letter-spacing: 0;
         line-height: 1;
       }
 
+      .furimanager-listing-seller-panel__star {
+        color: #fbbf24;
+      }
+
+      .furimanager-listing-seller-panel__star--empty {
+        color: #d1d5db;
+      }
+
+      .furimanager-listing-seller-panel__star--half {
+        color: transparent;
+        background: linear-gradient(90deg, #fbbf24 50%, #d1d5db 50%);
+        -webkit-background-clip: text;
+        background-clip: text;
+      }
+
       .furimanager-listing-seller-panel__review-count {
         overflow: hidden;
         color: #1a73e8;
         font-size: 12px;
-        font-weight: 800;
+        font-weight: 700;
         text-overflow: ellipsis;
       }
 
@@ -432,8 +480,8 @@
         gap: 2px;
         min-width: 0;
         color: #333333;
-        font-size: 12px;
-        font-weight: 700;
+        font-size: 11.5px;
+        font-weight: 600;
         line-height: 1.15;
         white-space: nowrap;
       }
@@ -455,18 +503,130 @@
 
       .furimanager-listing-seller-panel__verified {
         flex: 0 0 auto;
+        gap: 0;
+      }
+
+      .furimanager-listing-seller-panel__verified--ok {
         color: #10b981;
-        font-size: 11px;
-        font-weight: 800;
+      }
+
+      .furimanager-listing-seller-panel__verified--before {
+        color: #9ca3af;
       }
 
       .furimanager-listing-seller-panel__verified-icon {
-        width: 10px;
-        height: 10px;
-        flex: 0 0 10px;
+        width: 12px;
+        height: 12px;
+        flex: 0 0 12px;
         border-radius: 3px 3px 5px 5px;
         background: #10b981;
         clip-path: polygon(50% 0, 94% 18%, 82% 82%, 50% 100%, 18% 82%, 6% 18%);
+      }
+
+      .furimanager-listing-seller-panel__verified--before .furimanager-listing-seller-panel__verified-icon {
+        background: #c7c7c7;
+      }
+
+      .furimanager-listing-seller-panel--compact {
+        position: absolute;
+        top: 0;
+        left: 4px;
+        z-index: 4;
+        width: auto;
+        max-width: min(198px, calc(100% - 8px));
+        min-height: 26px;
+        margin-top: 0;
+        padding: 2px 5px 3px 2px;
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 3px 9px rgba(0, 0, 0, 0.16);
+        pointer-events: auto;
+      }
+
+      .furimanager-listing-seller-panel--compact.furimanager-listing-seller-panel--loading,
+      .furimanager-listing-seller-panel--compact.furimanager-listing-seller-panel--empty {
+        min-height: 26px;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__content {
+        align-items: center;
+        gap: 3px;
+        min-height: 24px;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__avatar,
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__avatar-placeholder {
+        width: 20px;
+        height: 20px;
+        flex-basis: 20px;
+        font-size: 10px;
+        line-height: 20px;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__body {
+        display: grid;
+        grid-template-columns: max-content max-content;
+        gap: 2px;
+        align-items: start;
+        overflow: visible;
+        padding-top: 0;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__name {
+        flex: 0 1 auto;
+        grid-column: 1 / -1;
+        width: auto;
+        max-width: 146px;
+        font-size: 10.5px;
+        font-weight: 600;
+        line-height: 1.05;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__name-text {
+        white-space: normal;
+        word-break: break-word;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__stars {
+        font-size: 11px;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__review-count,
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__breakdown-item,
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__verified {
+        font-size: 9.8px;
+        font-weight: 600;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__rating,
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__breakdown {
+        flex: 0 0 auto;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__breakdown {
+        flex-wrap: nowrap;
+        gap: 2px;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__breakdown-icon {
+        width: 10px;
+        height: 10px;
+        flex-basis: 10px;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__verified-icon {
+        width: 10px;
+        height: 10px;
+        flex-basis: 10px;
+      }
+
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__placeholder-line--rating,
+      .furimanager-listing-seller-panel--compact .furimanager-listing-seller-panel__placeholder-line--breakdown {
+        height: 8px;
+        margin-top: 1px;
       }
 
       @media (max-width: 900px) {
@@ -525,10 +685,19 @@
         if (continuePendingRelistFromProductPage()) {
             return;
         }
+        if (continuePendingRelistFromTransactionPage()) {
+            return;
+        }
         if (continuePendingListingManagementFromProductPage()) {
             return;
         }
+        if (continuePendingListingManagementFromTransactionPage()) {
+            return;
+        }
         if (continuePendingPriceAdjustFromProductPage()) {
+            return;
+        }
+        if (continuePendingPriceAdjustFromTransactionPage()) {
             return;
         }
         const pageKind = detectPageKind();
@@ -577,7 +746,11 @@
         injectStyles();
         const pendingTargets = targets.filter((target) => {
             const existingPanel = target.card.querySelector(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`);
-            return !existingPanel && target.card.getAttribute(LISTING_SELLER_PENDING_ATTRIBUTE) !== target.itemId;
+            const existingItemId = existingPanel?.getAttribute("data-furimanager-item-id") ?? null;
+            const existingVersion = existingPanel?.getAttribute(LISTING_SELLER_PANEL_VERSION_ATTRIBUTE) ?? null;
+            const needsReposition = existingPanel instanceof HTMLElement && !isSellerPanelMountedInExpectedPlace(target, existingPanel);
+            return ((!existingPanel || existingItemId !== target.itemId || existingVersion !== LISTING_SELLER_PANEL_VERSION || needsReposition)
+                && target.card.getAttribute(LISTING_SELLER_PENDING_ATTRIBUTE) !== target.itemId);
         });
         // 一覧ページは件数が多いので、未処理カードだけを少しずつ取得する。
         pendingTargets.slice(0, LISTING_SELLER_MAX_ITEMS_PER_PASS).forEach((target) => {
@@ -586,33 +759,74 @@
         return true;
     }
     function isMercariListingPage(pageKind) {
+        const path = window.location.pathname;
+        if (path.startsWith("/mypage") || path.startsWith("/sell") || path.startsWith("/user/profile")) {
+            return false;
+        }
+        if (PRODUCT_PATH_PATTERN.test(path)) {
+            return getListingCardCandidateCount() >= 3;
+        }
         if (pageKind !== "unknown") {
             return false;
         }
-        const path = window.location.pathname;
-        if (PRODUCT_PATH_PATTERN.test(path) || path.startsWith("/mypage") || path.startsWith("/sell") || path.startsWith("/user/profile")) {
-            return false;
+        return getListingCardCandidateCount() >= 3;
+    }
+    function getListingCardCandidateCount() {
+        const itemCells = document.querySelectorAll('[data-testid="item-cell"]').length;
+        if (itemCells > 0) {
+            return itemCells;
         }
-        return document.querySelectorAll('a[href*="/item/m"]').length >= 3;
+        return document.querySelectorAll('a[href*="/item/m"]').length;
     }
     function getListingSellerTargets() {
-        const seenItemIds = new Set();
+        const seenCards = new Set();
         const targets = [];
+        const compact = PRODUCT_PATH_PATTERN.test(window.location.pathname);
+        safeQuerySelectorAll(document, '[data-testid="item-cell"]').forEach((element) => {
+            if (!(element instanceof HTMLElement) || seenCards.has(element)) {
+                return;
+            }
+            const link = element.querySelector('a[href*="/item/m"]');
+            const itemUrl = link instanceof HTMLAnchorElement ? normalizeItemUrl(link.href) : null;
+            const itemId = extractMercariItemId(itemUrl) ?? extractListingCardItemId(element);
+            const isShop = isMercariShopListingCard(element, link instanceof HTMLAnchorElement ? link : null);
+            if (!itemId || (!itemUrl && !isShop)) {
+                return;
+            }
+            seenCards.add(element);
+            targets.push({ itemId, itemUrl: itemUrl ?? "", card: element, compact, isShop });
+        });
         safeQuerySelectorAll(document, 'a[href*="/item/m"]').forEach((element) => {
             const link = element instanceof HTMLAnchorElement ? element : null;
             const itemUrl = normalizeItemUrl(link?.href ?? null);
             const itemId = extractMercariItemId(itemUrl);
-            if (!link || !itemUrl || !itemId || seenItemIds.has(itemId)) {
+            if (!link || !itemUrl || !itemId) {
                 return;
             }
             const card = findListingItemCard(link);
-            if (!card) {
+            if (!card || seenCards.has(card)) {
                 return;
             }
-            seenItemIds.add(itemId);
-            targets.push({ itemId, itemUrl, card });
+            seenCards.add(card);
+            targets.push({ itemId, itemUrl, card, compact, isShop: isMercariShopListingCard(card, link) });
         });
         return targets;
+    }
+    function extractListingCardItemId(card) {
+        const thumbnail = card.querySelector('[itemtype][id], .merItemThumbnail[id], [class*="merItemThumbnail"][id]');
+        const id = thumbnail?.getAttribute("id")?.trim();
+        return id || null;
+    }
+    function isMercariShopListingCard(card, link) {
+        const href = link?.href.toLowerCase() ?? "";
+        if (href.includes("/shops/") || href.includes("/shop/")) {
+            return true;
+        }
+        const itemType = card.querySelector("[itemtype]")?.getAttribute("itemtype")?.toUpperCase() ?? "";
+        if (itemType && itemType !== "ITEM_TYPE_MERCARI") {
+            return true;
+        }
+        return Boolean(card.querySelector('[itemtype*="SHOP"], [itemtype*="shop"], a[href*="/shops/"], a[href*="/shop/"]'));
     }
     function findListingItemCard(link) {
         const testIdCard = link.closest('[data-testid="item-cell"]');
@@ -641,7 +855,11 @@
     }
     function ensureSellerPanel(target) {
         const existingPanel = target.card.querySelector(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`);
-        if (existingPanel?.getAttribute("data-furimanager-item-id") === target.itemId) {
+        if (existingPanel?.getAttribute("data-furimanager-item-id") === target.itemId
+            && existingPanel.getAttribute(LISTING_SELLER_PANEL_VERSION_ATTRIBUTE) === LISTING_SELLER_PANEL_VERSION) {
+            if (existingPanel instanceof HTMLElement) {
+                mountSellerPanel(target, existingPanel);
+            }
             return;
         }
         if (target.card.getAttribute(LISTING_SELLER_PENDING_ATTRIBUTE) === target.itemId) {
@@ -649,6 +867,11 @@
         }
         existingPanel?.remove();
         target.card.setAttribute(LISTING_SELLER_PENDING_ATTRIBUTE, target.itemId);
+        if (target.isShop) {
+            target.card.removeAttribute(LISTING_SELLER_PENDING_ATTRIBUTE);
+            renderSellerPanel(target, null, "shop");
+            return;
+        }
         renderSellerPanel(target, null, "loading");
         void getSellerInfoForListingItem(target.itemId)
             .then((sellerInfo) => {
@@ -680,9 +903,9 @@
         const request = requestMercariItemDetail(itemId)
             .then(async (payload) => {
             const sellerInfo = extractSellerInfoFromApiPayload(payload, itemId);
-            const verifiedSellerInfo = await supplementSellerVerifiedFromProfile(sellerInfo);
-            listingSellerApiCache.set(itemId, { savedAt: Date.now(), data: verifiedSellerInfo });
-            return verifiedSellerInfo;
+            const sellerInfoWithBadge = await supplementSellerIdentityBadge(sellerInfo);
+            listingSellerApiCache.set(itemId, { savedAt: Date.now(), data: sellerInfoWithBadge });
+            return sellerInfoWithBadge;
         })
             .catch((error) => {
             console.debug("[furimanager] mercari seller fetch skipped", error);
@@ -695,15 +918,44 @@
         listingSellerApiRequests.set(itemId, request);
         return request;
     }
-    async function supplementSellerVerifiedFromProfile(sellerInfo) {
-        if (!sellerInfo?.sellerId || sellerInfo.verified === true) {
+    async function supplementSellerIdentityBadge(sellerInfo) {
+        if (!sellerInfo?.sellerId) {
             return sellerInfo;
         }
-        const payload = await requestMercariUserProfile(sellerInfo.sellerId);
-        const root = toRecord(payload);
-        const profile = toRecord(root?.data) ?? root;
-        const verified = profile ? extractSellerVerifiedValue(profile) : null;
-        return verified === true ? { ...sellerInfo, verified: true } : sellerInfo;
+        const badgeInfo = await getSellerIdentityBadgeInfo(sellerInfo.sellerId);
+        if (!badgeInfo) {
+            return { ...sellerInfo, verified: null };
+        }
+        if (badgeInfo.hasBadge === true) {
+            return { ...sellerInfo, verified: true };
+        }
+        return { ...sellerInfo, verified: null };
+    }
+    function getSellerIdentityBadgeInfo(sellerId) {
+        const cached = sellerIdentityBadgeApiCache.get(sellerId);
+        const cacheMs = cached && cached.data ? SELLER_IDENTITY_BADGE_API_CACHE_MS : SELLER_IDENTITY_BADGE_API_EMPTY_CACHE_MS;
+        if (cached && Date.now() - cached.savedAt < cacheMs) {
+            return Promise.resolve(cached.data);
+        }
+        const runningRequest = sellerIdentityBadgeApiRequests.get(sellerId);
+        if (runningRequest) {
+            return runningRequest;
+        }
+        const request = requestMercariUserIdentityBadge(sellerId)
+            .then((payload) => {
+            const badgeInfo = extractSellerIdentityBadgeInfo(payload);
+            sellerIdentityBadgeApiCache.set(sellerId, { savedAt: Date.now(), data: badgeInfo });
+            return badgeInfo;
+        })
+            .catch(() => {
+            sellerIdentityBadgeApiCache.set(sellerId, { savedAt: Date.now(), data: null });
+            return null;
+        })
+            .finally(() => {
+            sellerIdentityBadgeApiRequests.delete(sellerId);
+        });
+        sellerIdentityBadgeApiRequests.set(sellerId, request);
+        return request;
     }
     function extractSellerInfoFromApiPayload(payload, itemId) {
         const root = toRecord(payload);
@@ -715,23 +967,23 @@
         const sellerId = extractStringValue(seller, ["id", "userId", "user_id", "sellerId", "seller_id"]);
         const name = extractStringValue(seller, ["name", "nickname", "displayName", "display_name"]);
         const avatarUrl = extractUrlValue(seller, ["photoThumbnailUrl", "photo_thumbnail_url", "photoUrl", "photo_url", "imageUrl", "image_url", "avatarUrl", "avatar_url", "thumbnail"]);
+        const ratingCounts = extractSellerRatingCounts(seller);
         const reviewCount = extractNumberValue(seller, ["numRatings", "num_ratings", "ratingCount", "rating_count", "reviewCount", "review_count", "reviewsCount", "reviews_count"]);
-        const goodCount = extractNumberValue(seller, ["good", "goodCount", "good_count", "ratingsGood", "ratings_good"]);
-        const normalCount = extractNumberValue(seller, ["normal", "normalCount", "normal_count", "ratingsNormal", "ratings_normal"]);
-        const badCount = extractNumberValue(seller, ["bad", "badCount", "bad_count", "ratingsBad", "ratings_bad"]);
-        const verified = extractSellerVerifiedValue(seller) ?? extractSellerVerifiedValue(item);
+        const goodCount = ratingCounts.good ?? extractNumberValue(seller, ["goodCount", "good_count", "ratingsGood", "ratings_good"]);
+        const normalCount = ratingCounts.normal ?? extractNumberValue(seller, ["normalCount", "normal_count", "ratingsNormal", "ratings_normal"]);
+        const badCount = ratingCounts.bad ?? extractNumberValue(seller, ["badCount", "bad_count", "ratingsBad", "ratings_bad"]);
         return {
             itemId,
             sellerId,
             name,
             avatarUrl,
             profileUrl: sellerId ? `https://jp.mercari.com/user/profile/${sellerId}` : null,
-            ratingScore: extractNumberValue(seller, ["rating", "ratingScore", "rating_score", "score", "star"]),
+            ratingScore: extractNumberValue(seller, ["starRatingScore", "star_rating_score", "ratingScore", "rating_score", "score", "star", "rating"]),
             reviewCount: reviewCount ?? sumKnownCounts([goodCount, normalCount, badCount]),
             goodCount,
             normalCount,
             badCount,
-            verified,
+            verified: null,
             levelText: extractSellerLevelText(seller),
         };
     }
@@ -774,21 +1026,118 @@
         const existingPanel = target.card.querySelector(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`);
         const panel = existingPanel instanceof HTMLElement ? existingPanel : document.createElement("div");
         panel.className = `furimanager-listing-seller-panel furimanager-listing-seller-panel--${state}`;
+        panel.classList.toggle("furimanager-listing-seller-panel--compact", target.compact);
         panel.setAttribute(LISTING_SELLER_PANEL_ATTRIBUTE, "true");
+        panel.setAttribute(LISTING_SELLER_PANEL_VERSION_ATTRIBUTE, LISTING_SELLER_PANEL_VERSION);
         panel.setAttribute("data-furimanager-item-id", target.itemId);
         panel.innerHTML = "";
         if (state === "loading") {
-            panel.textContent = "セラー情報を取得中";
+            panel.appendChild(createSellerPanelPlaceholder("セラー情報を取得中"));
+        }
+        else if (state === "shop") {
+            panel.appendChild(createShopPanelContent());
         }
         else if (!sellerInfo) {
-            panel.textContent = "セラー情報なし";
+            panel.appendChild(createSellerPanelPlaceholder("セラー情報なし"));
         }
         else {
             panel.appendChild(createSellerPanelContent(sellerInfo));
         }
-        if (!existingPanel) {
+        mountSellerPanel(target, panel);
+    }
+    function mountSellerPanel(target, panel) {
+        clearSellerPanelCardSizing(target.card);
+        if (target.compact) {
+            const compactMount = findCompactSellerPanelMount(target.card);
+            if (compactMount) {
+                if (getComputedStyle(compactMount).position === "static") {
+                    compactMount.style.position = "relative";
+                }
+                compactMount.appendChild(panel);
+                return;
+            }
+        }
+        const itemContent = findListingCardItemContent(target.card);
+        if (itemContent) {
+            itemContent.after(panel);
+        }
+        else {
             target.card.appendChild(panel);
         }
+    }
+    function clearSellerPanelCardSizing(card) {
+        card.style.removeProperty("margin-bottom");
+        card.style.removeProperty("height");
+        card.style.removeProperty("min-height");
+    }
+    function isSellerPanelMountedInExpectedPlace(target, panel) {
+        if (target.compact) {
+            return panel.parentElement === findCompactSellerPanelMount(target.card);
+        }
+        const itemContent = findListingCardItemContent(target.card);
+        return !itemContent || itemContent.nextElementSibling === panel;
+    }
+    function findCompactSellerPanelMount(card) {
+        const directLink = Array.from(card.children).find((child) => {
+            if (!(child instanceof HTMLAnchorElement)) {
+                return false;
+            }
+            return isListingProductLink(child);
+        });
+        if (directLink) {
+            return directLink;
+        }
+        const thumbnailLink = card.querySelector('a[data-testid="thumbnail-link"], a[href*="/item/"], a[href*="/shops/product/"]');
+        return thumbnailLink instanceof HTMLElement ? thumbnailLink : null;
+    }
+    function isListingProductLink(link) {
+        const href = link.getAttribute("href") ?? "";
+        return href.includes("/item/") || href.includes("/shops/product/");
+    }
+    function findListingCardItemContent(card) {
+        return Array.from(card.children).find((child) => {
+            if (!(child instanceof HTMLElement)) {
+                return false;
+            }
+            return child.getAttribute(LISTING_SELLER_PANEL_ATTRIBUTE) !== "true";
+        }) ?? null;
+    }
+    function createSellerPanelPlaceholder(label) {
+        const fragment = document.createElement("div");
+        fragment.className = "furimanager-listing-seller-panel__content";
+        const avatar = document.createElement("div");
+        avatar.className = "furimanager-listing-seller-panel__avatar-placeholder";
+        fragment.appendChild(avatar);
+        const body = document.createElement("div");
+        body.className = "furimanager-listing-seller-panel__body";
+        const message = document.createElement("div");
+        message.className = "furimanager-listing-seller-panel__name";
+        message.textContent = label;
+        body.appendChild(message);
+        const ratingLine = document.createElement("span");
+        ratingLine.className = "furimanager-listing-seller-panel__placeholder-line furimanager-listing-seller-panel__placeholder-line--rating";
+        body.appendChild(ratingLine);
+        const breakdownLine = document.createElement("span");
+        breakdownLine.className = "furimanager-listing-seller-panel__placeholder-line furimanager-listing-seller-panel__placeholder-line--breakdown";
+        body.appendChild(breakdownLine);
+        fragment.appendChild(body);
+        return fragment;
+    }
+    function createShopPanelContent() {
+        const fragment = document.createElement("div");
+        fragment.className = "furimanager-listing-seller-panel__content";
+        const avatar = document.createElement("div");
+        avatar.className = "furimanager-listing-seller-panel__avatar-placeholder";
+        avatar.textContent = "S";
+        fragment.appendChild(avatar);
+        const body = document.createElement("div");
+        body.className = "furimanager-listing-seller-panel__body";
+        const name = document.createElement("div");
+        name.className = "furimanager-listing-seller-panel__name";
+        name.textContent = "メルカリショップ";
+        body.appendChild(name);
+        fragment.appendChild(body);
+        return fragment;
     }
     function createSellerPanelContent(sellerInfo) {
         const fragment = document.createElement("div");
@@ -815,9 +1164,6 @@
         if (breakdown) {
             body.appendChild(breakdown);
         }
-        if (sellerInfo.verified === true) {
-            body.appendChild(createSellerVerifiedBadge());
-        }
         fragment.appendChild(body);
         return fragment;
     }
@@ -828,6 +1174,12 @@
         name.className = "furimanager-listing-seller-panel__name-text";
         name.textContent = sellerInfo.name ?? "セラー名なし";
         row.appendChild(name);
+        const displayName = name.textContent ?? sellerInfo.name ?? "Seller";
+        row.dataset.fullName = displayName;
+        row.setAttribute("aria-label", displayName);
+        if (sellerInfo.verified === true) {
+            row.appendChild(createSellerVerifiedBadge());
+        }
         return row;
     }
     function createSellerRatingRow(sellerInfo) {
@@ -835,12 +1187,31 @@
         row.className = "furimanager-listing-seller-panel__rating";
         const stars = document.createElement("span");
         stars.className = "furimanager-listing-seller-panel__stars";
-        stars.textContent = "★★★★★";
+        appendSellerStars(stars, sellerInfo.ratingScore, sellerInfo.reviewCount);
         const reviewCount = document.createElement("span");
         reviewCount.className = "furimanager-listing-seller-panel__review-count";
-        reviewCount.textContent = String(sellerInfo.reviewCount ?? sellerInfo.ratingScore ?? 0);
+        reviewCount.textContent = String(sellerInfo.reviewCount ?? 0);
         row.append(stars, reviewCount);
         return row;
+    }
+    function appendSellerStars(container, ratingScore, reviewCount) {
+        const hasReviews = (reviewCount ?? 0) > 0;
+        const roundedScore = hasReviews && ratingScore !== null ? Math.max(0, Math.min(5, Math.round(ratingScore * 2) / 2)) : 0;
+        for (let index = 1; index <= 5; index += 1) {
+            const star = document.createElement("span");
+            star.className = "furimanager-listing-seller-panel__star";
+            star.textContent = "★";
+            if (roundedScore >= index) {
+                star.classList.add("furimanager-listing-seller-panel__star--full");
+            }
+            else if (roundedScore >= index - 0.5) {
+                star.classList.add("furimanager-listing-seller-panel__star--half");
+            }
+            else {
+                star.classList.add("furimanager-listing-seller-panel__star--empty");
+            }
+            container.appendChild(star);
+        }
     }
     function createSellerBreakdownRow(sellerInfo) {
         const counts = [
@@ -892,11 +1263,12 @@
     function createSellerVerifiedBadge() {
         const row = document.createElement("div");
         row.className = "furimanager-listing-seller-panel__verified";
+        row.classList.add("furimanager-listing-seller-panel__verified--ok");
         const icon = document.createElement("span");
         icon.className = "furimanager-listing-seller-panel__verified-icon";
-        const text = document.createElement("span");
-        text.textContent = "本人確認済";
-        row.append(icon, text);
+        row.title = "本人確認済";
+        row.setAttribute("aria-label", "本人確認済");
+        row.appendChild(icon);
         return row;
     }
     async function ensureListingDatePanel() {
@@ -1030,6 +1402,25 @@
             });
         });
     }
+    function requestMercariUserIdentityBadge(userId) {
+        return new Promise((resolve) => {
+            if (!chromeApi?.runtime?.sendMessage) {
+                resolve(null);
+                return;
+            }
+            chromeApi.runtime.sendMessage({
+                type: MERCARI_USER_IDENTITY_BADGE_MESSAGE_TYPE,
+                userId,
+                accessToken: readMercariAccessToken(),
+            }, (response) => {
+                if (chromeApi.runtime?.lastError || !response?.success) {
+                    resolve(null);
+                    return;
+                }
+                resolve(response.data ?? null);
+            });
+        });
+    }
     function readMercariAccessToken() {
         try {
             const rawValue = localStorage.getItem("authTokenData");
@@ -1138,11 +1529,86 @@
         }
         return null;
     }
+    function extractSellerRatingCounts(source) {
+        const counts = { good: null, normal: null, bad: null };
+        for (const key of ["ratings", "rating_counts", "ratingCounts", "ratings_count", "ratingsCount", "review_ratings", "reviewRatings"]) {
+            mergeSellerRatingCounts(counts, findJsonValueByKey(source, key));
+        }
+        return counts;
+    }
+    function mergeSellerRatingCounts(counts, value, depth = 0) {
+        if (depth > 3 || value === null || value === undefined) {
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((item) => mergeSellerRatingCounts(counts, item, depth + 1));
+            return;
+        }
+        const record = toRecord(value);
+        if (!record) {
+            return;
+        }
+        setSellerRatingCount(counts, "good", extractRatingCountValue(record.good) ?? extractRatingCountValue(record.goodCount) ?? extractRatingCountValue(record.good_count));
+        setSellerRatingCount(counts, "normal", extractRatingCountValue(record.normal) ?? extractRatingCountValue(record.normalCount) ?? extractRatingCountValue(record.normal_count));
+        setSellerRatingCount(counts, "bad", extractRatingCountValue(record.bad) ?? extractRatingCountValue(record.badCount) ?? extractRatingCountValue(record.bad_count));
+        const kind = getSellerRatingKind(record);
+        const count = getSellerRatingCount(record);
+        if (kind && count !== null) {
+            setSellerRatingCount(counts, kind, count);
+        }
+        for (const key of ["items", "data", "counts", "summary", "ratings", "rating_counts", "ratingCounts"]) {
+            mergeSellerRatingCounts(counts, record[key], depth + 1);
+        }
+    }
+    function setSellerRatingCount(counts, kind, value) {
+        if (counts[kind] === null && value !== null) {
+            counts[kind] = value;
+        }
+    }
+    function extractRatingCountValue(value) {
+        const direct = normalizeNumberValue(value);
+        if (direct !== null) {
+            return direct;
+        }
+        const record = toRecord(value);
+        return record ? getSellerRatingCount(record) : null;
+    }
+    function getSellerRatingCount(source) {
+        for (const key of ["count", "num", "number", "value", "total", "totalCount", "total_count", "ratingCount", "rating_count"]) {
+            const value = normalizeNumberValue(source[key]);
+            if (value !== null) {
+                return value;
+            }
+        }
+        return null;
+    }
+    function getSellerRatingKind(source) {
+        const text = ["type", "key", "name", "label", "displayName", "display_name", "text", "icon"]
+            .map((key) => {
+            const value = source[key];
+            return typeof value === "string" || typeof value === "number" ? String(value) : "";
+        })
+            .join(" ")
+            .toLowerCase();
+        if (/(^|[_\-\s])(bad|poor|negative|sad)($|[_\-\s])|残念|悪い|悪かった/.test(text)) {
+            return "bad";
+        }
+        if (/(^|[_\-\s])(normal|neutral|ordinary)($|[_\-\s])|普通/.test(text)) {
+            return "normal";
+        }
+        if (/(^|[_\-\s])(good|positive|smile)($|[_\-\s])|良い|良かった|よかった/.test(text)) {
+            return "good";
+        }
+        return null;
+    }
     function extractBooleanValue(source, keys) {
         for (const key of keys) {
             const value = findJsonValueByKey(source, key);
             if (typeof value === "boolean") {
                 return value;
+            }
+            if (typeof value === "number" && (value === 0 || value === 1)) {
+                return value === 1;
             }
             if (typeof value === "string") {
                 const normalized = normalizeText(value).toLowerCase();
@@ -1150,6 +1616,67 @@
                     return true;
                 }
                 if (["false", "0", "no"].includes(normalized)) {
+                    return false;
+                }
+            }
+        }
+        return null;
+    }
+    function extractSellerIdentityBadgeInfo(payload) {
+        const root = toRecord(payload);
+        const data = toRecord(root?.data) ?? root;
+        if (!data) {
+            return null;
+        }
+        const hasBadge = extractDirectBooleanValue(data, ["hasBadge", "has_badge"]);
+        const isBadgeHidden = extractDirectBooleanValue(data, ["isBadgeHidden", "is_badge_hidden"]);
+        if (hasBadge === null && isBadgeHidden === null) {
+            return null;
+        }
+        return { hasBadge, isBadgeHidden };
+    }
+    function extractDirectBooleanValue(source, keys) {
+        for (const key of keys) {
+            if (!Object.prototype.hasOwnProperty.call(source, key)) {
+                continue;
+            }
+            const value = source[key];
+            if (typeof value === "boolean") {
+                return value;
+            }
+            if (typeof value === "number" && (value === 0 || value === 1)) {
+                return value === 1;
+            }
+            if (typeof value === "string") {
+                const normalized = normalizeText(value).toLowerCase();
+                if (normalized === "true" || normalized === "1") {
+                    return true;
+                }
+                if (normalized === "false" || normalized === "0") {
+                    return false;
+                }
+            }
+        }
+        return null;
+    }
+    function extractSellerSmsConfirmationValue(source) {
+        for (const key of ["register_sms_confirmation", "registerSmsConfirmation"]) {
+            if (!Object.prototype.hasOwnProperty.call(source, key)) {
+                continue;
+            }
+            const value = source[key];
+            if (typeof value === "boolean") {
+                return value;
+            }
+            if (typeof value === "number" && (value === 0 || value === 1)) {
+                return value === 1;
+            }
+            if (typeof value === "string") {
+                const normalized = normalizeText(value).toLowerCase();
+                if (normalized === "yes") {
+                    return true;
+                }
+                if (normalized === "no") {
                     return false;
                 }
             }
@@ -1166,24 +1693,101 @@
             "is_identity_verified",
             "identityVerified",
             "identity_verified",
-            "identityVerification",
-            "identity_verification",
-            "identityVerificationStatus",
-            "identity_verification_status",
-            "verificationStatus",
-            "verification_status",
-            "verification",
-            "verified",
-            "certificated",
+            "registerSmsConfirmation",
+            "register_sms_confirmation",
+            "smsConfirmation",
+            "sms_confirmation",
         ]);
         if (directValue !== null) {
             return directValue;
         }
-        const serialized = JSON.stringify(source).toLowerCase();
-        if (/本人確認前|unverified|not_verified|not verified|un-certificated|uncertificated/.test(serialized)) {
+        for (const key of ["identityVerificationStatus", "identity_verification_status", "verificationStatus", "verification_status"]) {
+            const status = normalizeSellerVerificationText(findJsonValueByKey(source, key));
+            if (status !== null) {
+                return status;
+            }
+        }
+        for (const key of ["userBadge", "user_badge", "badges", "badge", "verificationBadge", "verification_badge", "identityVerification", "identity_verification", "verification"]) {
+            const verified = getSellerVerificationFromKnownValue(findJsonValueByKey(source, key));
+            if (verified !== null) {
+                return verified;
+            }
+        }
+        return null;
+    }
+    function getSellerVerificationFromKnownValue(value, depth = 0) {
+        if (depth > 3 || value === null || value === undefined) {
+            return null;
+        }
+        const direct = normalizeSellerVerificationText(value);
+        if (direct !== null) {
+            return direct;
+        }
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                const matched = getSellerVerificationFromKnownValue(item, depth + 1);
+                if (matched !== null) {
+                    return matched;
+                }
+            }
+            return null;
+        }
+        const record = toRecord(value);
+        if (!record) {
+            return null;
+        }
+        for (const key of [
+            "isVerified",
+            "is_verified",
+            "isCertificated",
+            "is_certificated",
+            "verified",
+            "certificated",
+            "status",
+            "state",
+            "type",
+            "key",
+            "code",
+            "name",
+            "label",
+            "displayName",
+            "display_name",
+            "displayText",
+            "display_text",
+            "text",
+            "title",
+        ]) {
+            const matched = getSellerVerificationFromKnownValue(record[key], depth + 1);
+            if (matched !== null) {
+                return matched;
+            }
+        }
+        return null;
+    }
+    function normalizeSellerVerificationText(value) {
+        if (typeof value === "boolean") {
+            return value;
+        }
+        if (typeof value === "number" && (value === 0 || value === 1)) {
+            return value === 1;
+        }
+        if (typeof value !== "string") {
+            return null;
+        }
+        const text = normalizeText(value).toLowerCase().replace(/\s+/g, "");
+        if (!text) {
+            return null;
+        }
+        if (text === "1" || text === "true" || text === "yes") {
+            return true;
+        }
+        if (text === "0" || text === "false" || text === "no") {
             return false;
         }
-        if (/本人確認済|verified|certificated|identity_verified|identityverified|identity_verification.*(complete|completed|approved|accepted)|identityverification.*(complete|completed|approved|accepted)/.test(serialized)) {
+        if (/本人確認前|未確認|未認証|unverified|not_verified|notverified|notcertificated|un-certificated|uncertificated|beforeverification|unconfirmed/.test(text)) {
+            return false;
+        }
+        if (/本人確認済|確認済み|verified|certificated|identity_verified|identityverified|completed|complete|approved|accepted/.test(text)) {
             return true;
         }
         return null;
@@ -1380,8 +1984,11 @@
             "table tbody tr",
             '[data-testid*="item-cell"]',
             '[data-testid*="item-card"]',
+            '[data-testid="listed-item"][href*="/transaction/"]',
             'a[href*="/item/"]',
+            'a[href*="/transaction/"]',
             'li:has(a[href*="/item/"])',
+            'li:has(a[href*="/transaction/"])',
             'article:has(a[href*="/item/"])',
             'div:has(> a[href*="/item/"])',
             'div:has(a[href*="/item/"][data-testid])',
@@ -1425,7 +2032,7 @@
         return candidateArea > currentArea && candidateArea < currentArea * 8;
     }
     function getCandidateItemUrl(element) {
-        const link = getItemLink(element);
+        const link = getItemLink(element) ?? getTransactionLink(element);
         return normalizeItemUrl(link?.href ?? null);
     }
     function getElementArea(element) {
@@ -1458,8 +2065,8 @@
         if (element instanceof HTMLTableRowElement) {
             return element.querySelectorAll("td").length > 0;
         }
-        const itemLinks = element.querySelectorAll('a[href*="/item/"]');
-        const isItemLink = element instanceof HTMLAnchorElement && element.href.includes("/item/");
+        const itemLinks = element.querySelectorAll('a[href*="/item/"], a[href*="/transaction/"]');
+        const isItemLink = element instanceof HTMLAnchorElement && (element.href.includes("/item/") || element.href.includes("/transaction/"));
         if (!isItemLink && (itemLinks.length === 0 || itemLinks.length > 4)) {
             return false;
         }
@@ -1599,7 +2206,7 @@
             return;
         }
         const itemId = context.itemId ?? extractMercariItemId(context.itemUrl);
-        const itemLink = getItemLink(context.root);
+        const itemLink = getItemLink(context.root) ?? getTransactionLink(context.root);
         if (!itemId || !itemLink) {
             showToast("商品ページを開く場所が見つかりませんでした");
             return;
@@ -1612,6 +2219,21 @@
         sessionStorage.setItem(PRODUCT_PAGE_RELIST_PENDING_KEY, JSON.stringify(pending));
         // 一覧ではデータを作らず、商品行を押して商品ページ用の処理へ一本化する。
         clickLinkAndFallback(itemLink);
+    }
+    function continuePendingRelistFromTransactionPage() {
+        if (!TRANSACTION_PATH_PATTERN.test(window.location.pathname)) {
+            return false;
+        }
+        const pending = getPendingProductPageRelistItem();
+        if (!pending || extractMercariTransactionItemId(window.location.href) !== pending.itemId) {
+            return false;
+        }
+        const itemLink = findTransactionProductLink(document, pending.itemId);
+        if (!itemLink) {
+            return false;
+        }
+        clickLinkAndFallback(itemLink);
+        return true;
     }
     function continuePendingRelistFromProductPage() {
         if (!PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
@@ -1679,7 +2301,7 @@
         };
         savePendingPriceAdjustItem(pending);
         if (context.pageKind === "activeListings") {
-            const itemLink = getItemLink(context.root);
+            const itemLink = getItemLink(context.root) ?? getTransactionLink(context.root);
             if (!itemLink) {
                 clearPendingPriceAdjustItem();
                 showToast("商品ページを開く場所が見つかりませんでした");
@@ -1716,6 +2338,21 @@
             stage: "openEdit",
         });
         clickEditLinkAndEnsureReload(editLink, pending.itemId);
+        return true;
+    }
+    function continuePendingPriceAdjustFromTransactionPage() {
+        if (!TRANSACTION_PATH_PATTERN.test(window.location.pathname)) {
+            return false;
+        }
+        const pending = getPendingPriceAdjustItem();
+        if (!pending || pending.stage !== "openItem" || extractMercariTransactionItemId(window.location.href) !== pending.itemId) {
+            return false;
+        }
+        const itemLink = findTransactionProductLink(document, pending.itemId);
+        if (!itemLink) {
+            return false;
+        }
+        clickLinkAndFallback(itemLink);
         return true;
     }
     function openProductEditPage(itemId) {
@@ -1796,6 +2433,15 @@
             return (!hrefItemId || hrefItemId === itemId) && (text.includes("商品の編集") || text.includes("編集") || link.dataset.testid === "checkout-link");
         }) ?? links[0] ?? null;
     }
+    function findTransactionProductLink(source, itemId) {
+        const links = Array.from(source.querySelectorAll(`
+      a[data-testid="transaction-information-for-seller:item-object"][href*="/item/"],
+      a[href="/item/${itemId}"],
+      a[href*="/item/${itemId}"],
+      a[href*="/item/"]
+    `)).filter((link) => link instanceof HTMLAnchorElement && isVisible(link));
+        return links.find((link) => extractMercariItemId(link.href) === itemId) ?? links[0] ?? null;
+    }
     async function saveRelistPending(context, mode) {
         const item = await collectRelistData(context, mode);
         await sendRelistPending(item);
@@ -1847,7 +2493,7 @@
         const imageSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : source;
         const jsonItem = itemId && detailSource instanceof Document ? findCurrentItemJsonObject(detailSource, itemId) : null;
         const title = extractTitle(source);
-        const price = extractPrice(source);
+        const price = extractJsonPrice(jsonItem) ?? extractPrice(source);
         const imageUrls = extractImageUrls(imageSource, itemId);
         const thumbnailUrl = imageUrls[0] ?? extractThumbnail(source);
         const description = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? extractDescription(document) : null;
@@ -1890,7 +2536,7 @@
             return {
                 itemId,
                 title: extractTitle(parsedDocument),
-                price: extractPrice(parsedDocument),
+                price: extractJsonPrice(jsonItem) ?? extractPrice(parsedDocument),
                 itemUrl,
                 thumbnailUrl: imageUrls[0] ?? extractThumbnail(parsedDocument),
                 imageUrls,
@@ -2004,7 +2650,7 @@
         };
         sessionStorage.setItem(LISTING_MANAGEMENT_PENDING_KEY, JSON.stringify(pending));
         if (context.pageKind === "activeListings") {
-            const itemLink = getItemLink(context.root);
+            const itemLink = getItemLink(context.root) ?? getTransactionLink(context.root);
             if (!itemLink) {
                 sessionStorage.removeItem(LISTING_MANAGEMENT_PENDING_KEY);
                 showToast("商品ページを開く場所が見つかりませんでした");
@@ -2034,6 +2680,21 @@
         if (!openProductEditPage(pending.itemId)) {
             return false;
         }
+        return true;
+    }
+    function continuePendingListingManagementFromTransactionPage() {
+        if (!TRANSACTION_PATH_PATTERN.test(window.location.pathname)) {
+            return false;
+        }
+        const pending = getPendingListingManagementForProductPage();
+        if (!pending || extractMercariTransactionItemId(window.location.href) !== pending.itemId) {
+            return false;
+        }
+        const itemLink = findTransactionProductLink(document, pending.itemId);
+        if (!itemLink) {
+            return false;
+        }
+        clickLinkAndFallback(itemLink);
         return true;
     }
     function getPendingListingManagementForProductPage() {
@@ -2305,12 +2966,15 @@
         });
     }
     function buildActionContext(pageKind, root, source, placement = "append") {
-        const link = getItemLink(root);
-        const itemUrl = normalizeItemUrl(link?.href ?? (PRODUCT_PATH_PATTERN.test(window.location.pathname) ? window.location.href : null));
+        const itemLink = getItemLink(root);
+        const transactionLink = getTransactionLink(root);
+        const itemUrl = normalizeItemUrl(itemLink?.href ?? (PRODUCT_PATH_PATTERN.test(window.location.pathname) ? window.location.href : null));
+        const transactionUrl = normalizeItemUrl(transactionLink?.href ?? (TRANSACTION_PATH_PATTERN.test(window.location.pathname) ? window.location.href : null));
         return {
             pageKind,
-            itemId: extractMercariItemId(itemUrl),
+            itemId: extractMercariItemId(itemUrl) ?? extractMercariTransactionItemId(transactionUrl),
             itemUrl,
+            transactionUrl,
             sourcePath: window.location.pathname,
             root,
             mount: source,
@@ -2323,11 +2987,24 @@
         }
         return source.querySelector('a[href*="/item/"]');
     }
+    function getTransactionLink(source) {
+        if (source instanceof HTMLAnchorElement && source.href.includes("/transaction/")) {
+            return source;
+        }
+        return source.querySelector('a[href*="/transaction/"]');
+    }
     function extractMercariItemId(url) {
         if (!url) {
             return null;
         }
         const matched = url.match(/\/item\/([^/?#]+)/);
+        return matched?.[1] ?? null;
+    }
+    function extractMercariTransactionItemId(url) {
+        if (!url) {
+            return null;
+        }
+        const matched = url.match(/\/transaction\/(m\d{8,})/);
         return matched?.[1] ?? null;
     }
     function normalizeItemUrl(url) {
@@ -2382,28 +3059,64 @@
         const selectors = [
             '[data-testid*="price"]',
             '[aria-label*="価格"]',
+            '[itemprop="price"]',
+            'meta[itemprop="price"]',
             'meta[property="product:price:amount"]',
             'meta[property="og:price:amount"]',
         ];
         for (const selector of selectors) {
-            const element = source.querySelector(selector);
-            if (element instanceof HTMLMetaElement) {
-                const price = parsePrice(element.content);
+            const elements = Array.from(source.querySelectorAll(selector));
+            for (const element of elements) {
+                if (element instanceof HTMLMetaElement) {
+                    const price = parsePrice(element.content);
+                    if (price !== null) {
+                        return price;
+                    }
+                }
+                const price = parsePrice(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("content") ?? ""}`);
                 if (price !== null) {
                     return price;
                 }
             }
-            const price = parsePrice(`${element?.textContent ?? ""} ${element?.getAttribute("aria-label") ?? ""}`);
+        }
+        const bodyText = source instanceof Document ? `${source.body?.innerText ?? ""} ${source.body?.textContent ?? ""}` : source.textContent ?? "";
+        return parsePrice(bodyText);
+    }
+    function extractJsonPrice(source) {
+        if (!source) {
+            return null;
+        }
+        for (const key of ["price", "itemPrice", "item_price", "sellingPrice", "selling_price", "salePrice", "sale_price", "priceValue", "price_value"]) {
+            const price = normalizeJsonPriceValue(findJsonValueByKey(source, key));
             if (price !== null) {
                 return price;
             }
         }
-        const bodyText = source instanceof Document ? source.body?.innerText ?? "" : source.textContent ?? "";
-        return parsePrice(bodyText);
+        return null;
+    }
+    function normalizeJsonPriceValue(value) {
+        const directNumber = normalizeNumberValue(value);
+        if (directNumber !== null && directNumber > 0) {
+            return Math.round(directNumber);
+        }
+        if (typeof value === "string") {
+            return parsePrice(value);
+        }
+        const record = toRecord(value);
+        if (!record) {
+            return null;
+        }
+        for (const key of ["value", "amount", "price", "numericValue", "numeric_value"]) {
+            const price = normalizeJsonPriceValue(record[key]);
+            if (price !== null) {
+                return price;
+            }
+        }
+        return null;
     }
     function parsePrice(value) {
-        const matched = value.match(/(?:¥|￥)\s*([0-9０-９,，]+)/);
-        const raw = matched?.[1] ?? null;
+        const matched = value.match(/(?:[¥￥]\s*([0-9０-９,，]+)|([0-9０-９,，]+)\s*円)/);
+        const raw = matched?.[1] ?? matched?.[2] ?? (/^[\s0-9０-９,，]+$/.test(value) ? value : null);
         if (!raw) {
             return null;
         }

@@ -298,7 +298,41 @@ function setBookmarkButtonState(button, isSaved) {
     button.textContent = isSaved ? "★" : "☆";
     button.setAttribute("aria-label", isSaved ? "ブックマーク解除" : "ブックマーク保存");
 }
-function createBookmarkPeriodSales(row) {
+function toBookmarkSalesNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.round(number) : 0;
+}
+function setBookmarkSalesDataset(rowElement, row) {
+    rowElement.dataset.period1Count = String(row.periods.period1.count);
+    rowElement.dataset.period1Revenue = String(row.periods.period1.revenue);
+    rowElement.dataset.period2Count = String(row.periods.period2.count);
+    rowElement.dataset.period2Revenue = String(row.periods.period2.revenue);
+    rowElement.dataset.period3Count = String(row.periods.period3.count);
+    rowElement.dataset.period3Revenue = String(row.periods.period3.revenue);
+    rowElement.dataset.totalCount = String(row.totalCount);
+    rowElement.dataset.totalRevenue = String(row.totalSales);
+}
+function createBookmarkPeriodSales(row, rowElement) {
+    if (rowElement) {
+        return {
+            period1: {
+                count: toBookmarkSalesNumber(rowElement.dataset.period1Count),
+                revenue: toBookmarkSalesNumber(rowElement.dataset.period1Revenue)
+            },
+            period2: {
+                count: toBookmarkSalesNumber(rowElement.dataset.period2Count),
+                revenue: toBookmarkSalesNumber(rowElement.dataset.period2Revenue)
+            },
+            period3: {
+                count: toBookmarkSalesNumber(rowElement.dataset.period3Count),
+                revenue: toBookmarkSalesNumber(rowElement.dataset.period3Revenue)
+            },
+            total: {
+                count: toBookmarkSalesNumber(rowElement.dataset.totalCount),
+                revenue: toBookmarkSalesNumber(rowElement.dataset.totalRevenue)
+            }
+        };
+    }
     return {
         period1: { ...row.periods.period1 },
         period2: { ...row.periods.period2 },
@@ -309,7 +343,14 @@ function createBookmarkPeriodSales(row) {
         }
     };
 }
-function createPendingBookmark(row) {
+function logBookmarkSalesPayload(row, periodSales) {
+    console.info("[furimane-research] bookmark sales payload", {
+        item_id: row.listing.item_id,
+        title: row.title,
+        period_sales: periodSales
+    });
+}
+function createPendingBookmark(row, rowElement) {
     return {
         id: `pending:${row.platform}:${row.listing.item_id}`,
         bookmark_type: "item",
@@ -319,7 +360,7 @@ function createPendingBookmark(row) {
         price: row.price,
         thumbnail_url: row.thumbnailUrl,
         item_url: row.listing.item_url,
-        period_sales: createBookmarkPeriodSales(row)
+        period_sales: createBookmarkPeriodSales(row, rowElement)
     };
 }
 
@@ -406,18 +447,31 @@ function createMetaItem(label, value, accent = false) {
     item.append(labelElement, valueElement);
     return item;
 }
+function getResearchTableAssetUrl(path) {
+    try {
+        return chrome.runtime.getURL(path);
+    }
+    catch (error) {
+        console.warn("[furimane-research] extension asset unavailable", error);
+        return null;
+    }
+}
 function createResearchHero(seller, dashboard, options, bookmarkState) {
     const wrapper = createElement("section", "furimane-research-table__hero");
     const main = createElement("div", "furimane-research-table__hero-main");
     const eyebrow = createElement("div", "furimane-research-table__eyebrow");
     const brand = createElement("h3", "furimane-research-table__brand");
-    const brandLogo = document.createElement("img");
-    brandLogo.className = "furimane-research-table__brand-logo";
-    brandLogo.src = chrome.runtime.getURL("icons/icon-48.png");
-    brandLogo.alt = "";
-    brandLogo.decoding = "async";
+    const brandLogoUrl = getResearchTableAssetUrl("icons/icon-48.png");
     const brandText = createElement("span", undefined, "フリマネ リサーチ");
-    brand.append(brandLogo, brandText);
+    if (brandLogoUrl) {
+        const brandLogo = document.createElement("img");
+        brandLogo.className = "furimane-research-table__brand-logo";
+        brandLogo.src = brandLogoUrl;
+        brandLogo.alt = "";
+        brandLogo.decoding = "async";
+        brand.append(brandLogo);
+    }
+    brand.append(brandText);
     const sellerName = createElement("h2", "furimane-research-table__seller-name", dashboard.sellerName);
     const meta = createElement("div", "furimane-research-table__meta-row");
     meta.append(createMetaItem("状態", dashboard.sourceLabel), createMetaItem("最終取得", dashboard.fetchedAtLabel), createMetaItem("取得件数", `${dashboard.totals.count}件`), createMetaItem("売上合計（取得分）", formatResearchPrice(dashboard.totals.revenue), true), createMetaItem("期間集計", dashboard.usesEstimatedPeriodDates ? "推定" : dashboard.hasDatedListings ? "確定" : "未取得"));
@@ -490,7 +544,7 @@ function createStatsPendingNotice() {
 function createStatsEstimatedNotice() {
     return createElement("div", "furimane-research-table__stats-note furimane-research-table__stats-note--estimated", "API取得データの created / updated を使った推定集計です。売却日時が取れた場合は確定集計に切り替えます。");
 }
-function createBookmarkButton(row, bookmarkState, onUpdated) {
+function createBookmarkButton(row, bookmarkState, onUpdated, rowElement) {
     const existingBookmark = findItemBookmark(bookmarkState, row.listing, row.platform);
     const button = createElement("button", existingBookmark
         ? "furimane-research-table__bookmark-button furimane-research-table__bookmark-button--saved"
@@ -526,7 +580,7 @@ function createBookmarkButton(row, bookmarkState, onUpdated) {
                     button.disabled = false;
                     return;
                 }
-                const pendingBookmark = createPendingBookmark(row);
+                const pendingBookmark = createPendingBookmark(row, rowElement);
                 setBookmarkButtonState(button, true);
                 bookmarkState.items = [
                     pendingBookmark,
@@ -534,6 +588,8 @@ function createBookmarkButton(row, bookmarkState, onUpdated) {
                 ];
                 bookmarkState.count += 1;
                 onUpdated();
+                const periodSales = createBookmarkPeriodSales(row, rowElement);
+                logBookmarkSalesPayload(row, periodSales);
                 const response = await window.FurimanagerResearchApi.addBookmark({
                     platform: row.platform,
                     item_id: row.listing.item_id,
@@ -541,7 +597,7 @@ function createBookmarkButton(row, bookmarkState, onUpdated) {
                     price: row.price,
                     thumbnail_url: row.thumbnailUrl,
                     item_url: row.listing.item_url,
-                    period_sales: createBookmarkPeriodSales(row)
+                    period_sales: periodSales
                 });
                 assertBookmarkSuccess(response, "ブックマーク保存に失敗しました");
                 const newBookmark = response.item ?? response.bookmark;
@@ -571,14 +627,40 @@ function createBookmarkButton(row, bookmarkState, onUpdated) {
     });
     return button;
 }
-async function addBookmarkFromSimulation(row, bookmarkState) {
-    if (findItemBookmark(bookmarkState, row.listing, row.platform)) {
-        showBookmarkToast("仕入れ値を保存しました");
-        return false;
-    }
+async function addBookmarkFromSimulation(row, bookmarkState, rowElement) {
     if (!window.FurimanagerResearchApi?.addBookmark) {
         showBookmarkToast("仕入れ値は保存しましたが、ブックマークAPIが利用できません");
         return false;
+    }
+    const existingBookmark = findItemBookmark(bookmarkState, row.listing, row.platform);
+    if (existingBookmark) {
+        try {
+            const periodSales = createBookmarkPeriodSales(row, rowElement);
+            logBookmarkSalesPayload(row, periodSales);
+            const response = await window.FurimanagerResearchApi.addBookmark({
+                platform: row.platform,
+                item_id: row.listing.item_id,
+                title: row.title,
+                price: row.price,
+                thumbnail_url: row.thumbnailUrl,
+                item_url: row.listing.item_url,
+                period_sales: periodSales
+            });
+            assertBookmarkSuccess(response, "ブックマーク売上の更新に失敗しました");
+            const updatedBookmark = response.item ?? response.bookmark;
+            if (updatedBookmark) {
+                bookmarkState.items = bookmarkState.items.map((bookmark) => bookmark.id === existingBookmark.id ? updatedBookmark : bookmark);
+            }
+            bookmarkState.count = response.count;
+            bookmarkState.limit = response.limit;
+            showBookmarkToast("仕入れ値とブックマーク売上を保存しました");
+            return true;
+        }
+        catch (error) {
+            console.error("[furimane-research] simulator bookmark sales update failed", error);
+            showBookmarkToast("仕入れ値は保存しましたが、ブックマーク売上の更新に失敗しました");
+            return false;
+        }
     }
     if (bookmarkState.count >= bookmarkState.limit) {
         showBookmarkToast("仕入れ値は保存しましたが、ブックマークは上限です");
@@ -587,13 +669,15 @@ async function addBookmarkFromSimulation(row, bookmarkState) {
     const previousItems = [...bookmarkState.items];
     const previousCount = bookmarkState.count;
     const previousLimit = bookmarkState.limit;
-    const pendingBookmark = createPendingBookmark(row);
+    const pendingBookmark = createPendingBookmark(row, rowElement);
     bookmarkState.items = [
         pendingBookmark,
         ...bookmarkState.items.filter((bookmark) => bookmark.id !== pendingBookmark.id)
     ];
     bookmarkState.count += 1;
     try {
+        const periodSales = createBookmarkPeriodSales(row, rowElement);
+        logBookmarkSalesPayload(row, periodSales);
         const response = await window.FurimanagerResearchApi.addBookmark({
             platform: row.platform,
             item_id: row.listing.item_id,
@@ -601,7 +685,7 @@ async function addBookmarkFromSimulation(row, bookmarkState) {
             price: row.price,
             thumbnail_url: row.thumbnailUrl,
             item_url: row.listing.item_url,
-            period_sales: createBookmarkPeriodSales(row)
+            period_sales: periodSales
         });
         assertBookmarkSuccess(response, "ブックマーク追加に失敗しました");
         const newBookmark = response.item ?? response.bookmark;
@@ -668,12 +752,18 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
     for (const row of rows) {
         const tr = document.createElement("tr");
         tr.className = "furimane-research-table__row";
+        setBookmarkSalesDataset(tr, row);
         const thumbnailCell = document.createElement("td");
         const thumbnail = createElement("div", "furimane-research-table__thumbnail");
         if (row.thumbnailUrl) {
             const image = document.createElement("img");
-            image.src = row.thumbnailUrl;
             image.alt = row.title;
+            image.addEventListener("load", () => {
+                const ratio = image.naturalWidth > 0 ? image.naturalHeight / image.naturalWidth : 0;
+                thumbnail.classList.toggle("furimane-research-table__thumbnail--portrait", ratio >= 1.35);
+                thumbnail.classList.toggle("furimane-research-table__thumbnail--tall", ratio >= 1.8);
+            }, { once: true });
+            image.src = row.thumbnailUrl;
             thumbnail.appendChild(image);
         }
         else {
@@ -686,7 +776,7 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
         titleLink.href = sanitizeResearchUrl(row.listing.item_url);
         titleLink.target = "_blank";
         titleLink.rel = "noopener noreferrer";
-        const titleMeta = createElement("p", "furimane-research-table__title-meta", `合計 ${row.totalCount}件 / 合計売上 ${formatResearchPrice(row.totalSales)}${row.totalCount > 1 ? " / 操作は代表商品" : ""}`);
+        const titleMeta = createElement("p", "furimane-research-table__title-meta", `合計 ${row.totalCount}件 / 合計売上 ${formatResearchPrice(row.totalSales)}${row.totalCount > 1 ? " / 売値は代表商品の価格" : ""}`);
         titleWrap.append(titleLink, titleMeta);
         titleCell.appendChild(titleWrap);
         const priceCell = createElement("td", "furimane-research-table__price", formatResearchPrice(row.price));
@@ -701,7 +791,7 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
         });
         const actionCell = document.createElement("td");
         const actionWrapper = createElement("div", "furimane-research-table__row-actions");
-        const bookmarkButton = createBookmarkButton(row, bookmarkState, rerender);
+        const bookmarkButton = createBookmarkButton(row, bookmarkState, rerender, tr);
         const simulateButton = createElement("button", "furimane-research-table__simulate-button", "シミュレート");
         simulateButton.type = "button";
         simulateButton.addEventListener("click", async () => {
@@ -722,7 +812,7 @@ function createResearchTable(rows, dashboard, bookmarkState, purchasePrices, rer
                 monthlySalesCount: dashboard.hasDatedListings ? row.periods.period1.count : row.totalCount,
                 onSave: async (nextSavedPrice) => {
                     purchasePrices[row.listing.item_id] = nextSavedPrice;
-                    const addedBookmark = await addBookmarkFromSimulation(row, bookmarkState);
+                    const addedBookmark = await addBookmarkFromSimulation(row, bookmarkState, tr);
                     if (addedBookmark) {
                         setBookmarkButtonState(bookmarkButton, true);
                     }
