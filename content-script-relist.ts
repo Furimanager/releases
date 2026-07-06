@@ -58,6 +58,20 @@
 
   type FieldElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
+  type FinalActionReadiness = {
+    ready: boolean;
+    reason: string;
+    details: Record<string, unknown>;
+  };
+
+  type FillAvailableFieldsResult = {
+    filled: boolean;
+    complete: boolean;
+    targetCount: number;
+    filledCount: number;
+    missingFields: string[];
+  };
+
   const mountedWindow = window as Window & {
     __furimanagerRelistAutofillMounted?: boolean;
   };
@@ -75,6 +89,8 @@
   const FINAL_ACTION_AFTER_COMPLETE_WAIT_MS = 1000;
   const FINAL_ACTION_MIN_WAIT_MS = 10000;
   const FINAL_ACTION_DOM_STABLE_MS = 800;
+  const RELIST_FLOW_LOG_INTERVAL_MS = 1500;
+  const NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS = new Set(["size", "brand"]);
   const IMAGE_DONE_KEY = "furimanager_relist_image_done";
   const SIZE_DONE_KEY = "furimanager_relist_size_done";
   const BRAND_DONE_KEY = "furimanager_relist_brand_done";
@@ -90,10 +106,13 @@
   const LISTING_SUBMIT_DONE_KEY = "furimanager_relist_submit_done";
   const ENABLE_DOM_DEBUG = false;
   const ENABLE_METADATA_AUTOFILL = true;
+  const ENABLE_RELIST_FLOW_LOG = true;
   let imageFillAttempted = false;
   let sellFormMutationObserver: MutationObserver | null = null;
   let observedSellFormMutationRoot: Node | null = null;
   let lastSellFormMutationAt = Date.now();
+  let lastRelistFlowLogAt = 0;
+  let lastRelistFlowLogKey = "";
 
   if (mountedWindow.__furimanagerRelistAutofillMounted) {
     return;
@@ -435,6 +454,7 @@
   async function waitForFormAndFill(item: RelistPendingItem): Promise<void> {
     resetSelectionSessionIfNeeded(item);
     observeSellFormMutations();
+    logRelistFlow("開始", getItemLogDetails(item), { force: true });
 
     if (ENABLE_DOM_DEBUG && isMercariSellDebugPath()) {
       return;
@@ -453,20 +473,79 @@
       }
 
       if (!hasFilledAnyField && isInitialSellLandingPage() && goToInitialSellForm()) {
+        logRelistFlow("新規出品フォームへ移動", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
         await sleep(INITIAL_SELL_CLICK_WAIT_MS);
         continue;
       }
 
       const result = await fillAvailableFields(item);
       hasFilledAnyField = result.filled || hasFilledAnyField;
+      const readinessBeforeWait = getFinalActionReadiness(item);
+      const canProceedWithPartialFields = canProceedWithNonBlockingMissingFields(result, readinessBeforeWait);
+      const canHandOffCopyListing = canHandOffCopyListingToUser(item, result);
+      const flowStatus = getFlowStatus(result, readinessBeforeWait, canProceedWithPartialFields);
+      logRelistFlow("入力状況", {
+        elapsedMs: Date.now() - startedAt,
+        elapsedSec: getElapsedSec(startedAt),
+        pathname: window.location.pathname,
+        mode: item.mode,
+        step: flowStatus.step,
+        waitingFor: flowStatus.waitingFor,
+        filled: result.filled,
+        complete: result.complete,
+        filledCount: result.filledCount,
+        targetCount: result.targetCount,
+        missingFields: result.missingFields,
+        skippedMissingFields: canProceedWithPartialFields ? result.missingFields : [],
+        hasFilledAnyField,
+        finalReady: readinessBeforeWait.ready,
+        reason: flowStatus.reason,
+        ...readinessBeforeWait.details,
+      });
 
-      if (result.complete) {
+      if (canHandOffCopyListing) {
+        logRelistFlow("コピー出品は手動確認へ", {
+          elapsedMs: Date.now() - startedAt,
+          elapsedSec: getElapsedSec(startedAt),
+          pathname: window.location.pathname,
+          mode: item.mode,
+          reason: result.complete ? "copy-ready" : "copy-ready-with-non-blocking-fields-skipped",
+          skippedMissingFields: result.complete ? [] : result.missingFields,
+        }, { force: true });
+        clearPendingItem();
+        showToast("コピー出品の入力が完了しました。最後の出品ボタンは手動で確認してください");
+        return;
+      }
+
+      if (result.complete || canProceedWithPartialFields) {
         await sleep(FINAL_ACTION_AFTER_COMPLETE_WAIT_MS);
 
-        if (!isFinalActionReady(item)) {
+        const readiness = getFinalActionReadiness(item);
+        const canProceedAfterWait = result.complete || canProceedWithNonBlockingMissingFields(result, readiness);
+
+        if (!readiness.ready || !canProceedAfterWait) {
+          logRelistFlow("最終ボタン待ち", {
+            elapsedMs: Date.now() - startedAt,
+            elapsedSec: getElapsedSec(startedAt),
+            pathname: window.location.pathname,
+            mode: item.mode,
+            reason: readiness.ready ? "blocking-fields-incomplete" : readiness.reason,
+            missingFields: result.missingFields,
+            ...readiness.details,
+          });
           await sleep(RETRY_INTERVAL_MS);
           continue;
         }
+
+        logRelistFlow("最終ボタン押下へ", {
+          elapsedMs: Date.now() - startedAt,
+          elapsedSec: getElapsedSec(startedAt),
+          pathname: window.location.pathname,
+          mode: item.mode,
+          reason: result.complete ? readiness.reason : "non-blocking-fields-skipped",
+          skippedMissingFields: result.complete ? [] : result.missingFields,
+          ...readiness.details,
+        }, { force: true });
 
         if (item.mode === "draft") {
           await saveDraftAfterFill(item);
@@ -485,6 +564,7 @@
     }
 
     if (hasFilledAnyField) {
+      logRelistFlow("通常待機タイムアウト後の保険クリック", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
       await clickVisibleFinalActionIfReady(item, { requireStableDom: false });
       return;
     }
@@ -621,7 +701,15 @@
   }
 
   async function clickVisibleFinalActionIfReady(item: RelistPendingItem, options: { requireStableDom?: boolean } = {}): Promise<boolean> {
-    if (!isFinalActionReady(item, options)) {
+    const readiness = getFinalActionReadiness(item, options);
+
+    if (!readiness.ready) {
+      logRelistFlow("保険クリック待ち失敗", {
+        pathname: window.location.pathname,
+        mode: item.mode,
+        reason: readiness.reason,
+        ...readiness.details,
+      }, { force: true });
       return false;
     }
 
@@ -756,72 +844,291 @@
     return false;
   }
 
-  async function fillAvailableFields(item: RelistPendingItem): Promise<{ filled: boolean; complete: boolean }> {
+  async function fillAvailableFields(item: RelistPendingItem): Promise<FillAvailableFieldsResult> {
     let targetCount = 0;
     let filledCount = 0;
+    const missingFields: string[] = [];
 
     await clickImageUploadNextButtonIfVisible();
     await clickAiSupportSkipButtonIfVisible();
 
     if ((item.imageUrls?.length ?? 0) > 0) {
       targetCount += 1;
-      filledCount += await fillImageField(item.imageUrls) ? 1 : 0;
+      if (await fillImageField(item.imageUrls)) {
+        filledCount += 1;
+      } else {
+        missingFields.push("images");
+      }
     }
 
     if (item.title) {
       targetCount += 1;
-      filledCount += setFieldValue(findTitleField(), item.title) ? 1 : 0;
+      if (setFieldValue(findTitleField(), item.title)) {
+        filledCount += 1;
+      } else {
+        missingFields.push("title");
+      }
     }
 
     if (typeof item.price === "number") {
       targetCount += 1;
-      filledCount += fillPriceField(item.price) ? 1 : 0;
+      if (fillPriceField(item.price)) {
+        filledCount += 1;
+      } else {
+        missingFields.push("price");
+      }
     }
 
     if (item.description) {
       targetCount += 1;
-      filledCount += setFieldValue(findDescriptionField(), item.description) ? 1 : 0;
+      if (setFieldValue(findDescriptionField(), item.description)) {
+        filledCount += 1;
+      } else {
+        missingFields.push("description");
+      }
     }
 
     await clickAiSupportSkipButtonIfVisible();
     const basicFieldsComplete = targetCount > 0 && filledCount === targetCount && !isImageUploadDialogOpen() && !isAiSupportDialogOpen();
-    const metadataResult = basicFieldsComplete ? await fillMetadataFields(item) : { targetCount: 0, filledCount: 0 };
+    const metadataResult = basicFieldsComplete ? await fillMetadataFields(item) : { targetCount: 0, filledCount: 0, missingFields: [] };
     targetCount += metadataResult.targetCount;
     filledCount += metadataResult.filledCount;
+    missingFields.push(...metadataResult.missingFields);
     const valuesComplete = targetCount > 0 && filledCount === targetCount;
 
     return {
       filled: filledCount > 0,
-      complete: valuesComplete && isFinalActionReady(item),
+      complete: valuesComplete,
+      targetCount,
+      filledCount,
+      missingFields,
     };
   }
 
   function isFinalActionReady(item: RelistPendingItem, options: { requireStableDom?: boolean } = {}): boolean {
+    return getFinalActionReadiness(item, options).ready;
+  }
+
+  function getFinalActionReadiness(item: RelistPendingItem, options: { requireStableDom?: boolean } = {}): FinalActionReadiness {
     if (window.location.pathname !== "/sell/create") {
-      return false;
+      return { ready: false, reason: "not-sell-create", details: { pathname: window.location.pathname } };
     }
 
-    if (isImageUploadDialogOpen() || isAiSupportDialogOpen() || findActivePickerRoot() !== document) {
-      return false;
+    const imageDialogOpen = isImageUploadDialogOpen();
+    const aiDialogOpen = isAiSupportDialogOpen();
+    const activePickerRoot = findActivePickerRoot();
+
+    if (imageDialogOpen || aiDialogOpen || activePickerRoot !== document) {
+      return {
+        ready: false,
+        reason: imageDialogOpen ? "image-dialog-open" : aiDialogOpen ? "ai-dialog-open" : "picker-open",
+        details: {
+          imageDialogOpen,
+          aiDialogOpen,
+          activePicker: summarizeElement(activePickerRoot),
+          activePickerDetails: getElementLogDetails(activePickerRoot),
+        },
+      };
     }
 
-    if ((options.requireStableDom ?? true) && Date.now() - lastSellFormMutationAt < FINAL_ACTION_DOM_STABLE_MS) {
-      return false;
+    const stableForMs = Date.now() - lastSellFormMutationAt;
+
+    if ((options.requireStableDom ?? true) && stableForMs < FINAL_ACTION_DOM_STABLE_MS) {
+      return { ready: false, reason: "dom-not-stable", details: { stableForMs, requiredStableMs: FINAL_ACTION_DOM_STABLE_MS } };
     }
 
     if (typeof item.price === "number" && !isPriceReady(item.price)) {
-      return false;
+      const priceField = findPriceField();
+      return {
+        ready: false,
+        reason: "price-not-ready",
+        details: {
+          expectedPrice: item.price,
+          priceFieldFound: priceField !== null,
+          priceFieldValue: priceField?.value ?? null,
+          displayedPriceReady: isPriceAlreadyDisplayed(item.price),
+        },
+      };
     }
 
     const button = item.mode === "draft" ? findDraftSaveButton() : item.mode === "relist" ? findFinalListingSubmitButton() : null;
-    return button !== null && isClickableButtonLike(button);
+
+    if (!button) {
+      return { ready: false, reason: "button-not-found", details: getButtonLogDetails(button) };
+    }
+
+    if (!isClickableButtonLike(button)) {
+      return { ready: false, reason: "button-not-clickable", details: getButtonLogDetails(button) };
+    }
+
+    return { ready: true, reason: "ready", details: getButtonLogDetails(button) };
+  }
+
+  function logRelistFlow(message: string, details: Record<string, unknown> = {}, options: { force?: boolean } = {}): void {
+    if (!ENABLE_RELIST_FLOW_LOG) {
+      return;
+    }
+
+    const now = Date.now();
+    const key = [message, details.pathname, details.mode, details.step, details.waitingFor, details.complete, details.filledCount, details.targetCount, details.reason, details.finalReady, details.buttonFound, details.buttonClickable, details.missingFields, details.activePicker].join("|");
+
+    if (!options.force && key === lastRelistFlowLogKey && now - lastRelistFlowLogAt < RELIST_FLOW_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    lastRelistFlowLogAt = now;
+    lastRelistFlowLogKey = key;
+    console.info(`[furimanager:relist] ${message}${getRelistFlowLogSuffix(details)}`, details);
+  }
+
+  function getRelistFlowLogSuffix(details: Record<string, unknown>): string {
+    const parts = [
+      typeof details.elapsedSec === "number" ? `${details.elapsedSec}s` : null,
+      typeof details.step === "string" ? `step=${details.step}` : null,
+      typeof details.waitingFor === "string" ? `waiting=${details.waitingFor}` : null,
+      typeof details.reason === "string" ? `reason=${details.reason}` : null,
+      Array.isArray(details.missingFields) && details.missingFields.length > 0 ? `missing=${details.missingFields.join(",")}` : null,
+      Array.isArray(details.skippedMissingFields) && details.skippedMissingFields.length > 0 ? `skipped=${details.skippedMissingFields.join(",")}` : null,
+      typeof details.activePicker === "string" && details.activePicker !== "document" ? `picker=${details.activePicker.slice(0, 80)}` : null,
+      typeof details.buttonText === "string" && details.buttonText ? `button=${details.buttonText.slice(0, 40)}` : null,
+    ].filter(Boolean);
+
+    return parts.length > 0 ? ` | ${parts.join(" ")}` : "";
+  }
+
+  function canProceedWithNonBlockingMissingFields(result: FillAvailableFieldsResult, readiness: FinalActionReadiness): boolean {
+    return (
+      !result.complete &&
+      result.filled &&
+      readiness.ready &&
+      result.missingFields.length > 0 &&
+      result.missingFields.every((field) => NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS.has(field))
+    );
+  }
+
+  function canHandOffCopyListingToUser(item: RelistPendingItem, result: FillAvailableFieldsResult): boolean {
+    return (
+      item.mode === "copy" &&
+      result.filled &&
+      (result.complete || (
+        result.missingFields.length > 0 &&
+        result.missingFields.every((field) => NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS.has(field))
+      ))
+    );
+  }
+
+  function getFlowStatus(result: FillAvailableFieldsResult, readiness: FinalActionReadiness, canProceedWithPartialFields: boolean): { step: string; waitingFor: string; reason: string } {
+    if (canProceedWithPartialFields) {
+      return {
+        step: "click-final-action",
+        waitingFor: "ready",
+        reason: "non-blocking-fields-skipped",
+      };
+    }
+
+    if (!result.complete) {
+      const missing = result.missingFields[0] ?? "values";
+      return {
+        step: "fill-fields",
+        waitingFor: missing,
+        reason: "values-incomplete",
+      };
+    }
+
+    if (!readiness.ready) {
+      return {
+        step: "wait-final-action",
+        waitingFor: readiness.reason,
+        reason: readiness.reason,
+      };
+    }
+
+    return {
+      step: "click-final-action",
+      waitingFor: "ready",
+      reason: "ready",
+    };
+  }
+
+  function getElapsedSec(startedAt: number): number {
+    return Math.round((Date.now() - startedAt) / 100) / 10;
+  }
+
+  function getItemLogDetails(item: RelistPendingItem): Record<string, unknown> {
+    return {
+      pathname: window.location.pathname,
+      mode: item.mode,
+      itemId: item.itemId,
+      hasTitle: !!item.title,
+      price: item.price,
+      imageCount: item.imageUrls?.length ?? 0,
+      hasDescription: !!item.description,
+      categoryCount: item.categoryPath?.length ?? 0,
+      hasCondition: !!item.condition,
+      hasShippingMethod: !!item.shippingMethod,
+      hasShippingFrom: !!item.shippingFrom,
+      hasShippingDays: !!item.shippingDays,
+    };
+  }
+
+  function getButtonLogDetails(button: HTMLElement | null): Record<string, unknown> {
+    const innerButton = button instanceof HTMLButtonElement ? button : button?.querySelector("button") ?? null;
+    const target = innerButton instanceof HTMLElement ? innerButton : button;
+
+    return {
+      buttonFound: button !== null,
+      buttonClickable: button ? isClickableButtonLike(button) : false,
+      buttonText: button ? normalizeText(getElementSearchText(button)).slice(0, 80) : "",
+      buttonDisabled: innerButton instanceof HTMLButtonElement ? innerButton.disabled : null,
+      buttonAriaDisabled: target?.getAttribute("aria-disabled") ?? null,
+      buttonVisible: button ? isVisible(button) : false,
+    };
+  }
+
+  function summarizeElement(root: ParentNode): string {
+    if (root === document) {
+      return "document";
+    }
+
+    if (!(root instanceof HTMLElement)) {
+      return "unknown";
+    }
+
+    const rect = root.getBoundingClientRect();
+    const label = root.getAttribute("aria-label") ?? root.getAttribute("data-testid") ?? root.id ?? root.className?.toString?.() ?? "";
+    const text = normalizeText(root.textContent).slice(0, 80);
+    return [root.tagName.toLowerCase(), label, `${Math.round(rect.width)}x${Math.round(rect.height)}`, text].filter(Boolean).join(" ");
+  }
+
+  function getElementLogDetails(root: ParentNode): Record<string, unknown> | null {
+    if (root === document || !(root instanceof HTMLElement)) {
+      return null;
+    }
+
+    const rect = root.getBoundingClientRect();
+    return {
+      tag: root.tagName.toLowerCase(),
+      id: root.id || null,
+      className: root.className?.toString?.().slice(0, 160) || null,
+      role: root.getAttribute("role"),
+      ariaModal: root.getAttribute("aria-modal"),
+      ariaLabel: root.getAttribute("aria-label"),
+      dataTestId: root.getAttribute("data-testid"),
+      text: normalizeText(root.textContent).slice(0, 160),
+      rect: {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+      },
+    };
   }
 
   function isPriceReady(price: number): boolean {
     const field = findPriceField();
 
-    if (field && parsePriceValue(field.value || field.getAttribute("value") || "") === price) {
-      return true;
+    if (field) {
+      return parsePriceValue(field.value) === price;
     }
 
     return isPriceAlreadyDisplayed(price);
@@ -1119,14 +1426,15 @@
     chromeApi?.storage?.local.remove(RELIST_PENDING_KEY);
   }
 
-  async function fillMetadataFields(item: RelistPendingItem): Promise<{ targetCount: number; filledCount: number }> {
+  async function fillMetadataFields(item: RelistPendingItem): Promise<{ targetCount: number; filledCount: number; missingFields: string[] }> {
     if (ENABLE_DOM_DEBUG || !ENABLE_METADATA_AUTOFILL) {
       // TODO: メルカリ側のDOM仕様が変わった場合は、入力候補を1項目ずつ見直す。
-      return { targetCount: 0, filledCount: 0 };
+      return { targetCount: 0, filledCount: 0, missingFields: [] };
     }
 
     let targetCount = 0;
     let filledCount = 0;
+    const missingFields: string[] = [];
     const categoryPath = item.categoryPath?.filter(Boolean) ?? [];
 
     const condition = normalizeMercariCondition(item.condition);
@@ -1141,7 +1449,8 @@
       if (await fillCategoryFields(categoryPath)) {
         filledCount += 1;
       } else {
-        return { targetCount, filledCount };
+        missingFields.push("category");
+        return { targetCount, filledCount, missingFields };
       }
     }
 
@@ -1150,7 +1459,8 @@
       if (await fillConditionField(condition)) {
         filledCount += 1;
       } else {
-        return { targetCount, filledCount };
+        missingFields.push("condition");
+        return { targetCount, filledCount, missingFields };
       }
     }
 
@@ -1159,7 +1469,8 @@
       if (await fillSizeField(size)) {
         filledCount += 1;
       } else {
-        return { targetCount, filledCount };
+        missingFields.push("size");
+        return { targetCount, filledCount, missingFields };
       }
     }
 
@@ -1168,7 +1479,8 @@
       if (await fillBrandField(brand)) {
         filledCount += 1;
       } else {
-        return { targetCount, filledCount };
+        missingFields.push("brand");
+        return { targetCount, filledCount, missingFields };
       }
     }
 
@@ -1177,7 +1489,8 @@
       if (fillShippingFromField(shippingFrom)) {
         filledCount += 1;
       } else {
-        return { targetCount, filledCount };
+        missingFields.push("shippingFrom");
+        return { targetCount, filledCount, missingFields };
       }
     }
 
@@ -1186,7 +1499,8 @@
       if (fillShippingDaysField(shippingDays)) {
         filledCount += 1;
       } else {
-        return { targetCount, filledCount };
+        missingFields.push("shippingDays");
+        return { targetCount, filledCount, missingFields };
       }
     }
 
@@ -1195,11 +1509,12 @@
       if (await fillShippingMethodField(shippingMethod)) {
         filledCount += 1;
       } else {
-        return { targetCount, filledCount };
+        missingFields.push("shippingMethod");
+        return { targetCount, filledCount, missingFields };
       }
     }
 
-    return { targetCount, filledCount };
+    return { targetCount, filledCount, missingFields };
   }
 
   async function fillCategoryFields(categoryPath: string[]): Promise<boolean> {
@@ -2083,9 +2398,37 @@
 
   function findActivePickerRoot(): ParentNode {
     const roots = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-testid*="modal"], [class*="modal"], [class*="Modal"], [class*="sheet"], [class*="Sheet"]'))
-      .filter((candidate): candidate is HTMLElement => candidate instanceof HTMLElement && isVisible(candidate));
+      .filter((candidate): candidate is HTMLElement => candidate instanceof HTMLElement && isActivePickerRootCandidate(candidate));
 
     return roots.sort((a, b) => getElementArea(a) - getElementArea(b))[0] ?? document;
+  }
+
+  function isActivePickerRootCandidate(element: HTMLElement): boolean {
+    if (!isVisible(element) || isHiddenFromUser(element) || !intersectsViewport(element)) {
+      return false;
+    }
+
+    const role = element.getAttribute("role") ?? "";
+    const ariaModal = element.getAttribute("aria-modal") === "true";
+    const descriptor = [element.className?.toString?.(), element.getAttribute("data-testid"), element.id].filter(Boolean).join(" ");
+    const looksLikeOverlay = /modal|sheet/i.test(descriptor);
+    const position = window.getComputedStyle(element).position;
+
+    return role === "dialog" || ariaModal || (looksLikeOverlay && ["fixed", "absolute", "sticky"].includes(position));
+  }
+
+  function isHiddenFromUser(element: HTMLElement): boolean {
+    if (element.hidden || element.getAttribute("aria-hidden") === "true" || element.closest('[aria-hidden="true"], [hidden], [inert]')) {
+      return true;
+    }
+
+    const style = window.getComputedStyle(element);
+    return style.display === "none" || style.visibility === "hidden" || style.opacity === "0" || style.pointerEvents === "none";
+  }
+
+  function intersectsViewport(element: HTMLElement): boolean {
+    const rect = element.getBoundingClientRect();
+    return rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
   }
 
   function getPickerOptionScore(element: HTMLElement, value: string): number {
@@ -2344,6 +2687,10 @@
     const field = findPriceField();
 
     if (field) {
+      if (parsePriceValue(field.value) === price) {
+        return true;
+      }
+
       setFieldValue(field, String(price));
 
       return true;
@@ -2406,6 +2753,10 @@
       return setSelectValue(field, value);
     }
 
+    if (field.value === value) {
+      return true;
+    }
+
     field.focus();
     const prototype = Object.getPrototypeOf(field);
     const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
@@ -2433,6 +2784,10 @@
 
     if (!option) {
       return false;
+    }
+
+    if (field.value === option.value) {
+      return true;
     }
 
     field.value = option.value;

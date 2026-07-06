@@ -12,7 +12,7 @@
     const LISTING_SELLER_PANEL_ATTRIBUTE = "data-furimanager-listing-seller-panel";
     const LISTING_SELLER_PANEL_VERSION_ATTRIBUTE = "data-furimanager-listing-seller-version";
     const LISTING_SELLER_PENDING_ATTRIBUTE = "data-furimanager-listing-seller-pending";
-    const LISTING_SELLER_PANEL_VERSION = "compact-overlay-v14";
+    const LISTING_SELLER_PANEL_VERSION = "compact-overlay-v17";
     const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
     const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
     const PRODUCT_PAGE_RELIST_PENDING_KEY = "furimanager_product_page_relist_pending";
@@ -45,6 +45,11 @@
     ];
     const BROWSING_HISTORY_PATH_MARKERS = [
         "/mypage/browsing_history",
+    ];
+    const PURCHASE_PATH_MARKERS = [
+        "/mypage/purchase",
+        "/mypage/purchases",
+        "/mypage/purchased",
     ];
     const ACTIVE_LISTING_PATH_MARKERS = [
         "/mypage/listings",
@@ -177,7 +182,7 @@
         return HISTORY_PATH_MARKERS.some((marker) => matchesPathMarker(path, marker));
     }
     function isActiveListingsPage(path) {
-        if (isBrowsingHistoryPage(path) || isHistoryPage(path)) {
+        if (isBrowsingHistoryPage(path) || isHistoryPage(path) || isPurchasePage(path)) {
             return false;
         }
         if (ACTIVE_LISTING_PATH_MARKERS.some((marker) => matchesPathMarker(path, marker))) {
@@ -189,6 +194,9 @@
         }
         const bodyText = document.body?.innerText ?? "";
         return ACTIVE_LISTING_TEXT_MARKERS.some((marker) => bodyText.includes(marker));
+    }
+    function isPurchasePage(path) {
+        return PURCHASE_PATH_MARKERS.some((marker) => matchesPathMarker(path, marker));
     }
     function getSelectedListingsTabText() {
         const candidates = safeQuerySelectorAll(document, '[role="tab"][aria-selected="true"], [aria-selected="true"]');
@@ -741,9 +749,11 @@
         }
         const targets = getListingSellerTargets();
         if (targets.length === 0) {
+            cleanupStaleListingSellerPanels([]);
             return false;
         }
         injectStyles();
+        cleanupStaleListingSellerPanels(targets);
         const pendingTargets = targets.filter((target) => {
             const existingPanel = target.card.querySelector(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`);
             const existingItemId = existingPanel?.getAttribute("data-furimanager-item-id") ?? null;
@@ -757,6 +767,17 @@
             ensureSellerPanel(target);
         });
         return true;
+    }
+    function cleanupStaleListingSellerPanels(targets) {
+        const activeCards = new Set(targets.map((target) => target.card));
+        safeQuerySelectorAll(document, '[data-testid="item-cell"]').forEach((element) => {
+            if (!(element instanceof HTMLElement) || activeCards.has(element)) {
+                return;
+            }
+            element.removeAttribute(LISTING_SELLER_PENDING_ATTRIBUTE);
+            element.querySelectorAll(`[${LISTING_SELLER_PANEL_ATTRIBUTE}="true"]`).forEach((panel) => panel.remove());
+            clearSellerPanelCardSizing(element);
+        });
     }
     function isMercariListingPage(pageKind) {
         const path = window.location.pathname;
@@ -790,11 +811,12 @@
             const itemUrl = link instanceof HTMLAnchorElement ? normalizeItemUrl(link.href) : null;
             const itemId = extractMercariItemId(itemUrl) ?? extractListingCardItemId(element);
             const isShop = isMercariShopListingCard(element, link instanceof HTMLAnchorElement ? link : null);
+            const isPromoted = link instanceof HTMLAnchorElement && isPromotedListingLink(link);
             if (!itemId || (!itemUrl && !isShop)) {
                 return;
             }
             seenCards.add(element);
-            targets.push({ itemId, itemUrl: itemUrl ?? "", card: element, compact, isShop });
+            targets.push({ itemId, itemUrl: itemUrl ?? "", card: element, compact: compact || isPromoted, isShop });
         });
         safeQuerySelectorAll(document, 'a[href*="/item/m"]').forEach((element) => {
             const link = element instanceof HTMLAnchorElement ? element : null;
@@ -808,7 +830,7 @@
                 return;
             }
             seenCards.add(card);
-            targets.push({ itemId, itemUrl, card, compact, isShop: isMercariShopListingCard(card, link) });
+            targets.push({ itemId, itemUrl, card, compact: compact || isPromotedListingLink(link), isShop: isMercariShopListingCard(card, link) });
         });
         return targets;
     }
@@ -816,6 +838,17 @@
         const thumbnail = card.querySelector('[itemtype][id], .merItemThumbnail[id], [class*="merItemThumbnail"][id]');
         const id = thumbnail?.getAttribute("id")?.trim();
         return id || null;
+    }
+    function isPromotedListingLink(link) {
+        try {
+            const url = new URL(link.href, window.location.href);
+            return url.searchParams.has("ad_id")
+                || url.searchParams.has("ad_auction_id")
+                || url.searchParams.has("ad_auction_unit_id");
+        }
+        catch {
+            return link.href.includes("ad_id=") || link.href.includes("ad_auction_id=") || link.href.includes("ad_auction_unit_id=");
+        }
     }
     function isMercariShopListingCard(card, link) {
         const href = link?.href.toLowerCase() ?? "";
@@ -1312,7 +1345,7 @@
         panel.innerHTML = "";
         const title = document.createElement("div");
         title.className = "furimanager-listing-date-panel__title";
-        title.textContent = "フリマネ日時メモ";
+        title.textContent = "フリマネ日時チェック";
         panel.appendChild(title);
         if (dateInfo.listedAt) {
             panel.appendChild(createListingDateRow("出品日時", dateInfo.listedAt));
@@ -2307,7 +2340,7 @@
                 showToast("商品ページを開く場所が見つかりませんでした");
                 return;
             }
-            // 出品一覧では、先に商品行のリンク（画像4の青い領域）を押して商品詳細へ進む。
+            // 一覧では、先に商品行のリンクを押して商品詳細へ進む。取引中は取引画面を1回経由する。
             clickLinkAndFallback(itemLink);
             return;
         }
@@ -2444,6 +2477,10 @@
     }
     async function saveRelistPending(context, mode) {
         const item = await collectRelistData(context, mode);
+        if (typeof item.price !== "number") {
+            showToast("価格を取得できなかったため、新規出品ページを開きませんでした");
+            return;
+        }
         await sendRelistPending(item);
     }
     async function handleInventoryLink(context) {
@@ -2471,7 +2508,13 @@
     async function collectRelistData(context, mode) {
         const extractionRoot = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : context.root;
         const localItem = extractItemDataFromElement(extractionRoot, context.itemUrl, mode);
-        if (!localItem.itemUrl || PRODUCT_PATH_PATTERN.test(window.location.pathname)) {
+        if (!localItem.itemUrl) {
+            return {
+                ...localItem,
+                itemId: localItem.itemId ?? context.itemId,
+            };
+        }
+        if (PRODUCT_PATH_PATTERN.test(window.location.pathname) && !isRelistItemMissingRequiredData(localItem)) {
             return {
                 ...localItem,
                 itemId: localItem.itemId ?? context.itemId,
@@ -2485,6 +2528,9 @@
             itemUrl: localItem.itemUrl,
             mode,
         };
+    }
+    function isRelistItemMissingRequiredData(item) {
+        return typeof item.price !== "number";
     }
     function extractItemDataFromElement(source, fallbackUrl, mode) {
         const itemUrl = normalizeItemUrl(getItemLink(source)?.href ?? fallbackUrl ?? window.location.href);
