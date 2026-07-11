@@ -61,6 +61,16 @@ type ResearchAccessResponse = {
   canUseResearch: boolean;
   hasAddon?: boolean;
   expiresAt?: string | null;
+  usage?: ResearchUsageState;
+};
+
+type ResearchUsageState = {
+  allowed?: boolean;
+  used: number;
+  limit: number;
+  remaining: number;
+  resetAt?: string;
+  unlimited?: boolean;
 };
 
 type ResearchCacheResponse = {
@@ -77,6 +87,7 @@ type ResearchCacheResponse = {
 type ResearchImportResponse = {
   success: boolean;
   listingCount: number;
+  usage?: ResearchUsageState;
 };
 
 type ResearchSellerSaveResponse = {

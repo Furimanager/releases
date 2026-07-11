@@ -57,6 +57,27 @@
         <p id="authMessage" class="auth-message auth-message--idle">設定待ち</p>
       </section>
 
+      <section class="panel research-card" aria-live="polite">
+        <div class="panel__header">
+          <div>
+            <p class="panel__eyebrow">Research</p>
+            <h2 class="panel__title">リサーチ機能</h2>
+          </div>
+          <p id="researchFeatureState" class="research-card__state">確認中</p>
+        </div>
+        <p class="research-card__description">
+          メルカリの出品者ページを開いた時に、リサーチを自動で起動するか切り替えます。
+        </p>
+        <label class="research-toggle-row">
+          <span>
+            <strong>リサーチを自動起動</strong>
+            <small>使いたい時だけONにすると、意図しない取得を防げます</small>
+          </span>
+          <input id="researchFeatureToggle" class="research-toggle-row__input" type="checkbox" />
+        </label>
+        <p id="researchFeatureMessage" class="research-card__message">設定を読み込み中です。</p>
+      </section>
+
       <section class="panel status-card" aria-live="polite">
         <div class="panel__header">
           <div>

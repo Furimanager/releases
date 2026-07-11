@@ -11,10 +11,19 @@ const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
 const FURIMANE_LOCAL_RESEARCH_CACHE_PREFIX = "furimane-research-local-cache:";
 const FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const FURIMANE_ACCESS_CACHE_TTL_MS = 5 * 60 * 1000;
+const FURIMANE_RESEARCH_ENABLED_KEY = "furimaneResearchEnabled";
 
 declare namespace chrome {
   namespace runtime {
     function getURL(path: string): string;
+  }
+  namespace storage {
+    const local: {
+      get(keys: string[], callback: (result: Record<string, unknown>) => void): void;
+    };
+    const onChanged: {
+      addListener(callback: (changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, areaName: string) => void): void;
+    };
   }
 }
 
@@ -57,6 +66,15 @@ type ResearchCacheResponse = {
   listings?: ResearchListing[];
 } | null;
 
+type ResearchUsageState = {
+  allowed?: boolean;
+  used: number;
+  limit: number;
+  remaining: number;
+  resetAt?: string;
+  unlimited?: boolean;
+};
+
 type LocalResearchCacheEntry = {
   savedAt: number;
   data: ResearchResultData;
@@ -75,12 +93,17 @@ type ResearchFlowOptions = {
   retryCount?: number;
 };
 
-type ResearchErrorKind = "auth" | "plan" | "timeout" | "scraping" | "dom_changed" | "unknown";
+type ResearchErrorKind = "auth" | "plan" | "limit" | "timeout" | "scraping" | "dom_changed" | "unknown";
 
 type ResearchOverlayWindow = Window & {
   FurimanagerResearchApi?: {
     getAppUrl?: () => string;
-    checkAccess: (options?: { signal?: AbortSignal }) => Promise<{ canUse?: boolean; canUseResearch?: boolean }>;
+    checkAccess: (options?: { signal?: AbortSignal }) => Promise<{
+      canUse?: boolean;
+      canUseResearch?: boolean;
+      hasAddon?: boolean;
+      usage?: ResearchUsageState;
+    }>;
     checkCache: (
       sellerId: string,
       platform: string,
@@ -90,7 +113,7 @@ type ResearchOverlayWindow = Window & {
       seller: ResearchResultData["seller"],
       listings: ResearchListing[],
       options?: { signal?: AbortSignal }
-    ) => Promise<unknown>;
+    ) => Promise<{ usage?: ResearchUsageState } | unknown>;
     saveSeller: (seller: {
       platform: string;
       seller_id: string;
@@ -119,6 +142,7 @@ type ResearchOverlayWindow = Window & {
       listings: ResearchListing[],
       options?: {
         sourceLabel?: string;
+        usage?: ResearchUsageState | null;
         onRefresh?: () => Promise<void>;
         onSaveSeller?: (seller: ResearchResultData["seller"]) => Promise<void>;
       }
@@ -131,7 +155,8 @@ let currentResearchPageKey: string | null = null;
 let routeSyncTimerId: number | null = null;
 let lastObservedUrl = window.location.href;
 let overlayInsertRetryCount = 0;
-let cachedResearchAccess: { savedAt: number; value: { canUse?: boolean; canUseResearch?: boolean } } | null = null;
+let cachedResearchAccess: { savedAt: number; value: { canUse?: boolean; canUseResearch?: boolean; usage?: ResearchUsageState } } | null = null;
+let currentResearchUsage: ResearchUsageState | null = null;
 
 function showResearchNotice(message: string) {
   document.querySelector(".furimane-research-table__toast")?.remove();
@@ -148,6 +173,24 @@ function showResearchNotice(message: string) {
 
 function getOverlayWindow() {
   return window as unknown as ResearchOverlayWindow;
+}
+
+function getChromeLocalStorage(keys: string[]) {
+  return new Promise<Record<string, unknown>>((resolve) => {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) {
+      resolve({});
+      return;
+    }
+
+    chrome.storage.local.get(keys, (result) => {
+      resolve(result ?? {});
+    });
+  });
+}
+
+async function isResearchFeatureEnabled() {
+  const storage = await getChromeLocalStorage([FURIMANE_RESEARCH_ENABLED_KEY]);
+  return storage[FURIMANE_RESEARCH_ENABLED_KEY] === true;
 }
 
 function getResearchFetchStrategy() {
@@ -552,6 +595,10 @@ function getResearchErrorKind(error: unknown): ResearchErrorKind {
     return "plan";
   }
 
+  if (message === "research_monthly_limit_exceeded") {
+    return "limit";
+  }
+
   if (message === "api_timeout" || message === "network_error") {
     return "timeout";
   }
@@ -593,15 +640,75 @@ async function checkResearchAccessWithCache(
   signal?: AbortSignal
 ) {
   if (cachedResearchAccess && Date.now() - cachedResearchAccess.savedAt < FURIMANE_ACCESS_CACHE_TTL_MS) {
+    currentResearchUsage = cachedResearchAccess.value.usage ?? null;
     return cachedResearchAccess.value;
   }
 
   const access = await api.checkAccess({ signal });
+  const normalizedAccess = normalizeResearchAccess(access);
+  currentResearchUsage = normalizedAccess.usage ?? null;
   cachedResearchAccess = {
     savedAt: Date.now(),
-    value: access
+    value: normalizedAccess
   };
-  return access;
+  return normalizedAccess;
+}
+
+function normalizeResearchAccess(access: { canUse?: boolean; canUseResearch?: boolean; hasAddon?: boolean; usage?: ResearchUsageState }) {
+  if (access.usage || access.hasAddon !== true) {
+    return access;
+  }
+
+  return {
+    ...access,
+    usage: {
+      allowed: true,
+      used: 0,
+      limit: 30,
+      remaining: 30,
+      unlimited: true
+    }
+  };
+}
+
+function updateResearchUsageChip(usage: ResearchUsageState | null | undefined) {
+  if (!usage) {
+    return;
+  }
+
+  currentResearchUsage = usage;
+  const canUseResearch = usage.unlimited === true || usage.used < usage.limit;
+
+  if (cachedResearchAccess) {
+    cachedResearchAccess.value = {
+      ...cachedResearchAccess.value,
+      canUse: canUseResearch,
+      canUseResearch,
+      usage: {
+        ...usage,
+        allowed: canUseResearch
+      }
+    };
+  }
+
+  const usageChip = document.querySelector<HTMLElement>(".furimane-research-table__usage-count");
+
+  if (!usageChip) {
+    return;
+  }
+
+  usageChip.classList.toggle("furimane-research-table__usage-count--unlimited", usage.unlimited === true);
+  const usageText = usageChip.querySelector<HTMLElement>(".furimane-research-table__usage-count-text");
+  const label = usage.unlimited
+    ? "無制限"
+    : `今月のリサーチ ${usage.used} / ${usage.limit}`;
+
+  if (usageText) {
+    usageText.textContent = label;
+    return;
+  }
+
+  usageChip.textContent = label;
 }
 
 function createChildAbortController(parentSignal: AbortSignal) {
@@ -628,6 +735,12 @@ function getResearchErrorCopy(kind: ResearchErrorKind) {
       return {
         title: "リサーチ追加プランでご利用いただけます",
         description: "この機能はリサーチ追加プラン加入後に利用できます。",
+        actionLabel: "プランを確認する"
+      };
+    case "limit":
+      return {
+        title: "今月のリサーチ上限に達しました",
+        description: "今月の利用上限に達しました。来月1日にリセットされます。",
         actionLabel: "プランを確認する"
       };
     case "timeout":
@@ -677,7 +790,7 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
     wrapper.appendChild(detail);
   }
 
-  if (kind === "auth" || kind === "plan") {
+  if (kind === "auth" || kind === "plan" || kind === "limit") {
     const link = document.createElement("a");
     link.className = "furimane-research-overlay__link-button";
     link.href = kind === "auth" ? `${appUrl}/login` : `${appUrl}/dashboard/research`;
@@ -708,6 +821,7 @@ function renderResults(container: HTMLElement, data: ResearchResultData, sourceL
 
   table.renderTable(body, data.seller, data.listings, {
     sourceLabel,
+    usage: currentResearchUsage,
     onRefresh: () => {
       return runResearchFlowSafe(container, { forceRefresh: true });
     },
@@ -776,7 +890,10 @@ function saveResearchDataInBackground(data: ResearchResultData, signal?: AbortSi
     return;
   }
 
-  void api.saveResearchData(data.seller, data.listings, { signal }).catch((error) => {
+  void api.saveResearchData(data.seller, data.listings, { signal }).then((result) => {
+    const usage = result && typeof result === "object" ? (result as { usage?: ResearchUsageState }).usage : null;
+    updateResearchUsageChip(usage);
+  }).catch((error) => {
     if (error instanceof DOMException && error.name === "AbortError") {
       return;
     }
@@ -818,7 +935,7 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
 
     const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
 
-    let access: { canUse?: boolean; canUseResearch?: boolean };
+    let access: { canUse?: boolean; canUseResearch?: boolean; usage?: ResearchUsageState };
     try {
       access = await checkResearchAccessWithCache(api, signal);
     } catch (error) {
@@ -841,6 +958,20 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
     }
 
     if (!(access.canUseResearch ?? access.canUse)) {
+      if (access.usage?.allowed === false) {
+        const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
+        const cachedData = getCachedResearchData(cache);
+
+        if (hasRenderableResearchData(cachedData)) {
+          renderResults(container, cachedData, "24時間以内のキャッシュ");
+          writeLocalResearchCache(cachedData);
+          return;
+        }
+
+        renderResearchError(container, new Error("research_monthly_limit_exceeded"), () => runResearchFlow(container));
+        return;
+      }
+
       renderAccessLocked(container);
       return;
     }
@@ -946,7 +1077,7 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
 
     const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
 
-    let access: { canUse?: boolean; canUseResearch?: boolean };
+    let access: { canUse?: boolean; canUseResearch?: boolean; usage?: ResearchUsageState };
     try {
       access = await checkResearchAccessWithCache(api, signal);
     } catch (error) {
@@ -968,7 +1099,23 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
     }
 
     if (!(access.canUseResearch ?? access.canUse)) {
-      renderResearchError(container, new Error("plan_required"), retry, retryCount);
+      if (access.usage?.allowed === false) {
+        const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
+        const cachedData = getCachedResearchData(cache);
+
+        if (hasRenderableResearchData(cachedData)) {
+          renderResults(container, cachedData, "24時間以内のキャッシュ");
+          writeLocalResearchCache(cachedData);
+          return;
+        }
+      }
+
+      renderResearchError(
+        container,
+        new Error(access.usage?.allowed === false ? "research_monthly_limit_exceeded" : "plan_required"),
+        retry,
+        retryCount
+      );
       return;
     }
 
@@ -1218,7 +1365,14 @@ function removeResearchOverlayUi() {
   removeOpenButton();
 }
 
-function syncResearchOverlayForCurrentPage() {
+async function syncResearchOverlayForCurrentPage() {
+  if (!(await isResearchFeatureEnabled())) {
+    removeResearchOverlayUi();
+    currentResearchPageKey = null;
+    overlayInsertRetryCount = 0;
+    return;
+  }
+
   const supportStatus = getResearchPageSupportStatus();
   const pageKey = getResearchPageKey();
 
@@ -1248,7 +1402,7 @@ function scheduleResearchOverlaySync() {
 
   routeSyncTimerId = window.setTimeout(() => {
     routeSyncTimerId = null;
-    void waitForReady().then(syncResearchOverlayForCurrentPage);
+    void waitForReady().then(() => syncResearchOverlayForCurrentPage());
   }, FURIMANE_ROUTE_SYNC_DELAY_MS);
 }
 
@@ -1287,9 +1441,30 @@ function installResearchNavigationListener() {
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
 
+function installResearchSettingListener() {
+  if (typeof chrome === "undefined" || !chrome.storage?.onChanged) {
+    return;
+  }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local" || !(FURIMANE_RESEARCH_ENABLED_KEY in changes)) {
+      return;
+    }
+
+    if (changes[FURIMANE_RESEARCH_ENABLED_KEY]?.newValue === false) {
+      removeResearchOverlayUi();
+      currentResearchPageKey = null;
+      return;
+    }
+
+    scheduleResearchOverlaySync();
+  });
+}
+
 window.addEventListener("beforeunload", () => {
   currentAbortController?.abort();
 });
 
 installResearchNavigationListener();
-void waitForReady().then(syncResearchOverlayForCurrentPage);
+installResearchSettingListener();
+void waitForReady().then(() => syncResearchOverlayForCurrentPage());

@@ -390,6 +390,7 @@
   gap: 10px;
 }
 
+.furimane-research-table__usage-count,
 .furimane-research-table__bookmark-count {
   display: inline-flex;
   align-items: center;
@@ -402,6 +403,25 @@
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.furimane-research-table__usage-count {
+  border-color: rgba(124, 58, 237, 0.24);
+  background: linear-gradient(90deg, rgba(124, 58, 237, 0.08), rgba(236, 72, 153, 0.08)), #ffffff;
+  color: #4c1d95;
+  font-size: 13px;
+}
+
+.furimane-research-table__usage-count--unlimited {
+  border-color: rgba(124, 58, 237, 0.24);
+  background: linear-gradient(90deg, rgba(124, 58, 237, 0.08), rgba(236, 72, 153, 0.08)), #ffffff;
+}
+
+.furimane-research-table__usage-count--unlimited .furimane-research-table__usage-count-text {
+  background: linear-gradient(90deg, #8b5dff 0%, #f04fa8 100%);
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
 }
 
 .furimane-research-table__action-button,

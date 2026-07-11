@@ -11,6 +11,8 @@
     const METADATA_SELECT_WAIT_MS = 250;
     const SELECTION_POLL_MS = 75;
     const SAFE_CLICK_SETTLE_MS = 150;
+    const LISTING_COMPLETION_WAIT_MS = 25000;
+    const PRICE_ADJUST_COMPLETION_WAIT_MS = 25000;
     const FINAL_ACTION_AFTER_COMPLETE_WAIT_MS = 1000;
     const FINAL_ACTION_MIN_WAIT_MS = 10000;
     const FINAL_ACTION_DOM_STABLE_MS = 800;
@@ -104,6 +106,7 @@
             clearPendingPriceAdjustItem();
         })
             .catch((error) => {
+            clearPendingPriceAdjustItem();
             console.warn("[furimanager] manual price adjust failed", error);
         });
         return true;
@@ -311,6 +314,7 @@
         }
         const startedAt = Date.now();
         let hasFilledAnyField = false;
+        let latestResult = null;
         while (Date.now() - startedAt < MAX_WAIT_MS) {
             if (await handleSelectionSubPage(item)) {
                 return;
@@ -321,9 +325,10 @@
                 continue;
             }
             const result = await fillAvailableFields(item);
+            latestResult = result;
             hasFilledAnyField = result.filled || hasFilledAnyField;
             const readinessBeforeWait = getFinalActionReadiness(item);
-            const canProceedWithPartialFields = canProceedWithNonBlockingMissingFields(result, readinessBeforeWait);
+            const canProceedWithPartialFields = canProceedWithNonBlockingMissingFields(item, result, readinessBeforeWait);
             const canHandOffCopyListing = canHandOffCopyListingToUser(item, result);
             const flowStatus = getFlowStatus(result, readinessBeforeWait, canProceedWithPartialFields);
             logRelistFlow("入力状況", {
@@ -360,7 +365,7 @@
             if (result.complete || canProceedWithPartialFields) {
                 await sleep(FINAL_ACTION_AFTER_COMPLETE_WAIT_MS);
                 const readiness = getFinalActionReadiness(item);
-                const canProceedAfterWait = result.complete || canProceedWithNonBlockingMissingFields(result, readiness);
+                const canProceedAfterWait = result.complete || canProceedWithNonBlockingMissingFields(item, result, readiness);
                 if (!readiness.ready || !canProceedAfterWait) {
                     logRelistFlow("最終ボタン待ち", {
                         elapsedMs: Date.now() - startedAt,
@@ -391,14 +396,27 @@
                 }
                 return;
             }
-            if (hasFilledAnyField && Date.now() - startedAt > FINAL_ACTION_MIN_WAIT_MS && await clickVisibleFinalActionIfReady(item, { requireStableDom: false })) {
+            if (hasFilledAnyField && Date.now() - startedAt > FINAL_ACTION_MIN_WAIT_MS && (result.complete || canProceedWithPartialFields) && await clickVisibleFinalActionIfReady(item, { requireStableDom: false })) {
                 return;
             }
             await sleep(RETRY_INTERVAL_MS);
         }
         if (hasFilledAnyField) {
-            logRelistFlow("通常待機タイムアウト後の保険クリック", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
-            await clickVisibleFinalActionIfReady(item, { requireStableDom: false });
+            const readiness = getFinalActionReadiness(item, { requireStableDom: false });
+            const canClickAfterTimeout = latestResult !== null && (latestResult.complete || canProceedWithNonBlockingMissingFields(item, latestResult, readiness));
+            if (canClickAfterTimeout) {
+                logRelistFlow("通常待機タイムアウト後の保険クリック", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
+                await clickVisibleFinalActionIfReady(item, { requireStableDom: false });
+                return;
+            }
+            logRelistFlow("通常待機タイムアウト（未完了）", {
+                elapsedSec: getElapsedSec(startedAt),
+                pathname: window.location.pathname,
+                mode: item.mode,
+                reason: "blocking-fields-incomplete",
+                missingFields: latestResult?.missingFields ?? [],
+            }, { force: true });
+            showToast("未入力の必須項目があるため、出品ボタンは押しませんでした");
             return;
         }
         if (isInitialSellLandingPage()) {
@@ -443,9 +461,90 @@
             return;
         }
         sessionStorage.setItem(LISTING_SUBMIT_DONE_KEY, "true");
+        const from = window.location.pathname;
+        logRelistFlow("出品ボタン押下", { pathname: from, mode: item.mode }, { force: true });
         clickButtonLike(button);
+        const completion = await waitForListingCompletion(from);
+        logListingCompletion(completion);
         chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
-        showToast("フリマネが出品ボタンを押しました");
+        if (completion.result === "success") {
+            showToast("出品が完了しました");
+            return;
+        }
+        showToast("出品完了を確認できませんでした。画面を確認してください");
+    }
+    async function waitForListingCompletion(from) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < LISTING_COMPLETION_WAIT_MS) {
+            const current = window.location.pathname;
+            const completionMessage = findListingCompletionMessage();
+            if (completionMessage) {
+                return {
+                    result: "success",
+                    signal: "completion-message",
+                    from,
+                    to: current,
+                    message: completionMessage,
+                };
+            }
+            if (current === "/sell") {
+                return {
+                    result: "success",
+                    signal: "url-sell",
+                    from,
+                    to: current,
+                };
+            }
+            await sleep(RETRY_INTERVAL_MS);
+        }
+        const current = window.location.pathname;
+        const completionMessage = findListingCompletionMessage();
+        if (completionMessage) {
+            return {
+                result: "success",
+                signal: "completion-message",
+                from,
+                to: current,
+                message: completionMessage,
+            };
+        }
+        if (current === "/sell") {
+            return {
+                result: "success",
+                signal: "url-sell",
+                from,
+                to: current,
+            };
+        }
+        const message = findListingBlockingMessage();
+        return {
+            result: "failed",
+            signal: message ? "validation-or-blocking-message" : "no-sell-url",
+            from,
+            current,
+            message,
+        };
+    }
+    function logListingCompletion(completion) {
+        logRelistFlow("完了検知", completion, { force: true });
+    }
+    function findListingCompletionMessage() {
+        const bodyText = normalizeText(document.body?.innerText ?? "");
+        return bodyText.includes("出品が完了しました") ? "出品が完了しました" : undefined;
+    }
+    function findListingBlockingMessage() {
+        const patterns = [/選択してください/, /入力してください/, /必須項目/, /必須/, /エラー/];
+        const candidates = Array.from(document.querySelectorAll('[role="alert"], [aria-live], p, span, div'));
+        for (const candidate of candidates) {
+            if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) {
+                continue;
+            }
+            const text = normalizeText(candidate.textContent ?? "");
+            if (text && text.length <= 160 && patterns.some((pattern) => pattern.test(text))) {
+                return text;
+            }
+        }
+        return undefined;
     }
     async function waitForFinalListingSubmitButton() {
         const startedAt = Date.now();
@@ -765,9 +864,15 @@
     function getRelistFlowLogSuffix(details) {
         const parts = [
             typeof details.elapsedSec === "number" ? `${details.elapsedSec}s` : null,
+            typeof details.result === "string" ? `result=${details.result}` : null,
+            typeof details.signal === "string" ? `signal=${details.signal}` : null,
+            typeof details.from === "string" ? `from=${details.from}` : null,
+            typeof details.to === "string" ? `to=${details.to}` : null,
+            typeof details.current === "string" ? `current=${details.current}` : null,
             typeof details.step === "string" ? `step=${details.step}` : null,
             typeof details.waitingFor === "string" ? `waiting=${details.waitingFor}` : null,
             typeof details.reason === "string" ? `reason=${details.reason}` : null,
+            typeof details.message === "string" ? `message=${details.message.slice(0, 80)}` : null,
             Array.isArray(details.missingFields) && details.missingFields.length > 0 ? `missing=${details.missingFields.join(",")}` : null,
             Array.isArray(details.skippedMissingFields) && details.skippedMissingFields.length > 0 ? `skipped=${details.skippedMissingFields.join(",")}` : null,
             typeof details.activePicker === "string" && details.activePicker !== "document" ? `picker=${details.activePicker.slice(0, 80)}` : null,
@@ -775,12 +880,13 @@
         ].filter(Boolean);
         return parts.length > 0 ? ` | ${parts.join(" ")}` : "";
     }
-    function canProceedWithNonBlockingMissingFields(result, readiness) {
+    function canProceedWithNonBlockingMissingFields(item, result, readiness) {
+        const nonBlockingFields = item.mode === "relist" ? new Set(["brand"]) : NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS;
         return (!result.complete &&
             result.filled &&
             readiness.ready &&
             result.missingFields.length > 0 &&
-            result.missingFields.every((field) => NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS.has(field)));
+            result.missingFields.every((field) => nonBlockingFields.has(field)));
     }
     function canHandOffCopyListingToUser(item, result) {
         return (item.mode === "copy" &&
@@ -1223,7 +1329,7 @@
         if (sessionStorage.getItem(SIZE_DONE_KEY) === "true") {
             return true;
         }
-        const select = document.querySelector('select[name="size"], select[data-testid="size-select"], [data-testid="size-select"] select, select[name*="size"]');
+        const select = findSizeSelect();
         if (select instanceof HTMLSelectElement && setSelectValue(select, size)) {
             sessionStorage.setItem(SIZE_DONE_KEY, "true");
             return true;
@@ -1233,6 +1339,18 @@
             return true;
         }
         return false;
+    }
+    function findSizeSelect() {
+        const directSelect = document.querySelector('select[name="size"], select[data-testid="size-select"], [data-testid="size-select"] select, select[name*="size"]');
+        if (directSelect instanceof HTMLSelectElement) {
+            return directSelect;
+        }
+        const sectionSelect = findFormSection("サイズ")?.querySelector("select");
+        if (sectionSelect instanceof HTMLSelectElement) {
+            return sectionSelect;
+        }
+        return Array.from(document.querySelectorAll('select[data-testid="attribute-select"], select[placeholder*="選択"], .merSelect select'))
+            .find((select) => select instanceof HTMLSelectElement && isVisible(select) && /サイズ/.test(getNearbySearchText(select))) ?? null;
     }
     async function fillBrandField(brand) {
         if (sessionStorage.getItem(BRAND_DONE_KEY) === "true") {
@@ -2208,6 +2326,7 @@
         if (!window.location.pathname.startsWith("/sell/edit")) {
             throw new Error("edit page is not open");
         }
+        const itemId = getEditPageItemId();
         const requestedDelta = Number(message?.delta);
         // 手動の±100はdeltaを使う。既存の運用アシストはamount指定のため、従来どおり値下げとして扱う。
         const delta = Number.isFinite(requestedDelta) && requestedDelta !== 0
@@ -2233,15 +2352,133 @@
         if (!submitButton) {
             throw new Error("edit submit button not found");
         }
+        const from = window.location.pathname;
         clickButtonLike(submitButton);
+        const completion = await waitForPriceAdjustCompletion(itemId, from, nextPrice);
+        logPriceAdjustCompletion(completion);
+        if (completion.result !== "success") {
+            throw new Error(`price update was not completed: ${completion.signal}`);
+        }
         return {
             submitted: true,
+            verified: true,
+            verificationReason: completion.signal,
             currentPrice,
             nextPrice,
             amount,
             delta,
             minimumPrice,
         };
+    }
+    async function waitForPriceAdjustCompletion(itemId, from, expectedPrice) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < PRICE_ADJUST_COMPLETION_WAIT_MS) {
+            const current = window.location.pathname;
+            if (isPriceAdjustCompletedItemPage(current, itemId)) {
+                const displayedPrice = findDisplayedItemPrice();
+                if (displayedPrice === expectedPrice) {
+                    return {
+                        result: "success",
+                        signal: "item-url-price-matched",
+                        from,
+                        to: current,
+                        itemId,
+                        expectedPrice,
+                        displayedPrice,
+                    };
+                }
+            }
+            await sleep(RETRY_INTERVAL_MS);
+        }
+        const current = window.location.pathname;
+        if (isPriceAdjustCompletedItemPage(current, itemId)) {
+            const displayedPrice = findDisplayedItemPrice();
+            if (displayedPrice === expectedPrice) {
+                return {
+                    result: "success",
+                    signal: "item-url-price-matched",
+                    from,
+                    to: current,
+                    itemId,
+                    expectedPrice,
+                    displayedPrice,
+                };
+            }
+            return {
+                result: "failed",
+                signal: "price-not-updated",
+                from,
+                current,
+                itemId,
+                expectedPrice,
+                displayedPrice,
+            };
+        }
+        return {
+            result: "failed",
+            signal: current.startsWith("/sell/edit") ? "still-edit-url" : "not-item-url",
+            from,
+            current,
+            itemId,
+            expectedPrice,
+        };
+    }
+    function isPriceAdjustCompletedItemPage(pathname, itemId) {
+        const matchedItemId = pathname.match(/^\/item\/(m\d{8,})/)?.[1] ?? null;
+        return matchedItemId !== null && matchedItemId === itemId;
+    }
+    function logPriceAdjustCompletion(completion) {
+        const suffix = [
+            `result=${completion.result}`,
+            `signal=${completion.signal}`,
+            `from=${completion.from}`,
+            completion.to ? `to=${completion.to}` : null,
+            completion.current ? `current=${completion.current}` : null,
+            completion.itemId ? `itemId=${completion.itemId}` : null,
+            typeof completion.expectedPrice === "number" ? `expected=${completion.expectedPrice}` : null,
+            typeof completion.displayedPrice === "number" ? `displayed=${completion.displayedPrice}` : null,
+        ].filter(Boolean).join(" ");
+        console.info(`[furimanager:price-adjust] 完了検知 | ${suffix}`, completion);
+    }
+    function findDisplayedItemPrice() {
+        const selectors = [
+            'meta[itemprop="price"]',
+            'meta[property="product:price:amount"]',
+            'meta[property="og:price:amount"]',
+            'main [itemprop="price"]',
+            'main [data-testid*="price"]',
+            'main [data-testid*="Price"]',
+        ];
+        for (const selector of selectors) {
+            const elements = Array.from(document.querySelectorAll(selector));
+            for (const element of elements) {
+                if (!(element instanceof HTMLMetaElement) && element instanceof HTMLElement && (!isVisible(element) || normalizeText(element.textContent ?? "").length > 80)) {
+                    continue;
+                }
+                const value = element instanceof HTMLMetaElement
+                    ? element.content
+                    : `${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("content") ?? ""}`;
+                const price = parseDisplayedPrice(value);
+                if (price !== null) {
+                    return price;
+                }
+            }
+        }
+        return null;
+    }
+    function parseDisplayedPrice(value) {
+        const text = normalizeText(value);
+        const numericOnly = text.match(/^\d{2,7}$/);
+        if (numericOnly) {
+            const price = parsePriceValue(text);
+            return Number.isFinite(price) ? price : null;
+        }
+        const matched = text.match(/[¥￥]\s*([\d,]+)/) ?? text.match(/([\d,]+)\s*円/);
+        if (!matched) {
+            return null;
+        }
+        const price = parsePriceValue(matched[1]);
+        return Number.isFinite(price) ? price : null;
     }
     async function waitForPriceField() {
         const startedAt = Date.now();

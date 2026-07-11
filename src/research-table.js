@@ -447,6 +447,23 @@ function createMetaItem(label, value, accent = false) {
     item.append(labelElement, valueElement);
     return item;
 }
+function getResearchUsageLabel(usage) {
+    if (!usage) {
+        return "今月のリサーチ -- / 30";
+    }
+    if (usage.unlimited) {
+        return "無制限";
+    }
+    return `今月のリサーチ ${usage.used} / ${usage.limit}`;
+}
+function createResearchUsageCount(usage) {
+    const usageCount = createElement("span", usage?.unlimited
+        ? "furimane-research-table__usage-count furimane-research-table__usage-count--unlimited"
+        : "furimane-research-table__usage-count");
+    const usageText = createElement("span", "furimane-research-table__usage-count-text", getResearchUsageLabel(usage));
+    usageCount.appendChild(usageText);
+    return usageCount;
+}
 function getResearchTableAssetUrl(path) {
     try {
         return chrome.runtime.getURL(path);
@@ -478,6 +495,7 @@ function createResearchHero(seller, dashboard, options, bookmarkState) {
     eyebrow.append(brand);
     main.append(eyebrow, sellerName, meta);
     const actions = createElement("div", "furimane-research-table__hero-actions");
+    const usageCount = createResearchUsageCount(options.usage);
     const bookmarkCount = createElement("span", "furimane-research-table__bookmark-count", bookmarkState.loading ? "ブックマーク 読込中" : `ブックマーク ${bookmarkState.count} / ${bookmarkState.limit}`);
     const refreshButton = createElement("button", "furimane-research-table__action-button", "更新");
     refreshButton.type = "button";
@@ -522,7 +540,7 @@ function createResearchHero(seller, dashboard, options, bookmarkState) {
             window.alert(error instanceof Error ? error.message : "保存に失敗しました。");
         }
     });
-    actions.append(bookmarkCount, refreshButton, saveButton);
+    actions.append(usageCount, bookmarkCount, refreshButton, saveButton);
     wrapper.append(main, actions);
     return wrapper;
 }

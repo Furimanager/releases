@@ -378,6 +378,81 @@ body {
   white-space: nowrap;
 }
 
+.research-card__state {
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.14);
+  color: #ddd6fe;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.research-card__state--on {
+  color: #bbf7d0;
+}
+
+.research-card__state--off {
+  color: #fecdd3;
+}
+
+.research-card__description,
+.research-card__message {
+  position: relative;
+  z-index: 1;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.research-card__message {
+  margin-top: 10px;
+  color: #86efac;
+}
+
+.research-toggle-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(124, 58, 237, 0.26);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.research-toggle-row strong,
+.research-toggle-row small {
+  display: block;
+}
+
+.research-toggle-row strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.research-toggle-row small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.research-toggle-row__input {
+  width: 42px;
+  height: 24px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 .rakuraku-card__description {
   position: relative;
   z-index: 1;

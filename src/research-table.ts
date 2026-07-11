@@ -63,6 +63,15 @@ type ResearchBookmarkState = {
   loading?: boolean;
 };
 
+type ResearchUsageState = {
+  allowed?: boolean;
+  used: number;
+  limit: number;
+  remaining: number;
+  resetAt?: string;
+  unlimited?: boolean;
+};
+
 type ResearchPurchasePrice = {
   purchasePrice: number | null;
   shippingFee: number | null;
@@ -72,6 +81,7 @@ type ResearchPurchasePriceMap = Record<string, ResearchPurchasePrice>;
 
 type ResearchTableOptions = {
   sourceLabel?: string;
+  usage?: ResearchUsageState | null;
   onRefresh?: () => void | Promise<void>;
   onSaveSeller?: (seller: ResearchTableSeller) => Promise<void>;
 };
@@ -229,6 +239,30 @@ function formatResearchDate(value: string | null | undefined) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function getResearchUsageLabel(usage: ResearchUsageState | null | undefined) {
+  if (!usage) {
+    return "今月のリサーチ -- / 30";
+  }
+
+  if (usage.unlimited) {
+    return "無制限";
+  }
+
+  return `今月のリサーチ ${usage.used} / ${usage.limit}`;
+}
+
+function createResearchUsageCount(usage: ResearchUsageState | null | undefined) {
+  const usageCount = createElement(
+    "span",
+    usage?.unlimited
+      ? "furimane-research-table__usage-count furimane-research-table__usage-count--unlimited"
+      : "furimane-research-table__usage-count"
+  );
+  const usageText = createElement("span", "furimane-research-table__usage-count-text", getResearchUsageLabel(usage));
+  usageCount.appendChild(usageText);
+  return usageCount;
 }
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
@@ -790,6 +824,7 @@ function createResearchHero(
   main.append(eyebrow, sellerName, meta);
 
   const actions = createElement("div", "furimane-research-table__hero-actions");
+  const usageCount = createResearchUsageCount(options.usage);
   const bookmarkCount = createElement(
     "span",
     "furimane-research-table__bookmark-count",
@@ -843,7 +878,7 @@ function createResearchHero(
     }
   });
 
-  actions.append(bookmarkCount, refreshButton, saveButton);
+  actions.append(usageCount, bookmarkCount, refreshButton, saveButton);
   wrapper.append(main, actions);
   return wrapper;
 }

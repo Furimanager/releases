@@ -7,6 +7,7 @@ const AUTH_STORAGE_KEYS = [
 ];
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const DEFAULT_APP_URL = "https://furimanager.com";
+const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
 
 const statusText = document.getElementById("statusText");
 const statusDetails = document.getElementById("statusDetails");
@@ -24,6 +25,9 @@ const sessionPanel = document.getElementById("sessionPanel");
 const sessionText = document.getElementById("sessionText");
 const authStateText = document.getElementById("authStateText");
 const authMessage = document.getElementById("authMessage");
+const researchFeatureState = document.getElementById("researchFeatureState");
+const researchFeatureToggle = document.getElementById("researchFeatureToggle");
+const researchFeatureMessage = document.getElementById("researchFeatureMessage");
 const rakurakuTaskState = document.getElementById("rakurakuTaskState");
 const rakurakuModeText = document.getElementById("rakurakuModeText");
 const rakurakuModeBadge = document.getElementById("rakurakuModeBadge");
@@ -49,6 +53,7 @@ let currentRakurakuTask = null;
 let currentRakurakuApprovalCandidate = null;
 let rakurakuAutoPollEnabled = false;
 let currentRakurakuMode = null;
+let researchFeatureEnabled = false;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 
 function escapeHtml(value) {
@@ -285,6 +290,39 @@ function renderRakurakuMode(mode) {
   if (rakurakuModeBadge) {
     rakurakuModeBadge.textContent = currentRakurakuMode === "full_auto" ? "全自動" : "半自動";
   }
+}
+
+function renderResearchFeatureSetting() {
+  if (researchFeatureToggle) {
+    researchFeatureToggle.checked = researchFeatureEnabled;
+  }
+
+  if (researchFeatureState) {
+    researchFeatureState.textContent = researchFeatureEnabled ? "ON" : "OFF";
+    researchFeatureState.className = researchFeatureEnabled
+      ? "research-card__state research-card__state--on"
+      : "research-card__state research-card__state--off";
+  }
+
+  if (researchFeatureMessage) {
+    researchFeatureMessage.textContent = researchFeatureEnabled
+      ? "出品者ページを開くとリサーチを自動で起動します。"
+      : "出品者ページを開いてもリサーチは自動起動しません。";
+  }
+}
+
+async function loadResearchFeatureSetting() {
+  const storage = await getLocalStorage([RESEARCH_FEATURE_ENABLED_KEY]);
+  researchFeatureEnabled = storage[RESEARCH_FEATURE_ENABLED_KEY] === true;
+  renderResearchFeatureSetting();
+}
+
+async function handleResearchFeatureToggleChange() {
+  researchFeatureEnabled = researchFeatureToggle?.checked !== false;
+  renderResearchFeatureSetting();
+  await setLocalStorage({
+    [RESEARCH_FEATURE_ENABLED_KEY]: researchFeatureEnabled
+  });
 }
 
 function setRakurakuEmptyState(text) {
@@ -1309,6 +1347,7 @@ async function initializePopup() {
   }
 
   try {
+    await loadResearchFeatureSetting();
     await restoreAuthState();
     await loadRakurakuExecutionMode();
     await loadRakurakuPendingTaskPreview();
@@ -1344,6 +1383,9 @@ rakurakuTaskStartButton?.addEventListener("click", () => {
 });
 rakurakuWebOpenButton?.addEventListener("click", () => {
   handleOpenRakurakuWeb();
+});
+researchFeatureToggle?.addEventListener("change", () => {
+  void handleResearchFeatureToggleChange();
 });
 rakurakuExecutionModeSelect?.addEventListener("change", () => {
   void handleRakurakuExecutionModeChange();

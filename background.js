@@ -573,6 +573,9 @@
                 if (response?.success && (message.type !== "CLICK_FURIMANE_COPY_LISTING_BUTTON" || response.clicked === true)) {
                     return response;
                 }
+                if (message.type === "APPLY_FURIMANE_PRICE_DROP_ON_EDIT" && response?.success === false) {
+                    return response;
+                }
                 lastError = new Error(response?.message || "content script returned empty response");
             }
             catch (error) {

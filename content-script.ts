@@ -184,6 +184,10 @@
   const BROWSING_HISTORY_PATH_MARKERS = [
     "/mypage/browsing_history",
   ];
+  const ACTION_DISABLED_PATH_MARKERS = [
+    "/mypage/favorites",
+    "/mypage/follow",
+  ];
   const PURCHASE_PATH_MARKERS = [
     "/mypage/purchase",
     "/mypage/purchases",
@@ -306,6 +310,10 @@
   function detectPageKind(): MercariPageKind {
     const path = window.location.pathname;
 
+    if (isActionDisabledPage(path)) {
+      return "browsingHistory";
+    }
+
     if (isBrowsingHistoryPage(path)) {
       return "browsingHistory";
     }
@@ -333,12 +341,16 @@
     return BROWSING_HISTORY_PATH_MARKERS.some((marker) => matchesPathMarker(path, marker));
   }
 
+  function isActionDisabledPage(path: string): boolean {
+    return ACTION_DISABLED_PATH_MARKERS.some((marker) => matchesPathMarker(path, marker));
+  }
+
   function isHistoryPage(path: string): boolean {
     return HISTORY_PATH_MARKERS.some((marker) => matchesPathMarker(path, marker));
   }
 
   function isActiveListingsPage(path: string): boolean {
-    if (isBrowsingHistoryPage(path) || isHistoryPage(path) || isPurchasePage(path)) {
+    if (isActionDisabledPage(path) || isBrowsingHistoryPage(path) || isHistoryPage(path) || isPurchasePage(path)) {
       return false;
     }
 
@@ -460,29 +472,44 @@
         border-left: 4px solid #ec4899;
         border-radius: 12px;
         background: linear-gradient(135deg, rgba(236, 72, 153, 0.10), rgba(225, 29, 72, 0.06));
-        color: #be123c;
+        color: #111111;
         font-size: 13px;
         line-height: 1.45;
       }
 
       .furimanager-listing-date-panel__title {
         margin-bottom: 8px;
-        color: #be123c;
+        color: #111111;
         font-size: 12px;
         font-weight: 700;
       }
 
       .furimanager-listing-date-panel__row {
         display: grid;
-        grid-template-columns: 88px minmax(0, 1fr);
-        gap: 10px;
-        align-items: start;
+        grid-template-columns: minmax(86px, max-content) minmax(0, 1fr) max-content;
+        gap: 12px;
+        align-items: center;
         padding: 4px 0;
       }
 
       .furimanager-listing-date-panel__label {
-        color: #be123c;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: #111111;
         font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .furimanager-listing-date-panel__icon {
+        width: 16px;
+        height: 16px;
+        color: #111111;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
       }
 
       .furimanager-listing-date-panel__value {
@@ -491,16 +518,22 @@
 
       .furimanager-listing-date-panel__absolute {
         display: block;
-        color: #e11d48;
-        font-weight: 600;
+        color: #111111;
+        font-weight: 700;
+        white-space: nowrap;
       }
 
       .furimanager-listing-date-panel__relative {
-        display: block;
-        margin-top: 2px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 8px;
+        border-radius: 8px;
+        background: rgba(236, 72, 153, 0.12);
         color: #ec4899;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 700;
+        white-space: nowrap;
       }
 
       .furimanager-listing-seller-panel {
@@ -813,7 +846,8 @@
         }
 
         .furimanager-listing-date-panel__row {
-          grid-template-columns: 76px minmax(0, 1fr);
+          grid-template-columns: minmax(76px, max-content) minmax(0, 1fr) max-content;
+          gap: 8px;
         }
 
         .furimanager-listing-seller-panel {
@@ -902,6 +936,13 @@
     }
 
     const buttonDefinitions = getButtonDefinitions(pageKind);
+
+    if (buttonDefinitions.length === 0) {
+      removeAllActionToolbars();
+      clearScheduledInjections();
+      return;
+    }
+
     const targets = getInjectionTargets(pageKind);
 
     if (targets.length === 0) {
@@ -2379,7 +2420,7 @@
 
     const label = document.createElement("div");
     label.className = "furimanager-listing-date-panel__label";
-    label.textContent = labelText;
+    label.append(createListingDateIcon(labelText), document.createTextNode(labelText));
 
     const value = document.createElement("div");
     value.className = "furimanager-listing-date-panel__value";
@@ -2392,14 +2433,39 @@
     relative.className = "furimanager-listing-date-panel__relative";
     relative.textContent = formatRelativeDate(date);
 
-    value.append(absolute, relative);
-    row.append(label, value);
+    value.append(absolute);
+    row.append(label, value, relative);
     return row;
+  }
+
+  function createListingDateIcon(labelText: string): SVGSVGElement {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("furimanager-listing-date-panel__icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+
+    const paths = labelText === "更新日時"
+      ? [
+          "M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7",
+          "M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"
+        ]
+      : [
+          "M12 6v6l4 2",
+          "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"
+        ];
+
+    for (const pathData of paths) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", pathData);
+      svg.appendChild(path);
+    }
+
+    return svg;
   }
 
   function getButtonDefinitions(pageKind: Exclude<MercariPageKind, "unknown" | "browsingHistory">): ActionButtonDefinition[] {
     if (pageKind === "history") {
-      return RELIST_ONLY_BUTTONS;
+      return [];
     }
 
     if (pageKind === "ownProduct" && isSoldProductPage()) {
@@ -2774,13 +2840,17 @@
   }
 
   function removeAllToolbars(): void {
-    safeQuerySelectorAll(document, `[${TOOLBAR_ATTRIBUTE}="true"]`).forEach((toolbar) => {
-      toolbar.remove();
-    });
+    removeAllActionToolbars();
     safeQuerySelectorAll(document, `[${LISTING_DATE_PANEL_ATTRIBUTE}="true"]`).forEach((panel) => {
       panel.remove();
     });
     removeAllListingSellerPanels();
+  }
+
+  function removeAllActionToolbars(): void {
+    safeQuerySelectorAll(document, `[${TOOLBAR_ATTRIBUTE}="true"]`).forEach((toolbar) => {
+      toolbar.remove();
+    });
   }
 
   function removeAllListingSellerPanels(): void {
