@@ -12,8 +12,6 @@ const FURIMANE_PAGE_FETCH_CANCEL_TYPE = "FURIMANE_RESEARCH_PAGE_API_WATCH_CANCEL
 const FURIMANE_PAGE_FETCH_TIMEOUT_MS = 30000;
 const FURIMANE_DOM_FETCH_LOG_PREFIX = "[furimane-research][dom-fetch]";
 const FURIMANE_PRICE_TEXT_PATTERN = /(?:[\u00a5\uffe5]\s*([\d,]+)|([\d,]+)\s*\u5186)/;
-const FURIMANE_PRICE_TEXT_TAIL_PATTERN = /(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186).*$/;
-const FURIMANE_PRICE_TEXT_PREFIX_PATTERN = /^(?:SOLD\s*)?(?:[\u00a5\uffe5]\s*[\d,]+|[\d,]+\s*\u5186)\s*/i;
 const FURIMANE_API_AUTO_MORE_MAX_CLICKS = 5;
 const FURIMANE_API_AUTO_MORE_PROGRESS_TIMEOUT_MS = 8000;
 const FURIMANE_API_AUTO_MORE_POLL_MS = 200;
@@ -162,25 +160,17 @@ function emitFurimaneApiProgressFromPagePayload(seller, options, data) {
     return progressCount;
   }
 
-  const rawListings = apiPayload.data.filter(isFurimaneResearchObject);
-  const listings = normalizeFurimaneFetchedListings(
-    mapFurimaneApiListingsToResearchListings(rawListings, seller.platform),
-    seller.platform
-  );
-  const totalCount = typeof data.totalCount === "number" ? data.totalCount : listings.length;
+  const rawCount = apiPayload.data.length;
+  const totalCount = typeof data.totalCount === "number" ? data.totalCount : rawCount;
 
-  logFurimaneApiPeriodAnalysis(listings, data.partial ? "page_api_progress" : "page_api_done");
-  logFurimaneApiPeriodDiagnostics(rawListings, listings);
-
-  options.onProgress?.(listings.length, {
-    listings,
+  options.onProgress?.(rawCount, {
     totalCount,
     pageLikeIndex: data.pageLikeIndex ?? null,
     partial: Boolean(data.partial),
     phase: data.partial ? "api_progress" : "api_done"
   });
 
-  return listings.length;
+  return rawCount;
 }
 
 function isSameFurimanePageApiSeller(seller, data) {
@@ -451,61 +441,6 @@ function getFurimaneResearchText(element) {
   return element?.textContent?.replace(/\s+/g, " ").trim() ?? "";
 }
 
-function parseFurimaneResearchPrice(text) {
-  const match = text.match(FURIMANE_PRICE_TEXT_PATTERN);
-
-  if (!match) {
-    return null;
-  }
-
-  const amount = match[1] ?? match[2];
-  const price = Number(amount.replace(/,/g, ""));
-  return Number.isFinite(price) ? price : null;
-}
-
-function parseFurimaneResearchSoldAt(text) {
-  const today = new Date();
-  const fullDateMatch = text.match(/(20\d{2})[./-](\d{1,2})[./-](\d{1,2})/);
-
-  if (fullDateMatch) {
-    const [, year, month, day] = fullDateMatch;
-    return new Date(Number(year), Number(month) - 1, Number(day)).toISOString();
-  }
-
-  const shortDateMatch = text.match(/(?:^|\D)(\d{1,2})[./-](\d{1,2})(?:\D|$)/);
-
-  if (shortDateMatch) {
-    const [, month, day] = shortDateMatch;
-    const parsed = new Date(today.getFullYear(), Number(month) - 1, Number(day));
-
-    if (parsed.getTime() > today.getTime() + 24 * 60 * 60 * 1000) {
-      parsed.setFullYear(parsed.getFullYear() - 1);
-    }
-
-    return parsed.toISOString();
-  }
-
-  const daysAgoMatch = text.match(/(\d+)\s*\u65e5\u524d/);
-
-  if (daysAgoMatch) {
-    const parsed = new Date(today);
-    parsed.setDate(parsed.getDate() - Number(daysAgoMatch[1]));
-    return parsed.toISOString();
-  }
-
-  if (text.includes("\u6628\u65e5")) {
-    const parsed = new Date(today);
-    parsed.setDate(parsed.getDate() - 1);
-    return parsed.toISOString();
-  }
-
-  if (text.includes("\u4eca\u65e5") || text.includes("\u6642\u9593\u524d") || text.includes("\u5206\u524d")) {
-    return today.toISOString();
-  }
-
-  return null;
-}
-
 function getFurimaneResearchItemIdFromUrl(url) {
   const itemMatch = url.match(/\/item\/([^/?#]+)/);
   const shopProductMatch = url.match(/\/shops\/product\/([^/?#]+)/);
@@ -537,7 +472,7 @@ function getUniqueFurimaneResearchElements(elements) {
   });
 }
 
-function getFurimaneResearchListingContainer(link) {
+function getFurimaneResearchListingContainer(link, pricePattern = FURIMANE_PRICE_TEXT_PATTERN) {
   const candidates = getUniqueFurimaneResearchElements([
     link,
     link.closest("li"),
@@ -551,7 +486,7 @@ function getFurimaneResearchListingContainer(link) {
     ...getFurimaneResearchAncestorCandidates(link)
   ]);
 
-  return candidates.find((candidate) => parseFurimaneResearchPrice(getFurimaneResearchText(candidate)) !== null) ?? candidates[0] ?? link;
+  return candidates.find((candidate) => pricePattern.test(getFurimaneResearchText(candidate))) ?? candidates[0] ?? link;
 }
 
 function getUniqueFurimaneResearchTextValues(values) {
@@ -584,38 +519,6 @@ function getFurimaneResearchListingText(link, container) {
   ]).join(" ");
 }
 
-function getFurimaneResearchTitle(link, container, listingText) {
-  const imageAlt = link.querySelector("img")?.getAttribute("alt")?.trim();
-  const normalizedImageAlt = imageAlt?.replace(/^Image:\s*/i, "").trim();
-
-  if (normalizedImageAlt && normalizedImageAlt !== "縺ｮ繧ｵ繝繝阪う繝ｫ") {
-    return normalizedImageAlt.replace(FURIMANE_PRICE_TEXT_TAIL_PATTERN, "").trim();
-  }
-
-  const ariaLabel = link.getAttribute("aria-label")?.trim();
-
-  if (ariaLabel) {
-    return ariaLabel.replace(FURIMANE_PRICE_TEXT_TAIL_PATTERN, "").trim();
-  }
-
-  const text = listingText || getFurimaneResearchText(container);
-  const candidates = [
-    text.replace(FURIMANE_PRICE_TEXT_PREFIX_PATTERN, "").trim(),
-    text.replace(FURIMANE_PRICE_TEXT_TAIL_PATTERN, "").trim()
-  ];
-
-  const lines = text
-    .split(/\s{2,}|\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  return [...candidates, ...lines].find((line) => {
-    const normalized = line.replace(/^Image:\s*/i, "").replace(FURIMANE_PRICE_TEXT_PREFIX_PATTERN, "").trim();
-
-    return normalized && !/^(SOLD|[¥￥]?\s*[\d,]+|[\d,]+\s*円|雋ｩ螢ｲ荳ｭ|譁ｰ逹鬆・縺吶∋縺ｦ縺ｮ蝠・・ｽ・ｽ)$/i.test(normalized);
-  }) ?? "";
-}
-
 function getFurimaneResearchListingLinkSelector(platform) {
   return platform === "mercari_shops"
     ? 'a[href*="/shops/product/"]'
@@ -624,14 +527,6 @@ function getFurimaneResearchListingLinkSelector(platform) {
 
 function getFurimaneResearchListingLinks(platform) {
   return Array.from(document.querySelectorAll(getFurimaneResearchListingLinkSelector(platform)));
-}
-
-function getFurimaneResearchListingStatus(text, platform) {
-  if (/sold/i.test(text) || text.includes("\u58f2\u308a\u5207\u308c") || text.includes("\u58f2\u5374\u6e08\u307f")) {
-    return "sold";
-  }
-
-  return "active";
 }
 
 function getFurimaneResearchThumbnailUrl(link) {
@@ -676,11 +571,15 @@ function logFurimaneDomCollectDiagnostics(step, diagnostics) {
   console.log(`${FURIMANE_DOM_FETCH_LOG_PREFIX} ${step}`, diagnostics);
 }
 
-function collectFurimaneResearchListings(platform, diagnostics) {
-  const links = getFurimaneResearchListingLinks(platform);
-  const listings = new Map();
+function collectFurimaneResearchDomCandidates(platform, siteConfig, diagnostics) {
+  const selector = siteConfig?.config?.listingLinkSelectors?.[platform] ?? getFurimaneResearchListingLinkSelector(platform);
+  const pricePattern = new RegExp(siteConfig?.config?.pricePattern ?? FURIMANE_PRICE_TEXT_PATTERN.source);
+  const maxTextLength = Number(siteConfig?.config?.domTextMaxLength ?? 500);
+  const links = Array.from(document.querySelectorAll(selector));
+  const candidates = new Map();
 
   if (diagnostics) {
+    diagnostics.linkSelector = selector;
     diagnostics.linkCount = links.length;
     diagnostics.firstLinkHref = links[0]?.href ?? null;
   }
@@ -696,14 +595,12 @@ function collectFurimaneResearchListings(platform, diagnostics) {
       continue;
     }
 
-    if (listings.has(itemId)) {
+    if (candidates.has(itemUrl)) {
       continue;
     }
 
-    const container = getFurimaneResearchListingContainer(link);
-    const text = getFurimaneResearchListingText(link, container);
-    const price = parseFurimaneResearchPrice(text);
-    const title = getFurimaneResearchTitle(link, container, text);
+    const container = getFurimaneResearchListingContainer(link, pricePattern);
+    const text = getFurimaneResearchListingText(link, container).slice(0, maxTextLength);
 
     if (diagnostics && !diagnostics.firstContainerTag) {
       diagnostics.firstContainerTag = container.tagName?.toLowerCase() ?? null;
@@ -711,15 +608,10 @@ function collectFurimaneResearchListings(platform, diagnostics) {
       diagnostics.firstContainerTextSample = text.slice(0, 120);
     }
 
-    if (price === null && diagnostics) {
-      diagnostics.skippedMissingPrice += 1;
-    }
-
-    if (!title && diagnostics) {
-      diagnostics.skippedMissingTitle += 1;
-    }
-
-    if (!title || price === null) {
+    if (!pricePattern.test(text)) {
+      if (diagnostics) {
+        diagnostics.skippedMissingPrice += 1;
+      }
       continue;
     }
 
@@ -727,24 +619,16 @@ function collectFurimaneResearchListings(platform, diagnostics) {
       diagnostics.acceptedCount += 1;
     }
 
-    const soldAt = parseFurimaneResearchSoldAt(text);
-
-    listings.set(itemId, {
-      item_id: itemId,
-      title,
-      price,
-      sold_at: soldAt,
-      period_date: soldAt,
-      period_date_source: soldAt ? "sold_at" : null,
-      period_date_estimated: false,
-      thumbnail_url: getFurimaneResearchThumbnailUrl(link),
+    candidates.set(itemUrl, {
       item_url: itemUrl,
-      status: getFurimaneResearchListingStatus(text, platform),
-      platform: platform ?? "mercari"
+      text,
+      image_alt: link.querySelector("img")?.getAttribute("alt") ?? null,
+      aria_label: link.getAttribute("aria-label"),
+      thumbnail_url: getFurimaneResearchThumbnailUrl(link)
     });
   }
 
-  return Array.from(listings.values());
+  return Array.from(candidates.values());
 }
 
 async function clickFurimaneResearchSoldTab(platform, signal) {
@@ -1049,6 +933,26 @@ function isFurimaneDirectFetchFailure(error) {
   return error instanceof Error && ["direct_fetch_empty", "direct_fetch_error", "direct_fetch_missing_snapshot"].includes(error.message);
 }
 
+function isFurimaneServerAnalyzeFailure(error) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (error.name === "ResearchApiError") {
+    return true;
+  }
+
+  return [
+    "auth_required",
+    "plan_required",
+    "research_monthly_limit_exceeded",
+    "analyze_mapping_empty",
+    "api_timeout",
+    "network_error",
+    "research_api_missing"
+  ].includes(error.message);
+}
+
 function runFurimaneApiAssistAfterWatchSafe(seller, signal) {
   runFurimaneApiAssistAfterWatch(seller, signal).catch((error) => {
     if (error instanceof DOMException && error.name === "AbortError") {
@@ -1059,28 +963,6 @@ function runFurimaneApiAssistAfterWatchSafe(seller, signal) {
       reason: error instanceof Error ? error.message : String(error)
     });
   });
-}
-
-function filterFurimaneResearchListingsWithinThreeMonths(listings) {
-  const cutoff = Date.now() - FURIMANE_THREE_MONTHS_MS;
-
-  return listings.filter((listing) => {
-    const periodTime = getFurimaneListingPeriodDateMs(listing);
-
-    if (periodTime === null) {
-      return true;
-    }
-
-    return periodTime >= cutoff;
-  });
-}
-
-function normalizeFurimaneFetchedListings(listings, platform) {
-  return filterFurimaneResearchListingsWithinThreeMonths(listings)
-    .map((listing) => ({
-      ...listing,
-      platform: listing.platform ?? platform
-    }));
 }
 
 function isFurimaneResearchObject(value) {
@@ -1304,41 +1186,6 @@ function logFurimaneApiPagerDiagnostic(payload, rawListings) {
   hasLoggedFurimaneApiPagerDiagnostic = true;
 }
 
-function getFurimaneApiThumbnailUrl(rawListing) {
-  const listing = getFurimaneApiListingSource(rawListing);
-  const thumbnails = getFurimaneResearchArrayValue(listing.thumbnails, listing.photos, listing.images);
-
-  for (const thumbnail of thumbnails) {
-    const url = typeof thumbnail === "string"
-      ? getFurimaneResearchHttpUrlValue(thumbnail)
-      : isFurimaneResearchObject(thumbnail)
-        ? getFurimaneResearchHttpUrlValue(
-            thumbnail.url,
-            thumbnail.src,
-            thumbnail.thumbnail_url,
-            thumbnail.thumbnailUrl
-          )
-        : null;
-
-    if (url) {
-      return url;
-    }
-  }
-
-  return getFurimaneResearchHttpUrlValue(
-    listing.thumbnail_url,
-    listing.thumbnailUrl,
-    listing.image_url,
-    listing.imageUrl,
-    listing.photo_url,
-    listing.photoUrl
-  );
-}
-
-function getFurimaneApiItemUrl(itemId) {
-  return itemId ? `https://jp.mercari.com/item/${encodeURIComponent(itemId)}` : null;
-}
-
 function logFurimaneApiFetch(_level, step, payload = {}) {
   const isDebugLogEnabled = localStorage.getItem("furimane-research-debug") === "true";
   const isVerboseLogEnabled = localStorage.getItem("furimane-research-verbose") === "true";
@@ -1354,445 +1201,23 @@ function logFurimaneApiFetch(_level, step, payload = {}) {
   console.log(`${FURIMANE_API_FETCH_LOG_PREFIX} ${step}`, payload);
 }
 
-function getFurimaneListingPeriodDateMs(listing) {
-  const value = listing.period_date || listing.sold_at;
-
-  if (!value) {
-    return null;
-  }
-
-  const timeMs = new Date(value).getTime();
-  return Number.isFinite(timeMs) ? timeMs : null;
-}
-
-function getFurimaneListingPeriodKeyForLog(listing) {
-  const timeMs = getFurimaneListingPeriodDateMs(listing);
-
-  if (timeMs === null) {
-    return null;
-  }
-
-  const daysAgo = Math.floor((Date.now() - timeMs) / (24 * 60 * 60 * 1000));
-
-  if (daysAgo < 0 || daysAgo > 90) {
-    return null;
-  }
-
-  if (daysAgo <= 30) {
-    return "period_0_30_count";
-  }
-
-  if (daysAgo <= 60) {
-    return "period_31_60_count";
-  }
-
-  return "period_61_90_count";
-}
-
-function getFurimanePeriodAnalysisLogPayload(listings, stopReason) {
-  const sourceCounts = {};
-  let oldestTimeMs = null;
-  let period030Count = 0;
-  let period3160Count = 0;
-  let period6190Count = 0;
-  let outOfRangeCount = 0;
-
-  for (const listing of listings) {
-    const timeMs = getFurimaneListingPeriodDateMs(listing);
-
-    if (timeMs === null) {
-      continue;
-    }
-
-    const source = listing.period_date_source || (listing.sold_at ? "sold_at" : "unknown");
-    sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
-    oldestTimeMs = oldestTimeMs === null ? timeMs : Math.min(oldestTimeMs, timeMs);
-
-    const periodKey = getFurimaneListingPeriodKeyForLog(listing);
-
-    if (periodKey === "period_0_30_count") {
-      period030Count += 1;
-    } else if (periodKey === "period_31_60_count") {
-      period3160Count += 1;
-    } else if (periodKey === "period_61_90_count") {
-      period6190Count += 1;
-    } else {
-      outOfRangeCount += 1;
-    }
-  }
-
-  const sourceEntries = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]);
-  const oldestItemDaysAgo = oldestTimeMs === null
-    ? null
-    : Math.floor((Date.now() - oldestTimeMs) / (24 * 60 * 60 * 1000));
-
-  return {
-    period_source_field: sourceEntries.length === 0 ? "unavailable" : sourceEntries.length === 1 ? sourceEntries[0][0] : "mixed",
-    sourceCounts,
-    oldest_item_days_ago: oldestItemDaysAgo,
-    reached_90_days: oldestItemDaysAgo !== null && oldestItemDaysAgo >= 90,
-    stop_reason: stopReason,
-    totalFetched: listings.length,
-    period_0_30_count: period030Count,
-    period_31_60_count: period3160Count,
-    period_61_90_count: period6190Count,
-    out_of_range_count: outOfRangeCount
-  };
-}
-
-function logFurimaneApiPeriodAnalysis(listings, stopReason) {
-  logFurimaneApiFetch("info", "period_analysis", getFurimanePeriodAnalysisLogPayload(listings, stopReason));
-}
-
-function getFurimaneTimeMsFromDateValue(value) {
-  if (value instanceof Date && Number.isFinite(value.getTime())) {
-    return value.getTime();
-  }
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value > 100000000000 ? value : value * 1000;
-  }
-
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const timeMs = new Date(value).getTime();
-  return Number.isFinite(timeMs) ? timeMs : null;
-}
-
-function getFurimanePeriodKeyFromDateValue(value) {
-  const timeMs = getFurimaneTimeMsFromDateValue(value);
-
-  if (timeMs === null) {
-    return null;
-  }
-
-  const daysAgo = Math.floor((Date.now() - timeMs) / (24 * 60 * 60 * 1000));
-
-  if (daysAgo < 0 || daysAgo > 90) {
-    return "out_of_range";
-  }
-
-  if (daysAgo <= 30) {
-    return "period_0_30";
-  }
-
-  if (daysAgo <= 60) {
-    return "period_31_60";
-  }
-
-  return "period_61_90";
-}
-
-function getFurimaneDaysAgoFromDateValue(value) {
-  const timeMs = getFurimaneTimeMsFromDateValue(value);
-  return timeMs === null ? null : Math.floor((Date.now() - timeMs) / (24 * 60 * 60 * 1000));
-}
-
-function createFurimanePeriodRevenueSummary() {
-  return {
-    period_0_30: { count: 0, revenue: 0 },
-    period_31_60: { count: 0, revenue: 0 },
-    period_61_90: { count: 0, revenue: 0 },
-    out_of_range: { count: 0, revenue: 0 },
-    missing: { count: 0, revenue: 0 }
-  };
-}
-
-function addFurimanePeriodRevenue(summary, periodKey, price) {
-  const bucket = periodKey === "period_0_30" || periodKey === "period_31_60" || periodKey === "period_61_90" || periodKey === "out_of_range"
-    ? periodKey
-    : "missing";
-  const revenue = Number.isFinite(price) ? Number(price) : 0;
-
-  summary[bucket].count += 1;
-  summary[bucket].revenue += revenue;
-}
-
-function getFurimaneRawApiItemPrice(rawListing) {
-  const listing = getFurimaneApiListingSource(rawListing);
-  return getFurimaneResearchNumberValue(listing.price, listing.amount, listing.sold_price, listing.soldPrice);
-}
-
-function getFurimaneRawApiItemTitle(rawListing) {
-  const listing = getFurimaneApiListingSource(rawListing);
-  return getFurimaneResearchStringValue(listing.name, listing.title, listing.item_name, listing.itemName);
-}
-
-function getFurimaneRawApiItemId(rawListing) {
-  const listing = getFurimaneApiListingSource(rawListing);
-  return getFurimaneResearchStringValue(listing.id, listing.item_id, listing.itemId);
-}
-
-function getFurimaneRawApiDateValue(rawListing, keys) {
-  const listing = getFurimaneApiListingSource(rawListing);
-
-  for (const key of keys) {
-    if (listing[key] !== undefined && listing[key] !== null) {
-      return listing[key];
-    }
-  }
-
-  return null;
-}
-
-function getFurimaneRawApiStatus(rawListing) {
-  const listing = getFurimaneApiListingSource(rawListing);
-  return getFurimaneResearchStringValue(listing.status, listing.item_status, listing.itemStatus);
-}
-
-function summarizeFurimaneRawApiItemsByDateField(rawListings, keys) {
-  const summary = createFurimanePeriodRevenueSummary();
-
-  for (const rawListing of rawListings) {
-    const price = getFurimaneRawApiItemPrice(rawListing);
-    const dateValue = getFurimaneRawApiDateValue(rawListing, keys);
-    addFurimanePeriodRevenue(summary, getFurimanePeriodKeyFromDateValue(dateValue), price);
-  }
-
-  return summary;
-}
-
-function summarizeFurimaneMappedItemsByCurrentPeriod(listings) {
-  const summary = createFurimanePeriodRevenueSummary();
-
-  for (const listing of listings) {
-    addFurimanePeriodRevenue(summary, getFurimaneCurrentPeriodBucketForListing(listing), listing.price);
-  }
-
-  return summary;
-}
-
-function getFurimaneCurrentPeriodBucketForListing(listing) {
-  const logKey = getFurimaneListingPeriodKeyForLog(listing);
-
-  if (logKey === "period_0_30_count") {
-    return "period_0_30";
-  }
-
-  if (logKey === "period_31_60_count") {
-    return "period_31_60";
-  }
-
-  if (logKey === "period_61_90_count") {
-    return "period_61_90";
-  }
-
-  return getFurimaneListingPeriodDateMs(listing) === null ? null : "out_of_range";
-}
-
-function normalizeFurimaneApiStatusForSummary(status) {
-  return (status || "unknown").trim().toLowerCase() || "unknown";
-}
-
-function summarizeFurimaneMappedItemsByStatus(listings) {
-  const summaryByStatus = {};
-
-  for (const listing of listings) {
-    const status = normalizeFurimaneApiStatusForSummary(listing.status);
-
-    if (!summaryByStatus[status]) {
-      summaryByStatus[status] = {
-        total: { count: 0, revenue: 0 },
-        periods: createFurimanePeriodRevenueSummary()
-      };
-    }
-
-    const revenue = Number.isFinite(listing.price) ? Number(listing.price) : 0;
-    summaryByStatus[status].total.count += 1;
-    summaryByStatus[status].total.revenue += revenue;
-    addFurimanePeriodRevenue(summaryByStatus[status].periods, getFurimaneCurrentPeriodBucketForListing(listing), listing.price);
-  }
-
-  return summaryByStatus;
-}
-
-function logFurimaneApiPeriodDiagnostics(rawListings, listings) {
-  const isDebugLogEnabled = localStorage.getItem("furimane-research-debug") === "true";
-
-  if (!isDebugLogEnabled) {
-    return;
-  }
-
-  const mappedByItemId = new Map(listings.map((listing) => [listing.item_id, listing]));
-  const sample = rawListings.slice(0, 20).map((rawListing) => {
-    const itemId = getFurimaneRawApiItemId(rawListing);
-    const mapped = itemId ? mappedByItemId.get(itemId) : null;
-
-    return {
-      item_id: itemId,
-      title: getFurimaneRawApiItemTitle(rawListing),
-      price: getFurimaneRawApiItemPrice(rawListing),
-      status: getFurimaneRawApiStatus(rawListing),
-      created: getFurimaneRawApiDateValue(rawListing, ["created", "created_at", "createdAt"]),
-      created_type: typeof getFurimaneRawApiDateValue(rawListing, ["created", "created_at", "createdAt"]),
-      updated: getFurimaneRawApiDateValue(rawListing, ["updated", "updated_at", "updatedAt"]),
-      updated_type: typeof getFurimaneRawApiDateValue(rawListing, ["updated", "updated_at", "updatedAt"]),
-      has_sold_at: getFurimaneRawApiDateValue(rawListing, ["sold_at", "soldAt"]) !== null,
-      has_purchased_at: getFurimaneRawApiDateValue(rawListing, ["purchased_at", "purchasedAt"]) !== null,
-      period_date: mapped?.period_date ?? null,
-      period_source_field: mapped?.period_date_source ?? null,
-      daysAgo: mapped ? getFurimaneDaysAgoFromDateValue(mapped.period_date || mapped.sold_at) : null,
-      assignedPeriod: mapped ? getFurimaneListingPeriodKeyForLog(mapped) : null
-    };
-  });
-
-  logFurimaneApiFetch("info", "period_item_diagnostics", {
-    sampleLimit: 20,
-    totalRawItems: rawListings.length,
-    sample
-  });
-
-  logFurimaneApiFetch("info", "period_basis_compare_summary", {
-    current_period_date: summarizeFurimaneMappedItemsByCurrentPeriod(listings),
-    created: summarizeFurimaneRawApiItemsByDateField(rawListings, ["created", "created_at", "createdAt"]),
-    updated: summarizeFurimaneRawApiItemsByDateField(rawListings, ["updated", "updated_at", "updatedAt"]),
-    sold_at: summarizeFurimaneRawApiItemsByDateField(rawListings, ["sold_at", "soldAt"]),
-    purchased_at: summarizeFurimaneRawApiItemsByDateField(rawListings, ["purchased_at", "purchasedAt"])
-  });
-
-  logFurimaneApiFetch("info", "period_status_compare_summary", {
-    current_period_date: summarizeFurimaneMappedItemsByStatus(listings)
-  });
-}
-
-function getFurimaneApiListingStatus(rawListing, soldAt) {
-  const listing = getFurimaneApiListingSource(rawListing);
-  const status = getFurimaneResearchStringValue(
-    listing.status,
-    listing.item_status,
-    listing.itemStatus
-  );
-
-  if (status) {
-    return status;
-  }
-
-  const requestStatus = getFurimaneResearchStringValue(listing.__furimane_request_status);
-
-  if (requestStatus) {
-    const normalizedRequestStatus = requestStatus.toLowerCase();
-
-    if (normalizedRequestStatus.includes("sold_out")) {
-      return "sold_out";
-    }
-
-    if (normalizedRequestStatus.includes("trading")) {
-      return "trading";
-    }
-
-    if (normalizedRequestStatus.includes("sold") || normalizedRequestStatus.includes("complete")) {
-      return "sold";
-    }
-  }
-
-  return soldAt ? "sold" : "active";
-}
-
-function mapFurimaneApiListingToResearchListing(rawListing, platform) {
-  if (!isFurimaneResearchObject(rawListing)) {
-    return null;
-  }
-
-  const listing = getFurimaneApiListingSource(rawListing);
-
-  const itemId = getFurimaneResearchStringValue(
-    listing.id,
-    listing.item_id,
-    listing.itemId,
-    getFurimaneResearchItemIdFromUrl(
-      getFurimaneResearchHttpUrlValue(
-        listing.item_url,
-        listing.itemUrl,
-        listing.url,
-        listing.webUrl
-      ) ?? ""
-    )
-  );
-  const title = getFurimaneResearchStringValue(
-    listing.name,
-    listing.title,
-    listing.item_name,
-    listing.itemName
-  );
-  const price = getFurimaneResearchNumberValue(
-    listing.price,
-    listing.amount,
-    listing.sold_price,
-    listing.soldPrice
-  );
-
-  if (!itemId || !title || price === null) {
-    return null;
-  }
-
-  const seller = isFurimaneResearchObject(listing.seller) ? listing.seller : null;
-  const soldAt = getFurimaneResearchIsoDateValue(
-    listing.sold_at,
-    listing.soldAt,
-    listing.purchased_at,
-    listing.purchasedAt
-  );
-  const periodDate = getFurimaneApiPeriodDateCandidate(rawListing);
-  const itemUrl = getFurimaneResearchHttpUrlValue(
-    listing.item_url,
-    listing.itemUrl,
-    listing.url,
-    listing.webUrl,
-    getFurimaneApiItemUrl(itemId)
-  );
-
-  return {
-    item_id: itemId,
-    title,
-    price,
-    sold_at: soldAt,
-    period_date: periodDate?.isoValue ?? soldAt,
-    period_date_source: periodDate?.source ?? (soldAt ? "sold_at" : null),
-    period_date_estimated: periodDate?.isEstimated ?? false,
-    thumbnail_url: getFurimaneApiThumbnailUrl(rawListing),
-    item_url: itemUrl,
-    seller_id: getFurimaneResearchStringValue(listing.seller_id, listing.sellerId, seller?.id),
-    seller_name: getFurimaneResearchStringValue(listing.seller_name, listing.sellerName, seller?.name),
-    status: getFurimaneApiListingStatus(rawListing, soldAt),
-    platform
-  };
-}
-
-function mapFurimaneApiListingsToResearchListings(rawListings, platform) {
-  if (!Array.isArray(rawListings)) {
-    return [];
-  }
-
-  const listings = [];
-  const itemIds = new Set();
-
-  for (const rawListing of rawListings) {
-    const mappedListing = mapFurimaneApiListingToResearchListing(rawListing, platform);
-
-    if (!mappedListing || itemIds.has(mappedListing.item_id)) {
-      continue;
-    }
-
-    itemIds.add(mappedListing.item_id);
-    listings.push(mappedListing);
-  }
-
-  return listings;
-}
-
 async function fetchFurimaneSellerListingsByDom(options = {}) {
   const seller = getFurimaneSellerContextFromCurrentPage();
+  const api = window.FurimanagerResearchApi;
 
   if (!seller) {
     throw new Error("seller_id_not_found");
   }
 
+  if (!api?.getSiteConfig || !api?.analyzeResearchData || !api?.buildDomItemForAnalyze) {
+    throw new Error("research_api_missing");
+  }
+
+  const siteConfig = await api.getSiteConfig(seller.platform, { signal: options.signal });
   await clickFurimaneResearchSoldTab(seller.platform, options.signal);
 
   const initialDiagnostics = createFurimaneDomCollectDiagnostics(seller.platform);
-  let listings = collectFurimaneResearchListings(seller.platform, initialDiagnostics);
+  let candidates = collectFurimaneResearchDomCandidates(seller.platform, siteConfig, initialDiagnostics);
   const initialItemLinkCount = initialDiagnostics.linkCount;
   let stableCount = 0;
 
@@ -1800,30 +1225,100 @@ async function fetchFurimaneSellerListingsByDom(options = {}) {
     logFurimaneDomCollectDiagnostics("no_item_links_found", initialDiagnostics);
   }
 
-  if (initialItemLinkCount > 0 && listings.length === 0) {
+  if (initialItemLinkCount > 0 && candidates.length === 0) {
     logFurimaneDomCollectDiagnostics("mercari_dom_changed", initialDiagnostics);
     throw new Error("mercari_dom_changed");
   }
 
-  options.onProgress?.(listings.length);
+  options.onProgress?.(candidates.length);
 
   for (let attempt = 0; attempt < FURIMANE_MAX_SCROLL_ATTEMPTS; attempt += 1) {
     throwIfFurimaneResearchAborted(options.signal);
 
-    const beforeCount = listings.length;
-    // 隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ縺ｫ繝夲ｿｽE繧ｸ菴咲ｽｮ繧貞･ｪ繧上↑縺・・ｽ・ｽ繧√∵僑蠑ｵ蛛ｴ縺九ｉ閾ｪ蜍輔せ繧ｯ繝ｭ繝ｼ繝ｫ縺励↑縺・・ｽ・ｽE    // 縺薙％縺ｧ縺ｯ迴ｾ蝨ｨDOM縺ｫ謠冗判貂医∩縺ｮ蝠・・ｽ・ｽ縺縺代ｒ螳会ｿｽE縺ｫ蜀榊庶髮・・ｽ・ｽ繧九・    await sleepForFurimaneResearch(1000, options.signal);
+    const beforeCount = candidates.length;
+    // ページ読み込みを待ってから、現在DOMに描画済みの商品だけを再収集する。
+    await sleepForFurimaneResearch(1000, options.signal);
 
-    listings = collectFurimaneResearchListings(seller.platform);
-    options.onProgress?.(listings.length);
+    candidates = collectFurimaneResearchDomCandidates(seller.platform, siteConfig);
+    options.onProgress?.(candidates.length);
 
-    stableCount = listings.length === beforeCount ? stableCount + 1 : 0;
+    stableCount = candidates.length === beforeCount ? stableCount + 1 : 0;
 
     if (stableCount >= FURIMANE_STABLE_SCROLL_LIMIT) {
       break;
     }
   }
 
-  return normalizeFurimaneFetchedListings(listings, seller.platform);
+  const maxTextLength = Number(siteConfig?.config?.domTextMaxLength ?? 500);
+  const domItems = candidates
+    .slice(0, Number(siteConfig?.config?.maxItems ?? 1000))
+    .map((candidate) => api.buildDomItemForAnalyze(candidate, maxTextLength));
+  const result = await api.analyzeResearchData({
+    seller: {
+      platform: seller.platform,
+      seller_id: seller.seller_id,
+      seller_name: seller.seller_name ?? null,
+      seller_url: seller.seller_url ?? null
+    },
+    source: "dom",
+    domItems
+  }, { signal: options.signal });
+
+  options.onProgress?.(result.listings.length, {
+    totalCount: result.listings.length,
+    pageLikeIndex: null,
+    partial: false,
+    phase: "api_done"
+  });
+
+  return {
+    listings: result.listings,
+    stats: result.stats ?? null,
+    periodAnalysis: result.periodAnalysis ?? null,
+    usage: result.usage ?? null,
+    seller: result.seller ?? null,
+    savedOnServer: true
+  };
+}
+
+async function analyzeFurimanePayloadViaServer(apiPayload, seller, options) {
+  const api = window.FurimanagerResearchApi;
+
+  if (!api?.trimRawItemsForAnalyze || !api?.analyzeResearchData) {
+    throw new Error("research_api_missing");
+  }
+
+  if (!isFurimaneResearchObject(apiPayload) || !Array.isArray(apiPayload.data)) {
+    throw new Error("mercari_api_invalid_response");
+  }
+
+  const rawItems = api.trimRawItemsForAnalyze(apiPayload.data.filter(isFurimaneResearchObject));
+  const result = await api.analyzeResearchData({
+    seller: {
+      platform: seller.platform,
+      seller_id: seller.seller_id,
+      seller_name: seller.seller_name ?? null,
+      seller_url: seller.seller_url ?? null
+    },
+    source: "page_api",
+    rawItems
+  }, { signal: options.signal });
+
+  options.onProgress?.(result.listings.length, {
+    totalCount: result.listings.length,
+    pageLikeIndex: null,
+    partial: false,
+    phase: "api_done"
+  });
+
+  return {
+    listings: result.listings,
+    stats: result.stats ?? null,
+    periodAnalysis: result.periodAnalysis ?? null,
+    usage: result.usage ?? null,
+    seller: result.seller ?? null,
+    savedOnServer: true
+  };
 }
 
 
@@ -1872,7 +1367,7 @@ async function fetchFurimaneSellerListingsByApiPoc(options = {}) {
       apiPayloadPromise = waitFurimaneMercariApiPayloadFromPage(seller, { ...options, directFetch: false });
       runFurimaneApiAssistAfterWatchSafe(seller, options.signal);
       apiPayload = await apiPayloadPromise;
-      return normalizeFurimaneApiPayloadToResearchListings(apiPayload, seller, options);
+      return analyzeFurimanePayloadViaServer(apiPayload, seller, options);
     }
 
     logFurimaneApiFetch("info", "direct_fetch_retry_after_warmup", {
@@ -1894,37 +1389,7 @@ async function fetchFurimaneSellerListingsByApiPoc(options = {}) {
     }
   }
 
-  return normalizeFurimaneApiPayloadToResearchListings(apiPayload, seller, options);
-}
-
-function normalizeFurimaneApiPayloadToResearchListings(apiPayload, seller, options) {
-  if (!isFurimaneResearchObject(apiPayload) || !Array.isArray(apiPayload.data)) {
-    throw new Error("mercari_api_invalid_response");
-  }
-
-  const rawListings = apiPayload.data.filter(isFurimaneResearchObject);
-  const listings = mapFurimaneApiListingsToResearchListings(rawListings, seller.platform);
-  const normalizedListings = normalizeFurimaneFetchedListings(listings, seller.platform);
-
-  if (rawListings.length > 0 && normalizedListings.length === 0) {
-    throw new Error("mercari_api_mapping_empty");
-  }
-
-  logFurimaneApiPagerDiagnostic(apiPayload, rawListings);
-  logFurimaneApiPeriodAnalysis(normalizedListings, "page_api_payload_received");
-  logFurimaneApiPeriodDiagnostics(rawListings, normalizedListings);
-  options.onProgress?.(normalizedListings.length, {
-    totalCount: normalizedListings.length,
-    pageLikeIndex: null,
-    partial: false,
-    phase: "api_done"
-  });
-
-  logFurimaneApiFetch("info", "mappedCount", {
-    mappedCount: normalizedListings.length
-  });
-
-  return normalizedListings;
+  return analyzeFurimanePayloadViaServer(apiPayload, seller, options);
 }
 
 async function fetchFurimaneSellerResearchData(options = {}) {
@@ -1935,14 +1400,18 @@ async function fetchFurimaneSellerResearchData(options = {}) {
   }
 
   const strategy = options.strategy ?? "api";
-  let listings;
+  let analyzed;
   let resolvedStrategy = strategy;
 
   if (strategy === "api") {
     try {
-      listings = await fetchFurimaneSellerListingsByApiPoc(options);
+      analyzed = await fetchFurimaneSellerListingsByApiPoc(options);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
+
+      if (isFurimaneServerAnalyzeFailure(error)) {
         throw error;
       }
 
@@ -1955,7 +1424,7 @@ async function fetchFurimaneSellerResearchData(options = {}) {
         partial: false,
         phase: "dom_fallback"
       });
-      listings = await fetchFurimaneSellerListingsByDom(options);
+      analyzed = await fetchFurimaneSellerListingsByDom(options);
       resolvedStrategy = "dom";
     }
   } else {
@@ -1963,13 +1432,17 @@ async function fetchFurimaneSellerResearchData(options = {}) {
       sellerId: seller.seller_id,
       strategy
     });
-    listings = await fetchFurimaneSellerListingsByDom(options);
+    analyzed = await fetchFurimaneSellerListingsByDom(options);
   }
 
   return {
-    seller,
-    listings,
-    strategy: resolvedStrategy
+    seller: analyzed.seller ?? seller,
+    listings: analyzed.listings,
+    strategy: resolvedStrategy,
+    stats: analyzed.stats ?? null,
+    periodAnalysis: analyzed.periodAnalysis ?? null,
+    usage: analyzed.usage ?? null,
+    savedOnServer: analyzed.savedOnServer === true
   };
 }
 
@@ -1987,7 +1460,7 @@ async function scrapeFurimaneSellerPageSafe(options = {}) {
       throw error;
     }
 
-    throw new Error("scraping_failed");
+    throw error;
   }
 }
 

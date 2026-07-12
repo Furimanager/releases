@@ -67,7 +67,8 @@ function getCachedResearchData(cache) {
     if (!cache?.cached) {
         return null;
     }
-    return cache.data ?? (cache.seller && cache.listings ? { seller: cache.seller, listings: cache.listings } : null);
+    const data = cache.data ?? (cache.seller && cache.listings ? { seller: cache.seller, listings: cache.listings } : null);
+    return data ? { ...data, stats: cache.stats ?? data.stats ?? null, periodAnalysis: cache.periodAnalysis ?? data.periodAnalysis ?? null } : null;
 }
 function getResearchCacheSellerKey(seller) {
     const platform = seller.platform || "mercari";
@@ -353,6 +354,9 @@ function getResearchErrorKind(error) {
     if (message === "seller_id_not_found" || message === "mercari_dom_changed") {
         return "dom_changed";
     }
+    if (message === "analyze_mapping_empty") {
+        return "mapping";
+    }
     if (message === "scraping_failed") {
         return "scraping";
     }
@@ -473,6 +477,12 @@ function getResearchErrorCopy(kind) {
                 description: "商品情報を読み取れませんでした。ページを再読み込みしても直らない場合はサポートへ連絡してください。",
                 actionLabel: "再試行する"
             };
+        case "mapping":
+            return {
+                title: "商品データを解析できませんでした",
+                description: "取得した商品データの形式に対応できませんでした。時間を置いて再試行してください。",
+                actionLabel: "再試行する"
+            };
         case "scraping":
             return {
                 title: "データ取得に失敗しました",
@@ -489,6 +499,9 @@ function getResearchErrorCopy(kind) {
 }
 function renderResearchError(container, error, retry, retryCount = 0) {
     const kind = getResearchErrorKind(error);
+    if (kind === "limit") {
+        cachedResearchAccess = null;
+    }
     const copy = getResearchErrorCopy(kind);
     const errorMessage = getResearchErrorMessage(error);
     const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
@@ -533,6 +546,8 @@ function renderResults(container, data, sourceLabel) {
     table.renderTable(body, data.seller, data.listings, {
         sourceLabel,
         usage: currentResearchUsage,
+        stats: data.stats ?? null,
+        periodAnalysis: data.periodAnalysis ?? null,
         onRefresh: () => {
             return runResearchFlowSafe(container, { forceRefresh: true });
         },
@@ -599,6 +614,10 @@ function saveResearchDataInBackground(data, signal) {
 function persistResearchDataAfterPaint(data, signal) {
     window.setTimeout(() => {
         writeLocalResearchCache(data);
+        if (data.savedOnServer === true) {
+            updateResearchUsageChip(data.usage ?? null);
+            return;
+        }
         saveResearchDataInBackground(data, signal);
     }, 0);
 }

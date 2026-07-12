@@ -12,8 +12,67 @@ type ResearchListingPayload = {
   title: string;
   price: number;
   sold_at: string | null;
+  period_date?: string | null;
+  period_date_source?: string | null;
+  period_date_estimated?: boolean;
+  period_key?: "period1" | "period2" | "period3" | null;
   thumbnail_url: string | null;
   item_url: string | null;
+  status?: string;
+  platform?: ResearchPlatform;
+};
+
+type ResearchSiteConfig = {
+  version: number;
+  platform: string;
+  config: {
+    listingLinkSelectors: Record<string, string>;
+    pricePattern: string;
+    soldTabTexts: string[];
+    domTextMaxLength: number;
+    maxItems: number;
+    autoMore: { maxClicks: number };
+  };
+};
+
+type ResearchAnalyzePayload = {
+  seller: ResearchSellerPayload;
+  source: "page_api" | "dom";
+  rawItems?: Record<string, unknown>[];
+  domItems?: ResearchDomAnalyzeItem[];
+};
+
+type ResearchAnalyzeResponse = {
+  success: boolean;
+  seller: unknown;
+  listings: ResearchListingPayload[];
+  stats?: unknown;
+  periodAnalysis?: unknown;
+  usage?: ResearchUsageState | null;
+};
+
+type ResearchDomAnalyzeItem = {
+  item_url: string;
+  text: string;
+  image_alt: string | null;
+  aria_label: string | null;
+  thumbnail_url: string | null;
+};
+
+type ResearchSimulatorPayload = {
+  platform: ResearchPlatform;
+  sellPrice: number;
+  purchasePrice: number;
+  shippingFee: number;
+  monthlySalesCount: number;
+};
+
+type ResearchSimulatorResponse = {
+  feeRate: number;
+  fee: number;
+  netProfit: number;
+  profitRate: number;
+  monthlyExpectedProfit: number;
 };
 
 type ResearchBookmark = {
@@ -161,6 +220,11 @@ declare global {
         listings: ResearchListingPayload[],
         options?: ResearchRequestOptions
       ) => Promise<ResearchImportResponse>;
+      getSiteConfig: (platform?: ResearchPlatform, options?: ResearchRequestOptions) => Promise<ResearchSiteConfig>;
+      analyzeResearchData: (payload: ResearchAnalyzePayload, options?: ResearchRequestOptions) => Promise<ResearchAnalyzeResponse>;
+      simulateProfit: (payload: ResearchSimulatorPayload, options?: ResearchRequestOptions) => Promise<ResearchSimulatorResponse>;
+      trimRawItemsForAnalyze: (rawItems: unknown[]) => Record<string, unknown>[];
+      buildDomItemForAnalyze: (input: Partial<ResearchDomAnalyzeItem>, maxTextLength?: number) => ResearchDomAnalyzeItem;
       saveSeller: (seller: ResearchSellerPayload, options?: ResearchRequestOptions) => Promise<ResearchSellerSaveResponse>;
       getBookmarks: (options?: ResearchRequestOptions) => Promise<ResearchBookmarksResponse>;
       addBookmark: (
@@ -191,6 +255,37 @@ const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_API_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
+const SITE_CONFIG_STORAGE_KEY = "furimaneResearchSiteConfig";
+const SITE_CONFIG_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_SITE_CONFIG: ResearchSiteConfig = {
+  version: 0,
+  platform: "mercari",
+  config: {
+    listingLinkSelectors: {
+      mercari: 'a[href*="/item/"]',
+      mercari_shops: 'a[href*="/shops/product/"]'
+    },
+    pricePattern: "(?:[¥￥]\\s*([\\d,]+)|([\\d,]+)\\s*円)",
+    soldTabTexts: ["販売済み", "売り切れ", "売却済み", "sold"],
+    domTextMaxLength: 500,
+    maxItems: 1000,
+    autoMore: { maxClicks: 5 }
+  }
+};
+const ANALYZE_RAW_ITEM_KEYS = [
+  "id", "item_id", "itemId", "name", "title", "item_name", "itemName",
+  "price", "amount", "sold_price", "soldPrice",
+  "status", "item_status", "itemStatus", "__furimane_request_status",
+  "created", "created_at", "createdAt", "updated", "updated_at", "updatedAt",
+  "sold_at", "soldAt", "purchased_at", "purchasedAt",
+  "thumbnails", "photos", "images",
+  "thumbnail_url", "thumbnailUrl", "image_url", "imageUrl", "photo_url", "photoUrl",
+  "item_url", "itemUrl", "url", "webUrl",
+  "seller_id", "sellerId", "seller_name", "sellerName",
+  "pager_id", "pagerId"
+] as const;
+const ANALYZE_NESTED_KEYS = ["item", "itemData", "item_data", "itemDetail", "item_detail", "listing", "product"] as const;
+const ANALYZE_IMAGE_KEYS = ["url", "src", "thumbnail_url", "thumbnailUrl"] as const;
 
 function hasSavedPurchasePrice(price: ResearchPurchasePrice | undefined) {
   return price?.purchasePrice != null || price?.shippingFee != null;
@@ -537,6 +632,125 @@ async function saveResearchData(
   });
 }
 
+async function getSiteConfig(platform: ResearchPlatform = "mercari", options: ResearchRequestOptions = {}) {
+  try {
+    const storage = await getChromeStorage([SITE_CONFIG_STORAGE_KEY]);
+    const store = storage[SITE_CONFIG_STORAGE_KEY] && typeof storage[SITE_CONFIG_STORAGE_KEY] === "object"
+      ? storage[SITE_CONFIG_STORAGE_KEY] as Record<string, { fetchedAt?: unknown; data?: ResearchSiteConfig }>
+      : {};
+    const cached = store[platform];
+
+    if (cached?.data && typeof cached.fetchedAt === "number" && Date.now() - cached.fetchedAt < SITE_CONFIG_TTL_MS) {
+      return cached.data;
+    }
+
+    const params = new URLSearchParams({ platform });
+    const data = await requestJsonSafe<ResearchSiteConfig>(`/api/research/site-config?${params.toString()}`, {
+      method: "GET",
+      signal: options.signal
+    });
+
+    await setChromeStorage({
+      [SITE_CONFIG_STORAGE_KEY]: {
+        ...store,
+        [platform]: {
+          fetchedAt: Date.now(),
+          data
+        }
+      }
+    });
+
+    return data;
+  } catch (error) {
+    console.warn("[furimane-research] site config fetch failed; using default", error);
+    return DEFAULT_SITE_CONFIG;
+  }
+}
+
+async function analyzeResearchData(payload: ResearchAnalyzePayload, options: ResearchRequestOptions = {}) {
+  return requestJsonSafe<ResearchAnalyzeResponse>("/api/research/analyze", {
+    method: "POST",
+    signal: options.signal,
+    body: JSON.stringify(payload)
+  });
+}
+
+async function simulateProfit(payload: ResearchSimulatorPayload, options: ResearchRequestOptions = {}) {
+  return requestJsonSafe<ResearchSimulatorResponse>("/api/research/simulate", {
+    method: "POST",
+    signal: options.signal,
+    body: JSON.stringify(payload)
+  });
+}
+
+function trimImageValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return ANALYZE_IMAGE_KEYS.reduce<Record<string, unknown>>((result, key) => {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      result[key] = (value as Record<string, unknown>)[key];
+    }
+
+    return result;
+  }, {});
+}
+
+function trimRawItemForAnalyze(rawItem: unknown, includeNested = true): Record<string, unknown> | null {
+  if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+    return null;
+  }
+
+  const source = rawItem as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+
+  for (const key of ANALYZE_RAW_ITEM_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      continue;
+    }
+
+    if (["thumbnails", "photos", "images"].includes(key) && Array.isArray(source[key])) {
+      result[key] = source[key].slice(0, 3).map(trimImageValue).filter(Boolean);
+      continue;
+    }
+
+    result[key] = source[key];
+  }
+
+  if (includeNested) {
+    for (const key of ANALYZE_NESTED_KEYS) {
+      const nested = source[key];
+
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        result[key] = trimRawItemForAnalyze(nested, false);
+      }
+    }
+  }
+
+  return result;
+}
+
+function trimRawItemsForAnalyze(rawItems: unknown[]) {
+  return Array.isArray(rawItems)
+    ? rawItems.slice(0, 1000).map((item) => trimRawItemForAnalyze(item)).filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
+}
+
+function buildDomItemForAnalyze(input: Partial<ResearchDomAnalyzeItem>, maxTextLength = 500): ResearchDomAnalyzeItem {
+  return {
+    item_url: String(input?.item_url ?? ""),
+    text: String(input?.text ?? "").slice(0, maxTextLength),
+    image_alt: input?.image_alt ?? null,
+    aria_label: input?.aria_label ?? null,
+    thumbnail_url: input?.thumbnail_url ?? null
+  };
+}
+
 async function saveSeller(seller: ResearchSellerPayload, options: ResearchRequestOptions = {}) {
   return requestJsonSafe<ResearchSellerSaveResponse>("/api/research/sellers/save", {
     method: "POST",
@@ -632,6 +846,11 @@ window.FurimanagerResearchApi = {
   checkAccess,
   checkCache,
   saveResearchData,
+  getSiteConfig,
+  analyzeResearchData,
+  simulateProfit,
+  trimRawItemsForAnalyze,
+  buildDomItemForAnalyze,
   saveSeller,
   getBookmarks,
   addBookmark,

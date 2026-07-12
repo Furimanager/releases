@@ -31,6 +31,19 @@ type ResearchSimulatorWindow = Window & {
       purchasePrice: number;
       shippingFee: number;
     }) => Promise<{ success: boolean; localOnly?: boolean }>;
+    simulateProfit?: (payload: {
+      platform: ResearchPlatform;
+      sellPrice: number;
+      purchasePrice: number;
+      shippingFee: number;
+      monthlySalesCount: number;
+    }) => Promise<{
+      feeRate: number;
+      fee: number;
+      netProfit: number;
+      profitRate: number;
+      monthlyExpectedProfit: number;
+    }>;
   };
 };
 
@@ -69,31 +82,6 @@ function normalizeSimulatorPlatform(value: string | null | undefined): ResearchP
 
 function getSimulatorPlatform(item: ResearchSimulatorItem, options: ResearchSimulatorOptions) {
   return normalizeSimulatorPlatform(options.platform ?? item.platform);
-}
-
-function getSimulatorFeeRate(_platform: ResearchPlatform) {
-  // TODO: Shopsの手数料率を確定したらplatform別に分岐する。
-  return 0.1;
-}
-
-function calculateSimulatorProfit(
-  sellPrice: number,
-  purchasePrice: number,
-  shippingFee: number,
-  platform: ResearchPlatform,
-  monthlySalesCount: number
-) {
-  const fee = Math.round(sellPrice * getSimulatorFeeRate(platform));
-  const netProfit = sellPrice - purchasePrice - shippingFee - fee;
-  const profitRate = sellPrice > 0 ? (netProfit / sellPrice) * 100 : 0;
-  const safeMonthlySalesCount = Math.max(0, Math.round(monthlySalesCount));
-
-  return {
-    fee,
-    netProfit,
-    profitRate,
-    monthlyExpectedProfit: netProfit * safeMonthlySalesCount
-  };
 }
 
 function createSimulatorElement<K extends keyof HTMLElementTagNameMap>(
@@ -216,16 +204,24 @@ async function renderSimulator(
     const profitValue = createSimulatorElement("strong", "furimane-research-simulator__metric-value");
     const rateValue = createSimulatorElement("strong", "furimane-research-simulator__metric-rate");
     const monthlyProfitValue = createSimulatorElement("strong", "furimane-research-simulator__metric-value");
+    const simulatorStatus = createSimulatorElement("p", "furimane-research-simulator__status", "");
     const saveStatus = createSimulatorElement("p", "furimane-research-simulator__save-status", "");
     const saveButton = createSimulatorElement("button", "furimane-research-simulator__save-button", "保存する");
     saveButton.type = "button";
+    let recalculateTimer: number | null = null;
+    let requestSequence = 0;
+    let hasRenderedResult = false;
 
-    const recalculate = () => {
-      const purchasePrice = normalizeSimulatorAmount(purchaseInput.value);
-      const shippingFee = normalizeSimulatorAmount(shippingInput.value);
-      const monthlySalesCount = normalizeSimulatorAmount(monthlySalesInput.value);
-      const result = calculateSimulatorProfit(item.price, purchasePrice, shippingFee, platform, monthlySalesCount);
-
+    const applySimulatorResult = (result: {
+      feeRate: number;
+      fee: number;
+      netProfit: number;
+      profitRate: number;
+      monthlyExpectedProfit: number;
+    }) => {
+      hasRenderedResult = true;
+      simulatorStatus.textContent = "";
+      feeLabel.textContent = `手数料（${Math.round(Number(result.feeRate ?? 0.1) * 100)}%）`;
       feeValue.textContent = formatSimulatorPrice(result.fee);
       profitValue.textContent = formatSimulatorPrice(result.netProfit);
       profitValue.classList.toggle("furimane-research-simulator__metric-value--positive", result.netProfit >= 0);
@@ -240,6 +236,54 @@ async function renderSimulator(
         "furimane-research-simulator__metric-value--negative",
         result.monthlyExpectedProfit < 0
       );
+    };
+
+    const recalculate = () => {
+      const purchasePrice = normalizeSimulatorAmount(purchaseInput.value);
+      const shippingFee = normalizeSimulatorAmount(shippingInput.value);
+      const monthlySalesCount = normalizeSimulatorAmount(monthlySalesInput.value);
+
+      if (!hasRenderedResult) {
+        feeValue.textContent = "...";
+        profitValue.textContent = "...";
+        rateValue.textContent = "...";
+        monthlyProfitValue.textContent = "...";
+      }
+
+      if (recalculateTimer !== null) {
+        window.clearTimeout(recalculateTimer);
+      }
+
+      // 入力中にAPIを連打しないよう、300ms待ってから最新値だけ計算する。
+      recalculateTimer = window.setTimeout(async () => {
+        const sequence = ++requestSequence;
+
+        try {
+          const api = (window as ResearchSimulatorWindow).FurimanagerResearchApi;
+
+          if (!api?.simulateProfit) {
+            throw new Error("simulate_api_missing");
+          }
+
+          const result = await api.simulateProfit({
+            platform,
+            sellPrice: item.price,
+            purchasePrice,
+            shippingFee,
+            monthlySalesCount
+          });
+
+          if (sequence === requestSequence) {
+            applySimulatorResult(result);
+          }
+        } catch (error) {
+          console.warn("[furimane-research] simulator API failed", error);
+
+          if (sequence === requestSequence) {
+            simulatorStatus.textContent = "計算できませんでした。通信環境を確認してください。";
+          }
+        }
+      }, 300);
     };
 
     const save = async () => {
@@ -297,7 +341,8 @@ async function renderSimulator(
 
     const metrics = createSimulatorElement("div", "furimane-research-simulator__metrics");
     const feeMetric = createSimulatorElement("div", "furimane-research-simulator__metric");
-    feeMetric.append(createSimulatorElement("span", undefined, "手数料（10%）"), feeValue);
+    const feeLabel = createSimulatorElement("span", undefined, "手数料");
+    feeMetric.append(feeLabel, feeValue);
 
     const profitMetric = createSimulatorElement("div", "furimane-research-simulator__metric");
     profitMetric.append(createSimulatorElement("span", undefined, "純利益"), profitValue);
@@ -312,7 +357,7 @@ async function renderSimulator(
     const actions = createSimulatorElement("div", "furimane-research-simulator__actions");
     actions.append(saveStatus, saveButton);
 
-    root.replaceChildren(form, metrics, actions);
+    root.replaceChildren(form, metrics, simulatorStatus, actions);
     recalculate();
   } catch (error) {
     console.error("[furimane-research] simulator load failed", error);

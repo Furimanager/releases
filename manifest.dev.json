@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Furimanager (Dev)",
   "description": "Development manifest for local Furimanager testing",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "permissions": ["activeTab", "alarms", "storage", "tabs"],
   "background": {
     "service_worker": "background.js"
@@ -41,7 +41,6 @@
         "config.js",
         "src/research-api.js",
         "src/research-scraper.js",
-        "src/research-stats.js",
         "src/research-simulator.js",
         "src/research-table.js",
         "src/research-overlay.js"

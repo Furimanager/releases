@@ -95,7 +95,7 @@ function getListingPeriodStats(listing) {
         period2: createEmptyTotals(),
         period3: createEmptyTotals()
     };
-    const periodKey = window.FurimanagerResearchStats?.getListingPeriodKey(listing);
+    const periodKey = listing.period_key ?? null;
     if (periodKey) {
         periods[periodKey] = {
             count: 1,
@@ -224,12 +224,10 @@ function buildDashboardData(seller, listings, options) {
         count: result.count + 1,
         revenue: result.revenue + (Number.isFinite(listing.price) ? listing.price : 0)
     }), createEmptyTotals());
-    const periodAnalysis = window.FurimanagerResearchStats?.summarizePeriodAnalysis
-        ? window.FurimanagerResearchStats.summarizePeriodAnalysis(displayListings)
-        : createEmptyPeriodAnalysis();
+    const periodAnalysis = options.periodAnalysis ?? createEmptyPeriodAnalysis();
     const hasDatedListings = periodAnalysis.available || hasUsableSoldAt(displayListings);
-    const stats = hasDatedListings
-        ? periodAnalysis.stats
+    const stats = hasDatedListings && (options.stats || periodAnalysis.stats)
+        ? (options.stats ?? periodAnalysis.stats)
         : createEmptyStats();
     return {
         platform,

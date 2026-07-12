@@ -2,6 +2,37 @@ const FURIMANE_DEFAULT_APP_URL = "https://furimanager.com";
 const FURIMANE_RESEARCH_API_TIMEOUT_MS = 30000;
 const FURIMANE_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const FURIMANE_LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
+const FURIMANE_SITE_CONFIG_STORAGE_KEY = "furimaneResearchSiteConfig";
+const FURIMANE_SITE_CONFIG_TTL_MS = 24 * 60 * 60 * 1000;
+const FURIMANE_DEFAULT_SITE_CONFIG = {
+  version: 0,
+  platform: "mercari",
+  config: {
+    listingLinkSelectors: {
+      mercari: 'a[href*="/item/"]',
+      mercari_shops: 'a[href*="/shops/product/"]'
+    },
+    pricePattern: "(?:[¥￥]\\s*([\\d,]+)|([\\d,]+)\\s*円)",
+    soldTabTexts: ["販売済み", "売り切れ", "売却済み", "sold"],
+    domTextMaxLength: 500,
+    maxItems: 1000,
+    autoMore: { maxClicks: 5 }
+  }
+};
+const FURIMANE_ANALYZE_RAW_ITEM_KEYS = [
+  "id", "item_id", "itemId", "name", "title", "item_name", "itemName",
+  "price", "amount", "sold_price", "soldPrice",
+  "status", "item_status", "itemStatus", "__furimane_request_status",
+  "created", "created_at", "createdAt", "updated", "updated_at", "updatedAt",
+  "sold_at", "soldAt", "purchased_at", "purchasedAt",
+  "thumbnails", "photos", "images",
+  "thumbnail_url", "thumbnailUrl", "image_url", "imageUrl", "photo_url", "photoUrl",
+  "item_url", "itemUrl", "url", "webUrl",
+  "seller_id", "sellerId", "seller_name", "sellerName",
+  "pager_id", "pagerId"
+];
+const FURIMANE_ANALYZE_NESTED_KEYS = ["item", "itemData", "item_data", "itemDetail", "item_detail", "listing", "product"];
+const FURIMANE_ANALYZE_IMAGE_KEYS = ["url", "src", "thumbnail_url", "thumbnailUrl"];
 
 function hasSavedFurimanePurchasePrice(price) {
   return price?.purchasePrice != null || price?.shippingFee != null;
@@ -341,6 +372,124 @@ async function saveFurimaneResearchData(seller, listings, options = {}) {
   });
 }
 
+async function getFurimaneResearchSiteConfig(platform = "mercari", options = {}) {
+  try {
+    const storage = await getFurimaneChromeStorage([FURIMANE_SITE_CONFIG_STORAGE_KEY]);
+    const store = storage[FURIMANE_SITE_CONFIG_STORAGE_KEY] && typeof storage[FURIMANE_SITE_CONFIG_STORAGE_KEY] === "object"
+      ? storage[FURIMANE_SITE_CONFIG_STORAGE_KEY]
+      : {};
+    const cached = store[platform];
+
+    if (cached?.data && typeof cached.fetchedAt === "number" && Date.now() - cached.fetchedAt < FURIMANE_SITE_CONFIG_TTL_MS) {
+      return cached.data;
+    }
+
+    const params = new URLSearchParams({ platform });
+    const data = await requestFurimaneResearchJsonSafe(`/api/research/site-config?${params.toString()}`, {
+      method: "GET",
+      signal: options.signal
+    });
+
+    await setFurimaneChromeStorage({
+      [FURIMANE_SITE_CONFIG_STORAGE_KEY]: {
+        ...store,
+        [platform]: {
+          fetchedAt: Date.now(),
+          data
+        }
+      }
+    });
+
+    return data;
+  } catch (error) {
+    console.warn("[furimane-research] site config fetch failed; using default", error);
+    return FURIMANE_DEFAULT_SITE_CONFIG;
+  }
+}
+
+async function analyzeFurimaneResearchData(payload, options = {}) {
+  return requestFurimaneResearchJsonSafe("/api/research/analyze", {
+    method: "POST",
+    signal: options.signal,
+    body: JSON.stringify(payload)
+  });
+}
+
+async function simulateFurimaneResearchProfit(payload, options = {}) {
+  return requestFurimaneResearchJsonSafe("/api/research/simulate", {
+    method: "POST",
+    signal: options.signal,
+    body: JSON.stringify(payload)
+  });
+}
+
+function trimFurimaneImageValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return FURIMANE_ANALYZE_IMAGE_KEYS.reduce((result, key) => {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      result[key] = value[key];
+    }
+
+    return result;
+  }, {});
+}
+
+function trimFurimaneRawItemForAnalyze(rawItem, includeNested = true) {
+  if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+    return null;
+  }
+
+  const result = {};
+
+  for (const key of FURIMANE_ANALYZE_RAW_ITEM_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(rawItem, key)) {
+      continue;
+    }
+
+    if (["thumbnails", "photos", "images"].includes(key) && Array.isArray(rawItem[key])) {
+      result[key] = rawItem[key].slice(0, 3).map(trimFurimaneImageValue).filter(Boolean);
+      continue;
+    }
+
+    result[key] = rawItem[key];
+  }
+
+  if (includeNested) {
+    for (const key of FURIMANE_ANALYZE_NESTED_KEYS) {
+      const nested = rawItem[key];
+
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        result[key] = trimFurimaneRawItemForAnalyze(nested, false);
+      }
+    }
+  }
+
+  return result;
+}
+
+function trimFurimaneRawItemsForAnalyze(rawItems) {
+  return Array.isArray(rawItems)
+    ? rawItems.slice(0, 1000).map((item) => trimFurimaneRawItemForAnalyze(item)).filter(Boolean)
+    : [];
+}
+
+function buildFurimaneDomItemForAnalyze(input, maxTextLength = 500) {
+  return {
+    item_url: String(input?.item_url ?? ""),
+    text: String(input?.text ?? "").slice(0, maxTextLength),
+    image_alt: input?.image_alt ?? null,
+    aria_label: input?.aria_label ?? null,
+    thumbnail_url: input?.thumbnail_url ?? null
+  };
+}
+
 async function saveFurimaneResearchSeller(seller, options = {}) {
   return requestFurimaneResearchJsonSafe("/api/research/sellers/save", {
     method: "POST",
@@ -432,6 +581,11 @@ window.FurimanagerResearchApi = {
   checkAccess: checkFurimaneResearchAccess,
   checkCache: checkFurimaneResearchCache,
   saveResearchData: saveFurimaneResearchData,
+  getSiteConfig: getFurimaneResearchSiteConfig,
+  analyzeResearchData: analyzeFurimaneResearchData,
+  simulateProfit: simulateFurimaneResearchProfit,
+  trimRawItemsForAnalyze: trimFurimaneRawItemsForAnalyze,
+  buildDomItemForAnalyze: buildFurimaneDomItemForAnalyze,
   saveSeller: saveFurimaneResearchSeller,
   getBookmarks: getFurimaneResearchBookmarks,
   addBookmark: addFurimaneResearchBookmark,

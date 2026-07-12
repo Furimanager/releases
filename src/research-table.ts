@@ -34,6 +34,7 @@ type ResearchTableListing = {
   period_date?: string | null;
   period_date_source?: string | null;
   period_date_estimated?: boolean;
+  period_key?: PeriodKey | null;
   thumbnail_url: string | null;
   item_url: string | null;
   status?: string;
@@ -82,6 +83,8 @@ type ResearchPurchasePriceMap = Record<string, ResearchPurchasePrice>;
 type ResearchTableOptions = {
   sourceLabel?: string;
   usage?: ResearchUsageState | null;
+  stats?: ResearchStats | null;
+  periodAnalysis?: ResearchPeriodAnalysisSummary | null;
   onRefresh?: () => void | Promise<void>;
   onSaveSeller?: (seller: ResearchTableSeller) => Promise<void>;
 };
@@ -179,11 +182,6 @@ interface Window {
         onSave?: (savedPrice: ResearchPurchasePrice) => void | Promise<void>;
       }
     ) => Promise<HTMLTableRowElement>;
-  };
-  FurimanagerResearchStats?: {
-    calcPeriodStats: (listings: ResearchTableListing[]) => ResearchStats;
-    getListingPeriodKey: (listing: ResearchTableListing) => PeriodKey | null;
-    summarizePeriodAnalysis?: (listings: ResearchTableListing[]) => ResearchPeriodAnalysisSummary;
   };
   FurimanagerResearchTable?: {
     renderTable: (
@@ -340,7 +338,7 @@ function getListingPeriodStats(listing: ResearchTableListing) {
     period3: createEmptyTotals()
   };
 
-  const periodKey = window.FurimanagerResearchStats?.getListingPeriodKey(listing);
+  const periodKey = listing.period_key ?? null;
 
   if (periodKey) {
     periods[periodKey] = {
@@ -509,12 +507,10 @@ function buildDashboardData(
     }),
     createEmptyTotals()
   );
-  const periodAnalysis = window.FurimanagerResearchStats?.summarizePeriodAnalysis
-    ? window.FurimanagerResearchStats.summarizePeriodAnalysis(displayListings)
-    : createEmptyPeriodAnalysis();
+  const periodAnalysis = options.periodAnalysis ?? createEmptyPeriodAnalysis();
   const hasDatedListings = periodAnalysis.available || hasUsableSoldAt(displayListings);
-  const stats = hasDatedListings
-    ? periodAnalysis.stats
+  const stats = hasDatedListings && (options.stats || periodAnalysis.stats)
+    ? (options.stats ?? periodAnalysis.stats)
     : createEmptyStats();
 
   return {
