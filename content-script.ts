@@ -225,6 +225,7 @@
   const INVENTORY_LINK_BUTTON: ActionButtonDefinition = { id: "link-inventory", label: "在庫連携", action: "linkInventory" };
   const RELIST_ONLY_BUTTONS: ActionButtonDefinition[] = [
     { id: "relist", label: "再出品", action: "relist" },
+    { id: "save-draft", label: "下書き", action: "saveDraft" },
     INVENTORY_LINK_BUTTON,
   ];
 
@@ -2468,7 +2469,7 @@
       return [];
     }
 
-    if (pageKind === "ownProduct" && isSoldProductPage()) {
+    if ((pageKind === "ownProduct" || pageKind === "otherProduct") && isSoldProductPage()) {
       return RELIST_ONLY_BUTTONS;
     }
 

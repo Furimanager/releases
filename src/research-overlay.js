@@ -1,506 +1,440 @@
-const FURIMANE_PROFILE_URL_PREFIX = "https://jp.mercari.com/user/profile/";
-const FURIMANE_SHOPS_PROFILE_URL_PREFIX = "https://jp.mercari.com/shops/profile/";
-const FURIMANE_OVERLAY_ID = "furimane-research-overlay";
-const FURIMANE_OPEN_BUTTON_ID = "furimane-research-open-button";
-const FURIMANE_CLOSED_STORAGE_KEY = "furimane-research-closed";
-const FURIMANE_MAX_RETRY_COUNT = 3;
-const FURIMANE_DEFAULT_FETCH_STRATEGY = "api";
-const FURIMANE_READY_DELAY_MS = 250;
-const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
-const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
-const FURIMANE_LOCAL_RESEARCH_CACHE_PREFIX = "furimane-research-local-cache:";
-const FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const FURIMANE_ACCESS_CACHE_TTL_MS = 5 * 60 * 1000;
-const FURIMANE_RESEARCH_ENABLED_KEY = "furimaneResearchEnabled";
-let currentAbortController = null;
-let currentResearchPageKey = null;
-let routeSyncTimerId = null;
-let lastObservedUrl = window.location.href;
-let overlayInsertRetryCount = 0;
-let cachedResearchAccess = null;
-let currentResearchUsage = null;
-
-function showResearchNotice(message) {
+(() => {
+  const FURIMANE_PROFILE_URL_PREFIX = "https://jp.mercari.com/user/profile/";
+  const FURIMANE_SHOPS_PROFILE_URL_PREFIX = "https://jp.mercari.com/shops/profile/";
+  const FURIMANE_OVERLAY_ID = "furimane-research-overlay";
+  const FURIMANE_OPEN_BUTTON_ID = "furimane-research-open-button";
+  const FURIMANE_CLOSED_STORAGE_KEY = "furimane-research-closed";
+  const FURIMANE_MAX_RETRY_COUNT = 3;
+  const FURIMANE_DEFAULT_FETCH_STRATEGY = "api";
+  const FURIMANE_READY_DELAY_MS = 250;
+  const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
+  const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
+  const FURIMANE_LOCAL_RESEARCH_CACHE_PREFIX = "furimane-research-local-cache:";
+  const FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
+  const FURIMANE_ACCESS_CACHE_TTL_MS = 5 * 60 * 1e3;
+  const FURIMANE_RESEARCH_ENABLED_KEY = "furimaneResearchEnabled";
+  let currentAbortController = null;
+  let currentResearchPageKey = null;
+  let routeSyncTimerId = null;
+  let lastObservedUrl = window.location.href;
+  let overlayInsertRetryCount = 0;
+  let cachedResearchAccess = null;
+  let currentResearchUsage = null;
+  function showResearchNotice(message) {
     document.querySelector(".furimane-research-table__toast")?.remove();
     const notice = document.createElement("div");
     notice.className = "furimane-research-table__toast";
     notice.textContent = message;
     document.body.appendChild(notice);
     window.setTimeout(() => {
-        notice.remove();
+      notice.remove();
     }, 3200);
-}
-function getOverlayWindow() {
+  }
+  function getOverlayWindow() {
     return window;
-}
-function getChromeLocalStorage(keys) {
+  }
+  function getChromeLocalStorage(keys) {
     return new Promise((resolve) => {
-        if (typeof chrome === "undefined" || !chrome.storage?.local) {
-            resolve({});
-            return;
-        }
-        chrome.storage.local.get(keys, (result) => {
-            resolve(result ?? {});
-        });
+      if (typeof chrome === "undefined" || !chrome.storage?.local) {
+        resolve({});
+        return;
+      }
+      chrome.storage.local.get(keys, (result) => {
+        resolve(result ?? {});
+      });
     });
-}
-async function isResearchFeatureEnabled() {
+  }
+  async function isResearchFeatureEnabled() {
     const storage = await getChromeLocalStorage([FURIMANE_RESEARCH_ENABLED_KEY]);
     return storage[FURIMANE_RESEARCH_ENABLED_KEY] === true;
-}
-function getResearchFetchStrategy() {
+  }
+  function getResearchFetchStrategy() {
     return FURIMANE_DEFAULT_FETCH_STRATEGY;
-}
-function getResearchPageKey() {
+  }
+  function getResearchPageKey() {
     const url = new URL(window.location.href);
     const mercariProfileMatch = url.pathname.match(/^\/user\/profile\/([^/?#]+)/);
     if (mercariProfileMatch?.[1]) {
-        return `mercari:${mercariProfileMatch[1]}`;
+      return `mercari:${mercariProfileMatch[1]}`;
     }
     const shopsProfileMatch = url.pathname.match(/^\/shops\/profile\/([^/?#]+)/);
     if (shopsProfileMatch?.[1]) {
-        return `mercari_shops:${shopsProfileMatch[1]}`;
+      return `mercari_shops:${shopsProfileMatch[1]}`;
     }
     return null;
-}
-function getCachedResearchData(cache) {
+  }
+  function getCachedResearchData(cache) {
     if (!cache?.cached) {
-        return null;
+      return null;
     }
     const data = cache.data ?? (cache.seller && cache.listings ? { seller: cache.seller, listings: cache.listings } : null);
     return data ? { ...data, stats: cache.stats ?? data.stats ?? null, periodAnalysis: cache.periodAnalysis ?? data.periodAnalysis ?? null } : null;
-}
-function getResearchCacheSellerKey(seller) {
+  }
+  function getResearchCacheSellerKey(seller) {
     const platform = seller.platform || "mercari";
     const sellerId = seller.seller_id;
     return sellerId ? `${platform}:${sellerId}` : null;
-}
-function getLocalResearchCacheKey(seller) {
+  }
+  function getLocalResearchCacheKey(seller) {
     const sellerKey = getResearchCacheSellerKey(seller);
     return sellerKey ? `${FURIMANE_LOCAL_RESEARCH_CACHE_PREFIX}${sellerKey}` : null;
-}
-function isResearchResultData(value) {
+  }
+  function isResearchResultData(value) {
     if (!value || typeof value !== "object") {
-        return false;
+      return false;
     }
-    return Boolean(value.seller && Array.isArray(value.listings));
-}
-function hasRenderableResearchData(data) {
+    const data = value;
+    return Boolean(data.seller && Array.isArray(data.listings));
+  }
+  function hasRenderableResearchData(data) {
     return Boolean(data && Array.isArray(data.listings) && data.listings.length > 0);
-}
-function hasResearchPeriodData(data) {
-    return Boolean(data && hasPeriodAnalysisData(data.listings));
-}
-function shouldRenderCacheData(data, renderedCache, renderedCacheHasPeriodData) {
-    if (!hasRenderableResearchData(data)) {
-        return false;
-    }
-    const nextHasPeriodData = hasResearchPeriodData(data);
-    return !renderedCache || nextHasPeriodData || !renderedCacheHasPeriodData;
-}
-function readLocalResearchCache(seller) {
+  }
+  function readLocalResearchCache(seller) {
     const cacheKey = getLocalResearchCacheKey(seller);
     if (!cacheKey) {
-        return null;
+      return null;
     }
     try {
-        const rawValue = localStorage.getItem(cacheKey);
-        if (!rawValue) {
-            return null;
-        }
-        const parsed = JSON.parse(rawValue);
-        if (typeof parsed.savedAt !== "number" ||
-            Date.now() - parsed.savedAt > FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS ||
-            !isResearchResultData(parsed.data)) {
-            localStorage.removeItem(cacheKey);
-            return null;
-        }
-        return parsed.data;
-    }
-    catch (error) {
-        console.warn("[furimane-research] local cache read failed", error);
+      const rawValue = localStorage.getItem(cacheKey);
+      if (!rawValue) {
+        return null;
+      }
+      const parsed = JSON.parse(rawValue);
+      if (typeof parsed.savedAt !== "number" || Date.now() - parsed.savedAt > FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS || !isResearchResultData(parsed.data)) {
         localStorage.removeItem(cacheKey);
         return null;
+      }
+      return parsed.data;
+    } catch (error) {
+      console.warn("[furimane-research] local cache read failed", error);
+      localStorage.removeItem(cacheKey);
+      return null;
     }
-}
-function writeLocalResearchCache(data) {
+  }
+  function writeLocalResearchCache(data) {
     const cacheKey = getLocalResearchCacheKey(data.seller);
     if (!cacheKey || !Array.isArray(data.listings) || data.listings.length === 0) {
-        return;
+      return;
     }
     try {
-        localStorage.setItem(cacheKey, JSON.stringify({
-            savedAt: Date.now(),
-            data
-        }));
+      const entry = {
+        savedAt: Date.now(),
+        data
+      };
+      localStorage.setItem(cacheKey, JSON.stringify(entry));
+    } catch (error) {
+      console.warn("[furimane-research] local cache write failed", error);
     }
-    catch (error) {
-        console.warn("[furimane-research] local cache write failed", error);
-    }
-}
-function hasUsablePeriodDate(value) {
-    if (!value) {
-        return false;
-    }
-    return !Number.isNaN(new Date(value).getTime());
-}
-function hasPeriodAnalysisData(listings) {
-    return (listings ?? []).some((listing) => (hasUsablePeriodDate(listing.period_date) || hasUsablePeriodDate(listing.sold_at)));
-}
-function getResearchPageSupportStatus() {
+  }
+  function getResearchPageSupportStatus() {
     if (window.location.href.startsWith(FURIMANE_PROFILE_URL_PREFIX)) {
-        return "supported";
+      return "supported";
     }
     if (window.location.href.startsWith(FURIMANE_SHOPS_PROFILE_URL_PREFIX)) {
-        // TODO: Shopsリサーチは型だけ先に用意しているため、画面入口は未対応として止める。
-        return "unsupported";
+      return "unsupported";
     }
     return "outside";
-}
-function logUnsupportedResearchPage() {
+  }
+  function logUnsupportedResearchPage() {
     console.info("[furimane-research] unsupported page. skip research flow", {
-        url: window.location.href
+      url: window.location.href
     });
-}
-function waitForReady() {
+  }
+  function waitForReady() {
     return new Promise((resolve) => {
-        const run = () => {
-            window.setTimeout(resolve, FURIMANE_READY_DELAY_MS);
-        };
-        if (document.readyState === "loading") {
-            document.addEventListener("DOMContentLoaded", run, { once: true });
-            return;
-        }
-        run();
+      const run = () => {
+        window.setTimeout(resolve, FURIMANE_READY_DELAY_MS);
+      };
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", run, { once: true });
+        return;
+      }
+      run();
     });
-}
-function getProfileHeaderElement() {
+  }
+  function getProfileHeaderElement() {
     const profileHeaderById = document.getElementById("profile-header");
     if (profileHeaderById) {
-        return profileHeaderById;
+      return profileHeaderById;
     }
     const profileHeaderByClass = document.querySelector(".profile-header");
     if (profileHeaderByClass) {
-        return profileHeaderByClass;
+      return profileHeaderByClass;
     }
     const headingCandidates = Array.from(document.querySelectorAll("h1, h2, [data-testid*='profile']"));
     return headingCandidates.find((element) => element.textContent?.trim()) ?? null;
-}
-function getNormalizedText(element) {
+  }
+  function getNormalizedText(element) {
     return element.textContent?.replace(/\s+/g, " ").trim() ?? "";
-}
-function findListingSectionByItemLinks() {
-    const itemLinks = Array.from(document.querySelectorAll('main a[href*="/item/"], main a[href*="/shops/product/"]'));
+  }
+  function findListingSectionByItemLinks() {
+    const itemLinks = Array.from(
+      document.querySelectorAll('main a[href*="/item/"], main a[href*="/shops/product/"]')
+    );
     if (itemLinks.length === 0) {
-        return null;
+      return null;
     }
     const firstItemLink = itemLinks[0];
     return firstItemLink.closest("section") ?? firstItemLink.closest("[data-testid]") ?? firstItemLink.parentElement;
-}
-function findListingSectionBySelectors() {
+  }
+  function findListingSectionBySelectors() {
     const selectors = [
-        'main [data-testid*="item-list"]',
-        'main [data-testid*="items-list"]',
-        'main [data-testid*="listing"]',
-        'main [data-testid*="product-list"]',
-        'main [data-testid*="item-grid"]'
+      'main [data-testid*="item-list"]',
+      'main [data-testid*="items-list"]',
+      'main [data-testid*="listing"]',
+      'main [data-testid*="product-list"]',
+      'main [data-testid*="item-grid"]'
     ];
     for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        const section = element?.closest("section") ?? element;
-        if (section) {
-            return section;
-        }
+      const element = document.querySelector(selector);
+      const section = element?.closest("section") ?? element;
+      if (section) {
+        return section;
+      }
     }
     return null;
-}
-function findListingSectionByHeading() {
+  }
+  function findListingSectionByHeading() {
     const headings = Array.from(document.querySelectorAll("main h2, main h3, main [role='heading']"));
     const listingHeading = headings.find((heading) => {
-        const text = getNormalizedText(heading);
-        return text.includes("出品") || text.includes("商品") || text.includes("一覧");
+      const text = getNormalizedText(heading);
+      return text.includes("\u51FA\u54C1") || text.includes("\u5546\u54C1") || text.includes("\u4E00\u89A7");
     });
     if (!listingHeading) {
-        return null;
+      return null;
     }
     return listingHeading.closest("section") ?? listingHeading.parentElement;
-}
-function findListingSection() {
+  }
+  function findListingSection() {
     return findListingSectionByItemLinks() ?? findListingSectionBySelectors() ?? findListingSectionByHeading();
-}
-function findProfileContainer() {
+  }
+  function findProfileContainer() {
     const profileHeader = getProfileHeaderElement();
     if (profileHeader) {
-        const closestHeader = profileHeader.closest(".profile-header") ?? profileHeader.closest("section") ?? profileHeader;
-        if (closestHeader) {
-            return closestHeader;
-        }
+      const closestHeader = profileHeader.closest(".profile-header") ?? profileHeader.closest("section") ?? profileHeader;
+      if (closestHeader) {
+        return closestHeader;
+      }
     }
     return null;
-}
-function findOverlayInsertTarget() {
+  }
+  function findOverlayInsertTarget() {
     const listingSection = findListingSection();
     if (listingSection?.parentElement) {
-        return {
-            parent: listingSection.parentElement,
-            before: listingSection,
-            reason: "before_listing_section"
-        };
+      return {
+        parent: listingSection.parentElement,
+        before: listingSection,
+        reason: "before_listing_section"
+      };
     }
     const profileContainer = findProfileContainer();
     if (profileContainer) {
-        return {
-            parent: profileContainer,
-            before: null,
-            reason: "profile_container_end"
-        };
+      return {
+        parent: profileContainer,
+        before: null,
+        reason: "profile_container_end"
+      };
     }
     return null;
-}
-function findOverlayFallbackInsertTarget() {
+  }
+  function findOverlayFallbackInsertTarget() {
     const parent = document.querySelector("main") ?? document.body;
     if (!parent) {
-        return null;
+      return null;
     }
     return {
-        parent,
-        before: null,
-        reason: "main_end_fallback"
+      parent,
+      before: null,
+      reason: "main_end_fallback"
     };
-}
-function formatPrice(price) {
-    return `¥${price.toLocaleString("ja-JP")}`;
-}
-function formatDate(value) {
-    if (!value) {
-        return "日付不明";
-    }
-    return new Date(value).toLocaleDateString("ja-JP", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-    });
-}
-function getOverlayBody(container) {
+  }
+  function getOverlayBody(container) {
     return container.querySelector(".furimane-research-overlay__body");
-}
-function setOverlayBody(container, children) {
+  }
+  function setOverlayBody(container, children) {
     const body = getOverlayBody(container);
     if (!body) {
-        return;
+      return;
     }
     body.replaceChildren(...children);
-}
-function createParagraph(text, className = "furimane-research-overlay__placeholder") {
+  }
+  function createParagraph(text, className = "furimane-research-overlay__placeholder") {
     const paragraph = document.createElement("p");
     paragraph.className = className;
     paragraph.textContent = text;
     return paragraph;
-}
-function createButton(label, onClick, variant = "primary") {
+  }
+  function createButton(label, onClick, variant = "primary") {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `furimane-research-overlay__button furimane-research-overlay__button--${variant}`;
     button.textContent = label;
     button.addEventListener("click", onClick);
     return button;
-}
-function renderLoading(container, message) {
+  }
+  function renderLoading(container, message) {
     setOverlayBody(container, [createParagraph(message)]);
-}
-function renderAccessLocked(container) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "furimane-research-overlay__state";
-    const title = document.createElement("h3");
-    title.className = "furimane-research-overlay__state-title";
-    title.textContent = "リサーチ追加プランで利用できます";
-    const description = createParagraph("出品者の販売履歴分析を使うには、フリマネ側でリサーチ追加プランに加入してください。");
-    const link = document.createElement("a");
-    link.className = "furimane-research-overlay__link-button";
-    link.href = `${getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000"}/dashboard/research`;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = "リサーチ追加プランを確認する";
-    wrapper.append(title, description, link);
-    setOverlayBody(container, [wrapper]);
-}
-function renderError(container, message, retry) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "furimane-research-overlay__state";
-    const title = document.createElement("h3");
-    title.className = "furimane-research-overlay__state-title";
-    title.textContent = message === "auth_required" ? "フリマネにログインしてください" : "取得に失敗しました。再試行してください";
-    const description = createParagraph(message === "auth_required"
-        ? "拡張機能のポップアップからフリマネにログインしてから、もう一度お試しください。"
-        : message);
-    const retryButton = createButton("再試行する", retry, "secondary");
-    wrapper.append(title, description, retryButton);
-    setOverlayBody(container, [wrapper]);
-}
-function getResearchErrorKind(error) {
+  }
+  function getResearchErrorKind(error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message === "auth_required") {
-        return "auth";
+      return "auth";
     }
     if (message === "plan_required") {
-        return "plan";
+      return "plan";
     }
     if (message === "research_monthly_limit_exceeded") {
-        return "limit";
+      return "limit";
     }
     if (message === "api_timeout" || message === "network_error") {
-        return "timeout";
+      return "timeout";
     }
     if (message === "seller_id_not_found" || message === "mercari_dom_changed") {
-        return "dom_changed";
+      return "dom_changed";
     }
     if (message === "analyze_mapping_empty") {
-        return "mapping";
+      return "mapping";
     }
     if (message === "scraping_failed") {
-        return "scraping";
+      return "scraping";
     }
     return "unknown";
-}
-function getResearchErrorMessage(error) {
+  }
+  function getResearchErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
-}
-function canContinueResearchWithoutAccessCheck(error, api) {
+  }
+  function canContinueResearchWithoutAccessCheck(error, api) {
     const message = getResearchErrorMessage(error);
     const appUrl = api.getAppUrl?.() ?? "";
-    return ((message === "network_error" || message === "api_timeout") &&
-        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(appUrl));
-}
-function getResearchFetchFunction(scraper) {
+    return (message === "network_error" || message === "api_timeout") && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(appUrl);
+  }
+  function getResearchFetchFunction(scraper) {
     return scraper.fetchSellerResearchData ?? scraper.scrapeSellerPage ?? null;
-}
-async function checkResearchAccessWithCache(api, signal) {
+  }
+  async function checkResearchAccessWithCache(api, signal) {
     if (cachedResearchAccess && Date.now() - cachedResearchAccess.savedAt < FURIMANE_ACCESS_CACHE_TTL_MS) {
-        currentResearchUsage = cachedResearchAccess.value.usage ?? null;
-        return cachedResearchAccess.value;
+      currentResearchUsage = cachedResearchAccess.value.usage ?? null;
+      return cachedResearchAccess.value;
     }
     const access = await api.checkAccess({ signal });
     const normalizedAccess = normalizeResearchAccess(access);
     currentResearchUsage = normalizedAccess.usage ?? null;
     cachedResearchAccess = {
-        savedAt: Date.now(),
-        value: normalizedAccess
+      savedAt: Date.now(),
+      value: normalizedAccess
     };
     return normalizedAccess;
-}
-function normalizeResearchAccess(access) {
+  }
+  function normalizeResearchAccess(access) {
     if (access.usage || access.hasAddon !== true) {
-        return access;
+      return access;
     }
     return {
-        ...access,
-        usage: {
-            allowed: true,
-            used: 0,
-            limit: 30,
-            remaining: 30,
-            unlimited: true
-        }
+      ...access,
+      usage: {
+        allowed: true,
+        used: 0,
+        limit: 30,
+        remaining: 30,
+        unlimited: true
+      }
     };
-}
-function updateResearchUsageChip(usage) {
+  }
+  function updateResearchUsageChip(usage) {
     if (!usage) {
-        return;
+      return;
     }
     currentResearchUsage = usage;
     const canUseResearch = usage.unlimited === true || usage.used < usage.limit;
     if (cachedResearchAccess) {
-        cachedResearchAccess.value = {
-            ...cachedResearchAccess.value,
-            canUse: canUseResearch,
-            canUseResearch,
-            usage: {
-                ...usage,
-                allowed: canUseResearch
-            }
-        };
+      cachedResearchAccess.value = {
+        ...cachedResearchAccess.value,
+        canUse: canUseResearch,
+        canUseResearch,
+        usage: {
+          ...usage,
+          allowed: canUseResearch
+        }
+      };
     }
     const usageChip = document.querySelector(".furimane-research-table__usage-count");
     if (!usageChip) {
-        return;
+      return;
     }
     usageChip.classList.toggle("furimane-research-table__usage-count--unlimited", usage.unlimited === true);
     const usageText = usageChip.querySelector(".furimane-research-table__usage-count-text");
-    const label = usage.unlimited
-        ? "無制限"
-        : `今月のリサーチ ${usage.used} / ${usage.limit}`;
+    const label = usage.unlimited ? "\u7121\u5236\u9650" : `\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1 ${usage.used} / ${usage.limit}`;
     if (usageText) {
-        usageText.textContent = label;
-        return;
+      usageText.textContent = label;
+      return;
     }
     usageChip.textContent = label;
-}
-function createChildAbortController(parentSignal) {
+  }
+  function createChildAbortController(parentSignal) {
     const controller = new AbortController();
     if (parentSignal.aborted) {
-        controller.abort();
-    }
-    else {
-        parentSignal.addEventListener("abort", () => controller.abort(), { once: true });
+      controller.abort();
+    } else {
+      parentSignal.addEventListener("abort", () => controller.abort(), { once: true });
     }
     return controller;
-}
-function getResearchErrorCopy(kind) {
+  }
+  function getResearchErrorCopy(kind) {
     switch (kind) {
-        case "auth":
-            return {
-                title: "フリマネにログインしてください",
-                description: "リサーチ機能を使うには、先にフリマネへログインしてください。",
-                actionLabel: "ログインページを開く"
-            };
-        case "plan":
-            return {
-                title: "リサーチ追加プランでご利用いただけます",
-                description: "この機能はリサーチ追加プラン加入後に利用できます。",
-                actionLabel: "プランを確認する"
-            };
-        case "limit":
-            return {
-                title: "今月のリサーチ上限に達しました",
-                description: "今月の利用上限に達しました。来月1日にリセットされます。",
-                actionLabel: "プランを確認する"
-            };
-        case "timeout":
-            return {
-                title: "通信エラーが発生しました",
-                description: "通信に時間がかかっています。少し時間を置いて再試行してください。",
-                actionLabel: "再試行する"
-            };
-        case "dom_changed":
-            return {
-                title: "メルカリのページ構造が変わっている可能性があります",
-                description: "商品情報を読み取れませんでした。ページを再読み込みしても直らない場合はサポートへ連絡してください。",
-                actionLabel: "再試行する"
-            };
-        case "mapping":
-            return {
-                title: "商品データを解析できませんでした",
-                description: "取得した商品データの形式に対応できませんでした。時間を置いて再試行してください。",
-                actionLabel: "再試行する"
-            };
-        case "scraping":
-            return {
-                title: "データ取得に失敗しました",
-                description: "ページを再読み込みしてお試しください。",
-                actionLabel: "再試行する"
-            };
-        default:
-            return {
-                title: "データ取得に失敗しました",
-                description: "ページを再読み込みしてお試しください。",
-                actionLabel: "再試行する"
-            };
+      case "auth":
+        return {
+          title: "\u30D5\u30EA\u30DE\u30CD\u306B\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044",
+          description: "\u30EA\u30B5\u30FC\u30C1\u6A5F\u80FD\u3092\u4F7F\u3046\u306B\u306F\u3001\u5148\u306B\u30D5\u30EA\u30DE\u30CD\u3078\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u30ED\u30B0\u30A4\u30F3\u30DA\u30FC\u30B8\u3092\u958B\u304F"
+        };
+      case "plan":
+        return {
+          title: "\u30EA\u30B5\u30FC\u30C1\u8FFD\u52A0\u30D7\u30E9\u30F3\u3067\u3054\u5229\u7528\u3044\u305F\u3060\u3051\u307E\u3059",
+          description: "\u3053\u306E\u6A5F\u80FD\u306F\u30EA\u30B5\u30FC\u30C1\u8FFD\u52A0\u30D7\u30E9\u30F3\u52A0\u5165\u5F8C\u306B\u5229\u7528\u3067\u304D\u307E\u3059\u3002",
+          actionLabel: "\u30D7\u30E9\u30F3\u3092\u78BA\u8A8D\u3059\u308B"
+        };
+      case "limit":
+        return {
+          title: "\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F",
+          description: "\u4ECA\u6708\u306E\u5229\u7528\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F\u3002\u6765\u67081\u65E5\u306B\u30EA\u30BB\u30C3\u30C8\u3055\u308C\u307E\u3059\u3002",
+          actionLabel: "\u30D7\u30E9\u30F3\u3092\u78BA\u8A8D\u3059\u308B"
+        };
+      case "timeout":
+        return {
+          title: "\u901A\u4FE1\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F",
+          description: "\u901A\u4FE1\u306B\u6642\u9593\u304C\u304B\u304B\u3063\u3066\u3044\u307E\u3059\u3002\u5C11\u3057\u6642\u9593\u3092\u7F6E\u3044\u3066\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
+      case "dom_changed":
+        return {
+          title: "\u30E1\u30EB\u30AB\u30EA\u306E\u30DA\u30FC\u30B8\u69CB\u9020\u304C\u5909\u308F\u3063\u3066\u3044\u308B\u53EF\u80FD\u6027\u304C\u3042\u308A\u307E\u3059",
+          description: "\u5546\u54C1\u60C5\u5831\u3092\u8AAD\u307F\u53D6\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u3082\u76F4\u3089\u306A\u3044\u5834\u5408\u306F\u30B5\u30DD\u30FC\u30C8\u3078\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
+      case "mapping":
+        return {
+          title: "\u5546\u54C1\u30C7\u30FC\u30BF\u3092\u89E3\u6790\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F",
+          description: "\u53D6\u5F97\u3057\u305F\u5546\u54C1\u30C7\u30FC\u30BF\u306E\u5F62\u5F0F\u306B\u5BFE\u5FDC\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u6642\u9593\u3092\u7F6E\u3044\u3066\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
+      case "scraping":
+        return {
+          title: "\u30C7\u30FC\u30BF\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F",
+          description: "\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
+      default:
+        return {
+          title: "\u30C7\u30FC\u30BF\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F",
+          description: "\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
     }
-}
-function renderResearchError(container, error, retry, retryCount = 0) {
+  }
+  function renderResearchError(container, error, retry, retryCount = 0) {
     const kind = getResearchErrorKind(error);
     if (kind === "limit") {
-        cachedResearchAccess = null;
+      cachedResearchAccess = null;
     }
     const copy = getResearchErrorCopy(kind);
     const errorMessage = getResearchErrorMessage(error);
@@ -513,228 +447,107 @@ function renderResearchError(container, error, retry, retryCount = 0) {
     const description = createParagraph(copy.description);
     wrapper.append(title, description);
     if (kind === "scraping" || kind === "unknown") {
-        const detail = createParagraph(`原因コード: ${errorMessage}`, "furimane-research-overlay__support-text");
-        wrapper.appendChild(detail);
+      const detail = createParagraph(`\u539F\u56E0\u30B3\u30FC\u30C9: ${errorMessage}`, "furimane-research-overlay__support-text");
+      wrapper.appendChild(detail);
     }
     if (kind === "auth" || kind === "plan" || kind === "limit") {
-        const link = document.createElement("a");
-        link.className = "furimane-research-overlay__link-button";
-        link.href = kind === "auth" ? `${appUrl}/login` : `${appUrl}/dashboard/research`;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = copy.actionLabel;
-        wrapper.appendChild(link);
-    }
-    else if (retryCount < FURIMANE_MAX_RETRY_COUNT) {
-        wrapper.appendChild(createButton(copy.actionLabel, retry, "secondary"));
-    }
-    else {
-        const support = createParagraph("再試行上限に達しました。ページを再読み込みしても直らない場合はサポートへ連絡してください。");
-        support.className = "furimane-research-overlay__support-text";
-        wrapper.appendChild(support);
+      const link = document.createElement("a");
+      link.className = "furimane-research-overlay__link-button";
+      link.href = kind === "auth" ? `${appUrl}/login` : `${appUrl}/dashboard/research`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = copy.actionLabel;
+      wrapper.appendChild(link);
+    } else if (retryCount < FURIMANE_MAX_RETRY_COUNT) {
+      wrapper.appendChild(createButton(copy.actionLabel, retry, "secondary"));
+    } else {
+      const support = createParagraph("\u518D\u8A66\u884C\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u3082\u76F4\u3089\u306A\u3044\u5834\u5408\u306F\u30B5\u30DD\u30FC\u30C8\u3078\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      support.className = "furimane-research-overlay__support-text";
+      wrapper.appendChild(support);
     }
     setOverlayBody(container, [wrapper]);
-}
-function renderResults(container, data, sourceLabel) {
+  }
+  function renderResults(container, data, sourceLabel) {
     const body = getOverlayBody(container);
     const table = getOverlayWindow().FurimanagerResearchTable;
     const api = getOverlayWindow().FurimanagerResearchApi;
     if (!body || !table) {
-        setOverlayBody(container, [createParagraph("リサーチ結果の表示に失敗しました。")]);
-        return;
+      setOverlayBody(container, [createParagraph("\u30EA\u30B5\u30FC\u30C1\u7D50\u679C\u306E\u8868\u793A\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002")]);
+      return;
     }
     table.renderTable(body, data.seller, data.listings, {
-        sourceLabel,
-        usage: currentResearchUsage,
-        stats: data.stats ?? null,
-        periodAnalysis: data.periodAnalysis ?? null,
-        onRefresh: () => {
-            return runResearchFlowSafe(container, { forceRefresh: true });
-        },
-        onSaveSeller: async (seller) => {
-            if (!api?.saveSeller) {
-                throw new Error("保存APIを読み込めませんでした。");
-            }
-            await api.saveSeller({
-                platform: seller.platform || getOverlayWindow().FurimanagerResearchScraper?.getPlatformFromCurrentUrl?.() || "mercari",
-                seller_id: seller.seller_id ?? "",
-                seller_name: seller.seller_name ?? null,
-                seller_url: seller.seller_url ?? window.location.href
-            });
+      sourceLabel,
+      usage: currentResearchUsage,
+      stats: data.stats ?? null,
+      periodAnalysis: data.periodAnalysis ?? null,
+      onRefresh: () => {
+        return runResearchFlowSafe(container, { forceRefresh: true });
+      },
+      onSaveSeller: async (seller) => {
+        if (!api?.saveSeller) {
+          throw new Error("\u4FDD\u5B58API\u3092\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
         }
+        await api.saveSeller({
+          platform: seller.platform || getOverlayWindow().FurimanagerResearchScraper?.getPlatformFromCurrentUrl?.() || "mercari",
+          seller_id: seller.seller_id ?? "",
+          seller_name: seller.seller_name ?? null,
+          seller_url: seller.seller_url ?? window.location.href
+        });
+      }
     });
-}
-function renderResearchProgress(container, seller, count, details, mode = "dom") {
+  }
+  function renderResearchProgress(container, seller, count, details, mode = "dom") {
     const progressListings = Array.isArray(details?.listings) ? details.listings : null;
     if (details?.phase === "dom_fallback" || mode === "dom_fallback") {
-        renderLoading(container, count > 0
-            ? `通常取得に切り替えて読み込み中... 現在 ${count}件`
-            : "取得が安定しないため、通常取得に切り替えています...");
-        return;
+      renderLoading(container, count > 0 ? `\u901A\u5E38\u53D6\u5F97\u306B\u5207\u308A\u66FF\u3048\u3066\u8AAD\u307F\u8FBC\u307F\u4E2D... \u73FE\u5728 ${count}\u4EF6` : "\u53D6\u5F97\u304C\u5B89\u5B9A\u3057\u306A\u3044\u305F\u3081\u3001\u901A\u5E38\u53D6\u5F97\u306B\u5207\u308A\u66FF\u3048\u3066\u3044\u307E\u3059...");
+      return;
     }
     if (details?.phase === "api_progress" || details?.partial === true) {
-        const totalCount = typeof details?.totalCount === "number" ? details.totalCount : count;
-        renderLoading(container, `リサーチデータを取得中... 現在 ${totalCount}件`);
-        return;
+      const totalCount2 = typeof details?.totalCount === "number" ? details.totalCount : count;
+      renderLoading(container, `\u30EA\u30B5\u30FC\u30C1\u30C7\u30FC\u30BF\u3092\u53D6\u5F97\u4E2D... \u73FE\u5728 ${totalCount2}\u4EF6`);
+      return;
     }
     if (!progressListings || progressListings.length === 0) {
-        renderLoading(container, mode === "api"
-            ? `リサーチデータを取得中... 現在 ${count}件`
-            : `通常取得中... 現在 ${count}件`);
-        return;
+      renderLoading(container, mode === "api" ? `\u30EA\u30B5\u30FC\u30C1\u30C7\u30FC\u30BF\u3092\u53D6\u5F97\u4E2D... \u73FE\u5728 ${count}\u4EF6` : `\u901A\u5E38\u53D6\u5F97\u4E2D... \u73FE\u5728 ${count}\u4EF6`);
+      return;
     }
     const totalCount = typeof details?.totalCount === "number" ? details.totalCount : progressListings.length;
-    const sourceLabel = details?.phase === "api_done" || details?.partial === false
-        ? `取得完了：${totalCount}件`
-        : `取得中：${totalCount}件を表示中`;
+    const sourceLabel = details?.phase === "api_done" || details?.partial === false ? `\u53D6\u5F97\u5B8C\u4E86\uFF1A${totalCount}\u4EF6` : `\u53D6\u5F97\u4E2D\uFF1A${totalCount}\u4EF6\u3092\u8868\u793A\u4E2D`;
     renderResults(container, {
-        seller: {
-            ...seller,
-            fetched_at: new Date().toISOString()
-        },
-        listings: progressListings
+      seller: {
+        ...seller,
+        fetched_at: (/* @__PURE__ */ new Date()).toISOString()
+      },
+      listings: progressListings
     }, sourceLabel);
-}
-function saveResearchDataInBackground(data, signal) {
+  }
+  function saveResearchDataInBackground(data, signal) {
     const api = getOverlayWindow().FurimanagerResearchApi;
     if (!api) {
-        return;
+      return;
     }
     void api.saveResearchData(data.seller, data.listings, { signal }).then((result) => {
-        const usage = result && typeof result === "object" ? result.usage : null;
-        updateResearchUsageChip(usage);
+      const usage = result && typeof result === "object" ? result.usage : null;
+      updateResearchUsageChip(usage);
     }).catch((error) => {
-        if (error instanceof DOMException && error.name === "AbortError") {
-            return;
-        }
-        console.warn("[furimane-research] background save failed", error);
-        showResearchNotice("サーバー保存に失敗しました。ブラウザ内キャッシュのみ保存されています。");
-    });
-}
-function persistResearchDataAfterPaint(data, signal) {
-    window.setTimeout(() => {
-        writeLocalResearchCache(data);
-        if (data.savedOnServer === true) {
-            updateResearchUsageChip(data.usage ?? null);
-            return;
-        }
-        saveResearchDataInBackground(data, signal);
-    }, 0);
-}
-async function runResearchFlow(container, options = {}) {
-    currentAbortController?.abort();
-    currentAbortController = new AbortController();
-    const { signal } = currentAbortController;
-    const api = getOverlayWindow().FurimanagerResearchApi;
-    const scraper = getOverlayWindow().FurimanagerResearchScraper;
-    let renderedCache = false;
-    if (!api || !scraper) {
-        renderError(container, "リサーチ機能の読み込みに失敗しました。", () => runResearchFlow(container));
+      if (error instanceof DOMException && error.name === "AbortError") {
         return;
-    }
-    try {
-        renderLoading(container, "アクセス確認中...");
-        const seller = scraper.getSellerContextFromCurrentPage?.();
-        if (!seller) {
-            renderError(container, "出品者情報を取得できませんでした。", () => runResearchFlow(container));
-            return;
-        }
-        const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
-        let access;
-        try {
-            access = await checkResearchAccessWithCache(api, signal);
-        }
-        catch (error) {
-            if (error instanceof DOMException && error.name === "AbortError") {
-                throw error;
-            }
-            if (hasRenderableResearchData(localCachedData)) {
-                renderResults(container, localCachedData, "ブラウザキャッシュ");
-                renderedCache = true;
-                return;
-            }
-            if (canContinueResearchWithoutAccessCheck(error, api)) {
-                console.warn("[furimane-research] access check failed; continuing in local dev mode", error);
-                access = { canUseResearch: true };
-            }
-            else {
-                throw error;
-            }
-        }
-        if (!(access.canUseResearch ?? access.canUse)) {
-            if (access.usage?.allowed === false) {
-                const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
-                const cachedData = getCachedResearchData(cache);
-                if (hasRenderableResearchData(cachedData)) {
-                    renderResults(container, cachedData, "24時間以内のキャッシュ");
-                    writeLocalResearchCache(cachedData);
-                    return;
-                }
-                renderResearchError(container, new Error("research_monthly_limit_exceeded"), () => runResearchFlow(container));
-                return;
-            }
-            renderAccessLocked(container);
-            return;
-        }
-        renderLoading(container, "キャッシュ確認中...");
-        const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
-        const cachedData = getCachedResearchData(cache);
-        if (hasRenderableResearchData(cachedData)) {
-            renderResults(container, cachedData, "24\u6642\u9593\u4ee5\u5185\u306e\u30ad\u30e3\u30c3\u30b7\u30e5");
-            writeLocalResearchCache(cachedData);
-            renderedCache = true;
-        }
-        const strategy = getResearchFetchStrategy();
-        console.log("[furimane-research] fetch strategy selected", {
-            strategy,
-            sellerId: seller.seller_id
-        });
-        if (!renderedCache) {
-            renderLoading(container, strategy === "api"
-                ? "\u30ea\u30b5\u30fc\u30c1\u30c7\u30fc\u30bf\u3092\u53d6\u5f97\u4e2d... \u53d6\u5f97\u3067\u304d\u305f\u5206\u304b\u3089\u53cd\u6620\u3057\u307e\u3059"
-                : "\u901a\u5e38\u53d6\u5f97\u4e2d... \u73fe\u5728 0\u4ef6");
-        }
-        let progressMode = strategy;
-        const fetchResearchData = getResearchFetchFunction(scraper);
-        if (!fetchResearchData) {
-            throw new Error("research_scraper_method_missing");
-        }
-        const scraped = await fetchResearchData({
-            strategy,
-            signal,
-            onProgress: (count, details) => {
-                if (details?.phase === "dom_fallback") {
-                    progressMode = "dom_fallback";
-                }
-                if (renderedCache) {
-                    return;
-                }
-                renderResearchProgress(container, seller, count, details, progressMode);
-            }
-        });
-        const finalSourceLabel = strategy === "api" && scraped.strategy === "api"
-            ? "取得完了"
-            : strategy === "api" && scraped.strategy === "dom"
-                ? "通常取得で表示"
-                : "新規取得";
-        scraped.seller.fetched_at = new Date().toISOString();
-        renderResults(container, scraped, finalSourceLabel);
-        persistResearchDataAfterPaint(scraped, signal);
-    }
-    catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-            return;
-        }
-        const message = error instanceof Error ? error.message : "取得に失敗しました。";
-        console.error("[furimane-research] flow failed", error);
-        if (renderedCache) {
-            console.warn("[furimane-research] refresh failed; showing cached result");
-            return;
-        }
-        renderError(container, message, () => runResearchFlow(container));
-    }
-}
-async function runResearchFlowSafe(container, options = {}) {
+      }
+      console.warn("[furimane-research] background save failed", error);
+      showResearchNotice("\u30B5\u30FC\u30D0\u30FC\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u30D6\u30E9\u30A6\u30B6\u5185\u30AD\u30E3\u30C3\u30B7\u30E5\u306E\u307F\u4FDD\u5B58\u3055\u308C\u3066\u3044\u307E\u3059\u3002");
+    });
+  }
+  function persistResearchDataAfterPaint(data, signal) {
+    window.setTimeout(() => {
+      writeLocalResearchCache(data);
+      if (data.savedOnServer === true) {
+        updateResearchUsageChip(data.usage ?? null);
+        return;
+      }
+      saveResearchDataInBackground(data, signal);
+    }, 0);
+  }
+  async function runResearchFlowSafe(container, options = {}) {
     currentAbortController?.abort();
     currentAbortController = new AbortController();
     const { signal } = currentAbortController;
@@ -744,172 +557,163 @@ async function runResearchFlowSafe(container, options = {}) {
     const scraper = getOverlayWindow().FurimanagerResearchScraper;
     let renderedCache = false;
     if (!api || !scraper) {
-        const error = new Error("scraping_failed");
-        console.error("[furimane-research] modules missing", { hasApi: Boolean(api), hasScraper: Boolean(scraper) });
-        renderResearchError(container, error, retry, retryCount);
-        return;
+      const error = new Error("scraping_failed");
+      console.error("[furimane-research] modules missing", { hasApi: Boolean(api), hasScraper: Boolean(scraper) });
+      renderResearchError(container, error, retry, retryCount);
+      return;
     }
     try {
-        renderLoading(container, "\u30a2\u30af\u30bb\u30b9\u78ba\u8a8d\u4e2d...");
-        const seller = scraper.getSellerContextFromCurrentPage?.();
-        if (!seller) {
-            const error = new Error("seller_id_not_found");
-            console.error("[furimane-research] seller context not found", { url: window.location.href });
-            renderResearchError(container, error, retry, retryCount);
-            return;
-        }
-        const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
-        let access;
-        try {
-            access = await checkResearchAccessWithCache(api, signal);
-        }
-        catch (error) {
-            if (error instanceof DOMException && error.name === "AbortError") {
-                throw error;
-            }
-            if (hasRenderableResearchData(localCachedData)) {
-                renderResults(container, localCachedData, "ブラウザキャッシュ");
-                return;
-            }
-            if (canContinueResearchWithoutAccessCheck(error, api)) {
-                console.warn("[furimane-research] access check failed; continuing in local dev mode", error);
-                access = { canUseResearch: true };
-            }
-            else {
-                throw error;
-            }
-        }
-        if (!(access.canUseResearch ?? access.canUse)) {
-            if (access.usage?.allowed === false) {
-                const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
-                const cachedData = getCachedResearchData(cache);
-                if (hasRenderableResearchData(cachedData)) {
-                    renderResults(container, cachedData, "24時間以内のキャッシュ");
-                    writeLocalResearchCache(cachedData);
-                    return;
-                }
-            }
-            renderResearchError(container, new Error(access.usage?.allowed === false ? "research_monthly_limit_exceeded" : "plan_required"), retry, retryCount);
-            return;
+      renderLoading(container, "\u30A2\u30AF\u30BB\u30B9\u78BA\u8A8D\u4E2D...");
+      const seller = scraper.getSellerContextFromCurrentPage?.();
+      if (!seller) {
+        const error = new Error("seller_id_not_found");
+        console.error("[furimane-research] seller context not found", { url: window.location.href });
+        renderResearchError(container, error, retry, retryCount);
+        return;
+      }
+      const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
+      let access;
+      try {
+        access = await checkResearchAccessWithCache(api, signal);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          throw error;
         }
         if (hasRenderableResearchData(localCachedData)) {
-            renderResults(container, localCachedData, "ブラウザキャッシュ");
+          renderResults(container, localCachedData, "\u30D6\u30E9\u30A6\u30B6\u30AD\u30E3\u30C3\u30B7\u30E5");
+          return;
+        }
+        if (canContinueResearchWithoutAccessCheck(error, api)) {
+          console.warn("[furimane-research] access check failed; continuing in local dev mode", error);
+          access = { canUseResearch: true };
+        } else {
+          throw error;
+        }
+      }
+      if (!(access.canUseResearch ?? access.canUse)) {
+        if (access.usage?.allowed === false) {
+          const cache = options.forceRefresh ? null : await api.checkCache(seller.seller_id, seller.platform, { signal });
+          const cachedData = getCachedResearchData(cache);
+          if (hasRenderableResearchData(cachedData)) {
+            renderResults(container, cachedData, "24\u6642\u9593\u4EE5\u5185\u306E\u30AD\u30E3\u30C3\u30B7\u30E5");
+            writeLocalResearchCache(cachedData);
             return;
+          }
         }
-        const strategy = getResearchFetchStrategy();
-        console.log("[furimane-research] fetch strategy selected", {
-            strategy,
-            sellerId: seller.seller_id
-        });
-        const fetchResearchData = getResearchFetchFunction(scraper);
-        if (!fetchResearchData) {
-            throw new Error("research_scraper_method_missing");
-        }
-        renderLoading(container, options.forceRefresh ? "最新データを取得中..." : "リサーチデータを取得中...");
-        let cacheDecisionDone = options.forceRefresh === true;
-        let flowSettled = false;
-        let progressMode = strategy;
-        const liveAbortController = createChildAbortController(signal);
-        const liveFetchPromise = fetchResearchData({
-            strategy,
-            signal: liveAbortController.signal,
-            onProgress: (count, details) => {
-                if (details?.phase === "dom_fallback") {
-                    progressMode = "dom_fallback";
-                }
-                if (!cacheDecisionDone || flowSettled) {
-                    return;
-                }
-                renderResearchProgress(container, seller, count, details, progressMode);
-            }
-        }).then((scraped) => ({ type: "live", scraped }), (error) => ({ type: "live_error", error }));
-        const cachePromise = options.forceRefresh
-            ? Promise.resolve({ type: "cache", cachedData: null })
-            : api.checkCache(seller.seller_id, seller.platform, { signal })
-                .then((cache) => ({ type: "cache", cachedData: getCachedResearchData(cache) }))
-                .catch((error) => {
-                if (error instanceof DOMException && error.name === "AbortError") {
-                    throw error;
-                }
-                console.warn("[furimane-research] cache check failed; continuing with live fetch", error);
-                return { type: "cache", cachedData: null };
-            });
-        const firstResult = await Promise.race([cachePromise, liveFetchPromise]);
-        if (firstResult.type === "cache") {
-            cacheDecisionDone = true;
-            if (hasRenderableResearchData(firstResult.cachedData)) {
-                flowSettled = true;
-                liveAbortController.abort();
-                renderResults(container, firstResult.cachedData, "24時間以内のキャッシュ");
-                writeLocalResearchCache(firstResult.cachedData);
-                return;
-            }
-            renderLoading(container, strategy === "api"
-                ? "リサーチデータを取得中... 取得できた分から反映します"
-                : "通常取得中... 現在 0件");
-            const liveResult = await liveFetchPromise;
-            if (liveResult.type === "live_error") {
-                throw liveResult.error;
-            }
-            const scraped = liveResult.scraped;
-            const finalSourceLabel = strategy === "api" && scraped.strategy === "api"
-                ? "取得完了"
-                : strategy === "api" && scraped.strategy === "dom"
-                    ? "通常取得で表示"
-                    : "新規取得";
-            flowSettled = true;
-            scraped.seller.fetched_at = new Date().toISOString();
-            renderResults(container, scraped, finalSourceLabel);
-            persistResearchDataAfterPaint(scraped, signal);
-            return;
-        }
-        if (firstResult.type === "live_error") {
-            throw firstResult.error;
-        }
-        flowSettled = true;
-        cacheDecisionDone = true;
-        const scraped = firstResult.scraped;
-        const finalSourceLabel = strategy === "api" && scraped.strategy === "api"
-            ? "取得完了"
-            : strategy === "api" && scraped.strategy === "dom"
-                ? "通常取得で表示"
-                : "新規取得";
-        scraped.seller.fetched_at = new Date().toISOString();
-        renderResults(container, scraped, finalSourceLabel);
-        persistResearchDataAfterPaint(scraped, signal);
-    }
-    catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-            return;
-        }
-        console.error("[furimane-research] research flow failed", error);
-        if (renderedCache) {
-            console.warn("[furimane-research] refresh failed; showing cached result");
-            return;
-        }
-        renderResearchError(container, error, retry, retryCount);
-    }
-}
-function removeOpenButton() {
-    document.getElementById(FURIMANE_OPEN_BUTTON_ID)?.remove();
-}
-function createOpenButton() {
-    if (document.getElementById(FURIMANE_OPEN_BUTTON_ID)) {
+        renderResearchError(
+          container,
+          new Error(access.usage?.allowed === false ? "research_monthly_limit_exceeded" : "plan_required"),
+          retry,
+          retryCount
+        );
         return;
+      }
+      if (hasRenderableResearchData(localCachedData)) {
+        renderResults(container, localCachedData, "\u30D6\u30E9\u30A6\u30B6\u30AD\u30E3\u30C3\u30B7\u30E5");
+        return;
+      }
+      const strategy = getResearchFetchStrategy();
+      console.log("[furimane-research] fetch strategy selected", {
+        strategy,
+        sellerId: seller.seller_id
+      });
+      const fetchResearchData = getResearchFetchFunction(scraper);
+      if (!fetchResearchData) {
+        throw new Error("research_scraper_method_missing");
+      }
+      renderLoading(container, options.forceRefresh ? "\u6700\u65B0\u30C7\u30FC\u30BF\u3092\u53D6\u5F97\u4E2D..." : "\u30EA\u30B5\u30FC\u30C1\u30C7\u30FC\u30BF\u3092\u53D6\u5F97\u4E2D...");
+      let cacheDecisionDone = options.forceRefresh === true;
+      let flowSettled = false;
+      let progressMode = strategy;
+      const liveAbortController = createChildAbortController(signal);
+      const liveFetchPromise = fetchResearchData({
+        strategy,
+        signal: liveAbortController.signal,
+        onProgress: (count, details) => {
+          if (details?.phase === "dom_fallback") {
+            progressMode = "dom_fallback";
+          }
+          if (!cacheDecisionDone || flowSettled) {
+            return;
+          }
+          renderResearchProgress(container, seller, count, details, progressMode);
+        }
+      }).then(
+        (scraped2) => ({ type: "live", scraped: scraped2 }),
+        (error) => ({ type: "live_error", error })
+      );
+      const cachePromise = options.forceRefresh ? Promise.resolve({ type: "cache", cachedData: null }) : api.checkCache(seller.seller_id, seller.platform, { signal }).then((cache) => ({ type: "cache", cachedData: getCachedResearchData(cache) })).catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          throw error;
+        }
+        console.warn("[furimane-research] cache check failed; continuing with live fetch", error);
+        return { type: "cache", cachedData: null };
+      });
+      const firstResult = await Promise.race([cachePromise, liveFetchPromise]);
+      if (firstResult.type === "cache") {
+        cacheDecisionDone = true;
+        if (hasRenderableResearchData(firstResult.cachedData)) {
+          flowSettled = true;
+          liveAbortController.abort();
+          renderResults(container, firstResult.cachedData, "24\u6642\u9593\u4EE5\u5185\u306E\u30AD\u30E3\u30C3\u30B7\u30E5");
+          writeLocalResearchCache(firstResult.cachedData);
+          return;
+        }
+        renderLoading(container, strategy === "api" ? "\u30EA\u30B5\u30FC\u30C1\u30C7\u30FC\u30BF\u3092\u53D6\u5F97\u4E2D... \u53D6\u5F97\u3067\u304D\u305F\u5206\u304B\u3089\u53CD\u6620\u3057\u307E\u3059" : "\u901A\u5E38\u53D6\u5F97\u4E2D... \u73FE\u5728 0\u4EF6");
+        const liveResult = await liveFetchPromise;
+        if (liveResult.type === "live_error") {
+          throw liveResult.error;
+        }
+        const scraped2 = liveResult.scraped;
+        const finalSourceLabel2 = strategy === "api" && scraped2.strategy === "api" ? "\u53D6\u5F97\u5B8C\u4E86" : strategy === "api" && scraped2.strategy === "dom" ? "\u901A\u5E38\u53D6\u5F97\u3067\u8868\u793A" : "\u65B0\u898F\u53D6\u5F97";
+        flowSettled = true;
+        scraped2.seller.fetched_at = (/* @__PURE__ */ new Date()).toISOString();
+        renderResults(container, scraped2, finalSourceLabel2);
+        persistResearchDataAfterPaint(scraped2, signal);
+        return;
+      }
+      if (firstResult.type === "live_error") {
+        throw firstResult.error;
+      }
+      flowSettled = true;
+      cacheDecisionDone = true;
+      const scraped = firstResult.scraped;
+      const finalSourceLabel = strategy === "api" && scraped.strategy === "api" ? "\u53D6\u5F97\u5B8C\u4E86" : strategy === "api" && scraped.strategy === "dom" ? "\u901A\u5E38\u53D6\u5F97\u3067\u8868\u793A" : "\u65B0\u898F\u53D6\u5F97";
+      scraped.seller.fetched_at = (/* @__PURE__ */ new Date()).toISOString();
+      renderResults(container, scraped, finalSourceLabel);
+      persistResearchDataAfterPaint(scraped, signal);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      console.error("[furimane-research] flow failed", error);
+      if (renderedCache) {
+        console.warn("[furimane-research] refresh failed; showing cached result");
+        return;
+      }
+      renderResearchError(container, error, retry, retryCount);
+    }
+  }
+  function removeOpenButton() {
+    document.getElementById(FURIMANE_OPEN_BUTTON_ID)?.remove();
+  }
+  function createOpenButton() {
+    if (document.getElementById(FURIMANE_OPEN_BUTTON_ID)) {
+      return;
     }
     const button = document.createElement("button");
     button.id = FURIMANE_OPEN_BUTTON_ID;
     button.className = "furimane-research-open-button";
     button.type = "button";
-    button.textContent = "リサーチを開く";
+    button.textContent = "\u30EA\u30B5\u30FC\u30C1\u3092\u958B\u304F";
     button.addEventListener("click", () => {
-        localStorage.removeItem(FURIMANE_CLOSED_STORAGE_KEY);
-        button.remove();
-        renderResearchOverlay();
+      localStorage.removeItem(FURIMANE_CLOSED_STORAGE_KEY);
+      button.remove();
+      renderResearchOverlay();
     });
     document.body.appendChild(button);
-}
-function createResearchOverlay() {
+  }
+  function createResearchOverlay() {
     const container = document.createElement("div");
     container.id = FURIMANE_OVERLAY_ID;
     container.className = "furimane-research-overlay";
@@ -917,153 +721,153 @@ function createResearchOverlay() {
     header.className = "furimane-research-overlay__header";
     const title = document.createElement("div");
     title.className = "furimane-research-overlay__title";
-    title.textContent = "フリマネ リサーチ";
+    title.textContent = "\u30D5\u30EA\u30DE\u30CD \u30EA\u30B5\u30FC\u30C1";
     const closeButton = document.createElement("button");
     closeButton.className = "furimane-research-overlay__close";
     closeButton.type = "button";
-    closeButton.setAttribute("aria-label", "リサーチを閉じる");
-    closeButton.textContent = "×";
+    closeButton.setAttribute("aria-label", "\u30EA\u30B5\u30FC\u30C1\u3092\u9589\u3058\u308B");
+    closeButton.textContent = "\xD7";
     closeButton.addEventListener("click", () => {
-        currentAbortController?.abort();
-        localStorage.setItem(FURIMANE_CLOSED_STORAGE_KEY, "true");
-        container.remove();
-        createOpenButton();
+      currentAbortController?.abort();
+      localStorage.setItem(FURIMANE_CLOSED_STORAGE_KEY, "true");
+      container.remove();
+      createOpenButton();
     });
     header.append(title, closeButton);
     const body = document.createElement("div");
     body.className = "furimane-research-overlay__body";
-    body.appendChild(createParagraph("データ取得中..."));
+    body.appendChild(createParagraph("\u30C7\u30FC\u30BF\u53D6\u5F97\u4E2D..."));
     container.append(header, body);
     return container;
-}
-function renderResearchOverlay() {
+  }
+  function renderResearchOverlay() {
     const supportStatus = getResearchPageSupportStatus();
     const pageKey = getResearchPageKey();
     if (supportStatus === "unsupported") {
-        logUnsupportedResearchPage();
-        return;
+      logUnsupportedResearchPage();
+      return;
     }
     if (supportStatus !== "supported" || !pageKey) {
-        return;
+      return;
     }
     currentResearchPageKey = pageKey;
     if (document.getElementById(FURIMANE_OVERLAY_ID)) {
-        return;
+      return;
     }
     if (localStorage.getItem(FURIMANE_CLOSED_STORAGE_KEY) === "true") {
-        createOpenButton();
-        return;
+      createOpenButton();
+      return;
     }
     removeOpenButton();
     const overlay = createResearchOverlay();
     let insertTarget = findOverlayInsertTarget();
     if (!insertTarget) {
-        overlayInsertRetryCount += 1;
-        if (overlayInsertRetryCount <= FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT) {
-            scheduleResearchOverlaySync();
-            return;
-        }
-        insertTarget = findOverlayFallbackInsertTarget();
-        if (!insertTarget) {
-            scheduleResearchOverlaySync();
-            return;
-        }
-    }
-    else {
-        overlayInsertRetryCount = 0;
+      overlayInsertRetryCount += 1;
+      if (overlayInsertRetryCount <= FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT) {
+        scheduleResearchOverlaySync();
+        return;
+      }
+      insertTarget = findOverlayFallbackInsertTarget();
+      if (!insertTarget) {
+        scheduleResearchOverlaySync();
+        return;
+      }
+    } else {
+      overlayInsertRetryCount = 0;
     }
     if (insertTarget.isFixedFallback) {
-        overlay.classList.add("furimane-research-overlay--fixed");
+      overlay.classList.add("furimane-research-overlay--fixed");
     }
     insertTarget.parent.insertBefore(overlay, insertTarget.before);
     console.log("[furimane-research] overlay inserted", { reason: insertTarget.reason });
     void runResearchFlowSafe(overlay);
-}
-function removeResearchOverlayUi() {
+  }
+  function removeResearchOverlayUi() {
     currentAbortController?.abort();
     currentAbortController = null;
     document.getElementById(FURIMANE_OVERLAY_ID)?.remove();
     removeOpenButton();
-}
-async function syncResearchOverlayForCurrentPage() {
-    if (!(await isResearchFeatureEnabled())) {
-        removeResearchOverlayUi();
-        currentResearchPageKey = null;
-        overlayInsertRetryCount = 0;
-        return;
+  }
+  async function syncResearchOverlayForCurrentPage() {
+    if (!await isResearchFeatureEnabled()) {
+      removeResearchOverlayUi();
+      currentResearchPageKey = null;
+      overlayInsertRetryCount = 0;
+      return;
     }
     const supportStatus = getResearchPageSupportStatus();
     const pageKey = getResearchPageKey();
     if (supportStatus !== "supported" || !pageKey) {
-        if (currentResearchPageKey || document.getElementById(FURIMANE_OVERLAY_ID)) {
-            removeResearchOverlayUi();
-        }
-        currentResearchPageKey = null;
-        overlayInsertRetryCount = 0;
-        return;
+      if (currentResearchPageKey || document.getElementById(FURIMANE_OVERLAY_ID)) {
+        removeResearchOverlayUi();
+      }
+      currentResearchPageKey = null;
+      overlayInsertRetryCount = 0;
+      return;
     }
     if (currentResearchPageKey && currentResearchPageKey !== pageKey) {
-        removeResearchOverlayUi();
-        overlayInsertRetryCount = 0;
+      removeResearchOverlayUi();
+      overlayInsertRetryCount = 0;
     }
     currentResearchPageKey = pageKey;
     renderResearchOverlay();
-}
-function scheduleResearchOverlaySync() {
+  }
+  function scheduleResearchOverlaySync() {
     if (routeSyncTimerId !== null) {
-        window.clearTimeout(routeSyncTimerId);
+      window.clearTimeout(routeSyncTimerId);
     }
     routeSyncTimerId = window.setTimeout(() => {
-        routeSyncTimerId = null;
-        void waitForReady().then(() => syncResearchOverlayForCurrentPage());
+      routeSyncTimerId = null;
+      void waitForReady().then(() => syncResearchOverlayForCurrentPage());
     }, FURIMANE_ROUTE_SYNC_DELAY_MS);
-}
-function handlePossibleResearchRouteChange() {
+  }
+  function handlePossibleResearchRouteChange() {
     if (lastObservedUrl === window.location.href) {
-        return;
+      return;
     }
     lastObservedUrl = window.location.href;
     scheduleResearchOverlaySync();
-}
-function installResearchNavigationListener() {
+  }
+  function installResearchNavigationListener() {
     const originalPushState = window.history.pushState;
     const originalReplaceState = window.history.replaceState;
     window.history.pushState = function pushState(data, unused, url) {
-        originalPushState.call(this, data, unused, url);
-        handlePossibleResearchRouteChange();
+      originalPushState.call(this, data, unused, url);
+      handlePossibleResearchRouteChange();
     };
     window.history.replaceState = function replaceState(data, unused, url) {
-        originalReplaceState.call(this, data, unused, url);
-        handlePossibleResearchRouteChange();
+      originalReplaceState.call(this, data, unused, url);
+      handlePossibleResearchRouteChange();
     };
     window.addEventListener("popstate", () => {
-        handlePossibleResearchRouteChange();
+      handlePossibleResearchRouteChange();
     });
     window.addEventListener("pageshow", () => {
-        scheduleResearchOverlaySync();
+      scheduleResearchOverlaySync();
     });
     const observer = new MutationObserver(handlePossibleResearchRouteChange);
     observer.observe(document.documentElement, { childList: true, subtree: true });
-}
-function installResearchSettingListener() {
+  }
+  function installResearchSettingListener() {
     if (typeof chrome === "undefined" || !chrome.storage?.onChanged) {
-        return;
+      return;
     }
     chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName !== "local" || !(FURIMANE_RESEARCH_ENABLED_KEY in changes)) {
-            return;
-        }
-        if (changes[FURIMANE_RESEARCH_ENABLED_KEY]?.newValue === false) {
-            removeResearchOverlayUi();
-            currentResearchPageKey = null;
-            return;
-        }
-        scheduleResearchOverlaySync();
+      if (areaName !== "local" || !(FURIMANE_RESEARCH_ENABLED_KEY in changes)) {
+        return;
+      }
+      if (changes[FURIMANE_RESEARCH_ENABLED_KEY]?.newValue === false) {
+        removeResearchOverlayUi();
+        currentResearchPageKey = null;
+        return;
+      }
+      scheduleResearchOverlaySync();
     });
-}
-window.addEventListener("beforeunload", () => {
+  }
+  window.addEventListener("beforeunload", () => {
     currentAbortController?.abort();
-});
-installResearchNavigationListener();
-installResearchSettingListener();
-void waitForReady().then(() => syncResearchOverlayForCurrentPage());
+  });
+  installResearchNavigationListener();
+  installResearchSettingListener();
+  void waitForReady().then(() => syncResearchOverlayForCurrentPage());
+})();

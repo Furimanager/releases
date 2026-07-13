@@ -23,6 +23,7 @@ export default [
       // まずは構文エラーと明らかなバグだけを検出。スタイルは Prettier に任せる。
       "no-unused-vars": "off",
       "no-undef": "error",
+      "no-empty": ["error", { allowEmptyCatch: true }],
       "no-redeclare": "error",
       "no-unreachable": "error",
       "no-useless-escape": "off"
