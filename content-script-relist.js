@@ -433,7 +433,10 @@
       if (sessionStorage.getItem(LISTING_SUBMIT_DONE_KEY) === "true" && !findFinalListingSubmitButton()) {
         return;
       }
-      await ensurePriceBeforeFinalAction(item);
+      if (!await ensurePriceBeforeFinalAction(item)) {
+        showToast("\u4FA1\u683C\u304C\u5143\u306E\u5546\u54C1\u4FA1\u683C\u3068\u4E00\u81F4\u3057\u306A\u3044\u305F\u3081\u3001\u51FA\u54C1\u3092\u6B62\u3081\u307E\u3057\u305F");
+        return;
+      }
       await sleep(SAFE_CLICK_SETTLE_MS);
       const button = await waitForFinalListingSubmitButton();
       if (!button) {
@@ -467,14 +470,6 @@
             message: completionMessage2
           };
         }
-        if (current2 === "/sell") {
-          return {
-            result: "success",
-            signal: "url-sell",
-            from,
-            to: current2
-          };
-        }
         await sleep(RETRY_INTERVAL_MS);
       }
       const current = window.location.pathname;
@@ -488,18 +483,10 @@
           message: completionMessage
         };
       }
-      if (current === "/sell") {
-        return {
-          result: "success",
-          signal: "url-sell",
-          from,
-          to: current
-        };
-      }
       const message = findListingBlockingMessage();
       return {
         result: "failed",
-        signal: message ? "validation-or-blocking-message" : "no-sell-url",
+        signal: message ? "validation-or-blocking-message" : current === "/sell" ? "sell-url-without-completion-message" : "no-completion-message",
         from,
         current,
         message
@@ -509,8 +496,22 @@
       logRelistFlow("\u5B8C\u4E86\u691C\u77E5", completion, { force: true });
     }
     function findListingCompletionMessage() {
-      const bodyText = normalizeText(document.body?.innerText ?? "");
-      return bodyText.includes("\u51FA\u54C1\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F") ? "\u51FA\u54C1\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F" : void 0;
+      const selectors = [
+        '[data-testid="listing-complete-popup"]',
+        "#listing-complete-popup",
+        '[role="dialog"]',
+        '[aria-modal="true"]',
+        ".merModalBase",
+        ".popup"
+      ];
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        const text = normalizeText(element?.textContent ?? "");
+        if (text.includes("\u51FA\u54C1\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F")) {
+          return "\u51FA\u54C1\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F";
+        }
+      }
+      return void 0;
     }
     function findListingBlockingMessage() {
       const patterns = [/選択してください/, /入力してください/, /必須項目/, /必須/, /エラー/];
@@ -570,7 +571,10 @@
       if (sessionStorage.getItem(DRAFT_SAVE_DONE_KEY) === "true" && !findDraftSaveButton()) {
         return;
       }
-      await ensurePriceBeforeFinalAction(item);
+      if (!await ensurePriceBeforeFinalAction(item)) {
+        showToast("\u4FA1\u683C\u304C\u5143\u306E\u5546\u54C1\u4FA1\u683C\u3068\u4E00\u81F4\u3057\u306A\u3044\u305F\u3081\u3001\u4E0B\u66F8\u304D\u4FDD\u5B58\u3092\u6B62\u3081\u307E\u3057\u305F");
+        return;
+      }
       await sleep(SAFE_CLICK_SETTLE_MS);
       const button = await waitForDraftSaveButton();
       if (!button) {
@@ -625,14 +629,22 @@
     }
     async function ensurePriceBeforeFinalAction(item) {
       if (typeof item.price !== "number") {
-        return;
+        return false;
       }
       for (let attempt = 0; attempt < 5; attempt += 1) {
         if (fillPriceField(item.price)) {
-          return;
+          return true;
         }
         await sleep(RETRY_INTERVAL_MS);
       }
+      logRelistFlow("\u4FA1\u683C\u30C1\u30A7\u30C3\u30AF\u5931\u6557", {
+        pathname: window.location.pathname,
+        mode: item.mode,
+        expectedPrice: item.price,
+        priceFieldFound: findPriceField() !== null,
+        priceFieldValue: findPriceField()?.value ?? null
+      }, { force: true });
+      return false;
     }
     async function waitForDraftSaveButton() {
       const startedAt = Date.now();
@@ -928,7 +940,7 @@
       if (field) {
         return parsePriceValue(field.value) === price;
       }
-      return isPriceAlreadyDisplayed(price);
+      return false;
     }
     async function fillImageField(imageUrls) {
       if (sessionStorage.getItem(IMAGE_DONE_KEY) === "true") {
@@ -2101,6 +2113,8 @@
     }
     function findPriceField() {
       const directField = findInputLike([
+        'input[name="price"][data-testid="price-input"]',
+        'input[data-testid="price-input"]',
         'input[name="price"]',
         'input[name*="price"]',
         'input[placeholder*="\u4FA1\u683C"]',
@@ -2119,7 +2133,7 @@
           getNearbySearchText(input)
         ].filter(Boolean).join(" "));
         return /価格|販売価格|開始価格/.test(text);
-      }) ?? inputs.find((input) => input.inputMode === "numeric") ?? null;
+      }) ?? null;
     }
     function fillPriceField(price) {
       const field = findPriceField();
@@ -2128,9 +2142,9 @@
           return true;
         }
         setFieldValue(field, String(price));
-        return true;
+        return parsePriceValue(field.value) === price;
       }
-      return isPriceAlreadyDisplayed(price);
+      return false;
     }
     function isPriceAlreadyDisplayed(price) {
       const candidates = Array.from(document.querySelectorAll('[data-testid*="price"], [aria-label*="\u4FA1\u683C"], section, div')).filter((element) => element instanceof HTMLElement && isVisible(element));

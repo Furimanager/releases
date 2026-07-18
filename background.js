@@ -2,8 +2,8 @@
   (() => {
     try {
       importScripts("config.js");
-    } catch (error) {
-      console.warn("[furimanager-extension] config.js import skipped", error);
+    } catch {
+      console.warn("[furimanager-extension] config.js import skipped");
     }
     const chromeApi = globalThis.chrome;
     const RELIST_PENDING_KEY = "relist_pending";
@@ -12,6 +12,7 @@
     const RAKURAKU_ALARM_NAME = "rakurakuPoll";
     const RAKURAKU_AUTO_POLL_MIN_MINUTES = 10;
     const RAKURAKU_AUTO_POLL_JITTER_MINUTES = 3;
+    let nextRakurakuPollDelayMinutesOverride = null;
     const DEFAULT_APP_URL = "https://furimanager.com";
     const MERCARI_SELL_URL = "https://jp.mercari.com/sell";
     const MERCARI_ITEM_URL_BASE = "https://jp.mercari.com/item/";
@@ -45,8 +46,8 @@
       const respond = (response) => {
         try {
           sendResponse(response);
-        } catch (error) {
-          console.error("[furimanager-extension] sendResponse failed", error);
+        } catch {
+          console.error("[furimanager-extension] sendResponse failed");
         }
       };
       if (message?.type === "FETCH_IMAGE_AS_DATA_URL") {
@@ -90,12 +91,12 @@
       }
       return false;
     });
-    void setupRakurakuAlarm().catch((error) => console.warn("[rakuraku] alarm setup skipped", error));
+    void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
     async function handleFetchImage(url, respond) {
       try {
         respond(await fetchImageAsDataUrl(url));
-      } catch (error) {
-        console.error("[furimanager-extension] fetch image request failed", error);
+      } catch {
+        console.error("[furimanager-extension] fetch image request failed");
         respond({ success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" });
       }
     }
@@ -127,8 +128,8 @@
           return;
         }
         respond({ success: true, data: await response.json() });
-      } catch (error) {
-        console.warn("[furimanager-extension] mercari item detail fetch failed", error);
+      } catch {
+        console.warn("[furimanager-extension] mercari item detail fetch failed");
         respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u5546\u54C1\u60C5\u5831\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" });
       }
     }
@@ -158,8 +159,8 @@
           return;
         }
         respond({ success: true, data: await response.json() });
-      } catch (error) {
-        console.warn("[furimanager-extension] mercari user profile fetch failed", error);
+      } catch {
+        console.warn("[furimanager-extension] mercari user profile fetch failed");
         respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u30E6\u30FC\u30B6\u30FC\u60C5\u5831\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" });
       }
     }
@@ -167,7 +168,7 @@
       try {
         const userId = typeof message?.userId === "string" ? message.userId.trim() : "";
         if (!/^\d+$/.test(userId)) {
-          respond({ success: false, message: "\u7E5D\uFF61\u7E5D\uFF6B\u7E67\uFF6B\u7E5D\uFF6A\u7E5D\uFF66\u7E5D\uFF7C\u7E67\uFF76\u7E5D\uFF7CID\u7E67\u5824\uFF62\uFF7A\u96B1\u962A\u3012\u7E3A\u962A\u222A\u7E3A\u5E19\uFF53\u7E3A\uFF67\u7E3A\u52B1\u25C6" });
+          respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u30E6\u30FC\u30B6\u30FCID\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F" });
           return;
         }
         const url = new URL("https://api.mercari.jp/services/usersocialjp/v1/stats/has_identity_verified_badge");
@@ -190,13 +191,13 @@
           body: JSON.stringify({ userId })
         });
         if (!response.ok) {
-          respond({ success: false, message: `\u7E5D\uFF61\u7E5D\uFF6B\u7E67\uFF6B\u7E5D\uFF6A\u8B5B\uFF6C\u83A0\uFF7A\u9052\uFF7A\u96B1\u962A\u30F0\u7E5D\u30FB\u305A\u7E3A\uFF6E\u873F\u9580\uFF7E\u52B1\u2193\u879F\uFF71\u8B28\u52B1\uFF20\u7E3A\uFF7E\u7E3A\u52B1\u25C6 (${response.status})` });
+          respond({ success: false, message: `\u30E1\u30EB\u30AB\u30EA\u672C\u4EBA\u78BA\u8A8D\u30D0\u30C3\u30B8\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F (${response.status})` });
           return;
         }
         respond({ success: true, data: await response.json() });
-      } catch (error) {
-        console.warn("[furimanager-extension] mercari user identity badge fetch failed", error);
-        respond({ success: false, message: "\u7E5D\uFF61\u7E5D\uFF6B\u7E67\uFF6B\u7E5D\uFF6A\u8B5B\uFF6C\u83A0\uFF7A\u9052\uFF7A\u96B1\u962A\u30F0\u7E5D\u30FB\u305A\u7E3A\uFF6E\u873F\u9580\uFF7E\u52B1\u2193\u879F\uFF71\u8B28\u52B1\uFF20\u7E3A\uFF7E\u7E3A\u52B1\u25C6" });
+      } catch {
+        console.warn("[furimanager-extension] mercari user identity badge fetch failed");
+        respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u672C\u4EBA\u78BA\u8A8D\u30D0\u30C3\u30B8\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" });
       }
     }
     async function createMercariDpopProofJwt(htu, htm) {
@@ -228,7 +229,7 @@
         );
         return `${unsignedToken}.${base64UrlEncodeBytes(new Uint8Array(signature))}`;
       } catch (error) {
-        console.warn("[furimanager-extension] mercari dpop proof skipped", error);
+        console.warn("[furimanager-extension] mercari dpop proof skipped");
         return null;
       }
     }
@@ -291,22 +292,25 @@
       if (!chromeApi.alarms?.create) {
         return;
       }
+      const delayInMinutes = nextRakurakuPollDelayMinutesOverride ?? getNextRakurakuPollDelayMinutes();
+      nextRakurakuPollDelayMinutesOverride = null;
       chromeApi.alarms.clear?.(RAKURAKU_ALARM_NAME);
-      chromeApi.alarms.create(RAKURAKU_ALARM_NAME, { delayInMinutes: getNextRakurakuPollDelayMinutes() });
+      chromeApi.alarms.create(RAKURAKU_ALARM_NAME, { delayInMinutes });
     }
     chromeApi.runtime.onInstalled?.addListener(() => {
-      void setupRakurakuAlarm().catch((error) => console.warn("[rakuraku] alarm setup skipped", error));
+      void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
     });
     chromeApi.runtime.onStartup?.addListener(() => {
-      void setupRakurakuAlarm().catch((error) => console.warn("[rakuraku] alarm setup skipped", error));
+      void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
     });
     chromeApi.alarms?.onAlarm?.addListener((alarm) => {
       if (alarm.name === RAKURAKU_ALARM_NAME) {
         void (async () => {
           try {
-            await pollNextRelistTask("alarm");
-          } catch (error) {
-            console.warn("[rakuraku] alarm poll skipped", error);
+            const result = await pollNextRelistTask("alarm");
+            nextRakurakuPollDelayMinutesOverride = normalizeNextPollDelayMinutes(result?.nextPollAfterSec);
+          } catch {
+            console.warn("[rakuraku] alarm poll skipped");
           } finally {
             await setupRakurakuAlarm();
           }
@@ -330,20 +334,15 @@
       if (!task) {
         console.log("[rakuraku] no pending task", {
           reason,
-          apiReason: next?.reason || "no_pending_task",
-          diagnostics: next?.diagnostics || null
+          apiReason: next?.reason || "no_pending_task"
         });
-        return { task: null, started: false, reason: next?.reason || "no_pending_task", diagnostics: next?.diagnostics || null };
+        return { task: null, started: false, reason: next?.reason || "no_pending_task", diagnostics: next?.diagnostics || null, nextPollAfterSec: next?.nextPollAfterSec };
       }
       console.log("[rakuraku] pending task found", {
         reason,
-        taskId: task.id,
         status: task.status,
         targetType: task.targetType,
-        targetId: task.targetId,
-        action: task.action,
-        title: task.payload?.title,
-        mercariItemId: task.payload?.mercariItemId
+        action: task.action
       });
       isRunningRakurakuTask = true;
       try {
@@ -352,16 +351,14 @@
         const finalTask = await executeRelistTask(startedTask);
         console.log("[rakuraku] background task started", {
           reason,
-          taskId: task.id,
-          title: task.payload?.title,
           mode: task.payload?.mode
         });
-        return { task: finalTask || startedTask, started: true, reason: "started" };
+        return { task: finalTask || startedTask, started: true, reason: "started", nextPollAfterSec: next?.nextPollAfterSec };
       } catch (error) {
         try {
-          await completeTask(task.id, false, error instanceof Error ? error.message : "relist failed");
-        } catch (completeError) {
-          console.warn("[rakuraku] failed to mark task as failed", completeError);
+          await completeTask(task.id, false, "task_failed");
+        } catch {
+          console.warn("[rakuraku] failed to mark task as failed");
         }
         throw error;
       } finally {
@@ -372,10 +369,7 @@
       const executionMode = await getRakurakuExecutionMode();
       console.log("[rakuraku] executeRelistTask", {
         executionMode,
-        taskId: task.id,
-        action: task.action,
-        title: task.payload?.title,
-        mercariItemId: task.payload?.mercariItemId
+        action: task.action
       });
       if (task.action === "price_drop") {
         return executePriceDropTask(task);
@@ -389,14 +383,14 @@
       return executeDryRunRelistTask(task);
     }
     async function executeDryRunRelistTask(task) {
-      const mockUrl = buildMockRelistUrl(task);
-      const detectionPromise = waitForMockRelistDetection(task.id);
-      await createTab({ url: mockUrl, active: true });
+      const mockPage = buildMockRelistUrl();
+      const detectionPromise = waitForMockRelistDetection(mockPage.nonce);
+      await createTab({ url: mockPage.url, active: true });
       const detected = await detectionPromise;
       if (!detected) {
         throw new Error("dry-run: relist button not found on mock page");
       }
-      const completed = await completeTask(task.id, true, "dry-run: relist button detected on mock page");
+      const completed = await completeTask(task.id, true, "relist_completed");
       return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
     }
     async function executeRealCopyListingTask(task) {
@@ -417,9 +411,6 @@
         mercariItemId
       });
       console.log("[rakuraku] real relist action result", {
-        taskId: task.id,
-        mercariItemId,
-        itemUrl,
         detected: result?.detected === true,
         clicked: result?.clicked === true,
         action: result?.action,
@@ -429,7 +420,7 @@
         throw new Error("real-copy-listing: relist button was not clicked");
       }
       await waitForRelistSubmitCompletion(mercariItemId);
-      const completed = await completeTask(task.id, true, "relist: listing submit clicked");
+      const completed = await completeTask(task.id, true, "relist_completed");
       return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
     }
     async function executePriceDropTask(task) {
@@ -454,19 +445,14 @@
         minimumPrice
       });
       console.log("[rakuraku] price drop action result", {
-        taskId: task.id,
-        mercariItemId,
-        editUrl,
-        currentPrice: result?.currentPrice,
-        nextPrice: result?.nextPrice,
         submitted: result?.submitted === true,
         reason: result?.reason
       });
       if (result?.submitted === true) {
-        const completed = await completeTask(task.id, true, `price-drop: changed price from ${result.currentPrice} to ${result.nextPrice}`);
+        const completed = await completeTask(task.id, true, "price_drop_completed");
         return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
       }
-      throw new Error(`price-drop: ${result?.reason || "price update failed"}`);
+      throw new Error("price_drop_failed");
     }
     async function completeTask(taskId, success, message) {
       return fetchAppApi(`/api/automation/tasks/${taskId}/complete`, {
@@ -474,16 +460,11 @@
         body: JSON.stringify({ success, message })
       });
     }
-    function buildMockRelistUrl(task) {
+    function buildMockRelistUrl() {
       const url = new URL(chromeApi.runtime.getURL(MOCK_RELIST_PATH));
-      url.searchParams.set("taskId", task.id);
-      if (task.payload?.title) {
-        url.searchParams.set("title", task.payload.title);
-      }
-      if (task.payload?.mercariItemId) {
-        url.searchParams.set("itemId", task.payload.mercariItemId);
-      }
-      return url.toString();
+      const nonce = crypto.randomUUID ? crypto.randomUUID() : createFallbackUuid();
+      url.searchParams.set("nonce", nonce);
+      return { url: url.toString(), nonce };
     }
     function buildMercariItemUrl(itemId) {
       return `${MERCARI_ITEM_URL_BASE}${encodeURIComponent(itemId)}`;
@@ -507,14 +488,14 @@
       const numberValue = Number(value);
       return Number.isFinite(numberValue) && numberValue >= 0 ? Math.floor(numberValue) : null;
     }
-    function waitForMockRelistDetection(taskId) {
+    function waitForMockRelistDetection(nonce) {
       return new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => {
           chromeApi.runtime.onMessage.removeListener(listener);
           reject(new Error("dry-run: mock page detection timed out"));
         }, 5e3);
         const listener = (message) => {
-          if (message?.type !== "MOCK_RELIST_BUTTON_DETECTED" || message.taskId !== taskId) {
+          if (message?.type !== "MOCK_RELIST_BUTTON_DETECTED" || message.nonce !== nonce) {
             return false;
           }
           clearTimeout(timeoutId);
@@ -654,16 +635,19 @@
       const responseText = await response.text();
       const data = responseText.trim() ? safeJsonParse(responseText) : null;
       console.log("[rakuraku] app api response", {
-        requestUrl,
+        path: getSafeApiLogPath(path),
         method: options.method || "GET",
         status: response.status,
-        ok: response.ok,
-        responseText
+        ok: response.ok
       });
       if (!response.ok || data?.success === false) {
-        throw new Error(`API failed: ${response.status} ${responseText || data?.error || "empty response"}`);
+        const errorReason = typeof data?.message === "string" ? data.message : typeof data?.error === "string" ? data.error : "empty response";
+        throw new Error(`API failed: ${response.status} ${errorReason}`);
       }
       return data;
+    }
+    function getSafeApiLogPath(path) {
+      return path.replace(/\/api\/automation\/tasks\/[^/]+/g, "/api/automation/tasks/[id]").replace(/\/api\/rakuraku\/relist-candidates\/[^/]+/g, "/api/rakuraku/relist-candidates/[id]");
     }
     function safeJsonParse(text) {
       try {
@@ -757,13 +741,22 @@
       return appUrl;
     }
     async function getRakurakuExecutionMode() {
-      return "real";
+      const state = await getLocalStorage([RAKURAKU_EXECUTION_MODE_KEY]);
+      return state[RAKURAKU_EXECUTION_MODE_KEY] === "dry-run" ? "dry-run" : "real";
     }
     async function isRakurakuAutoPollEnabled() {
-      return true;
+      const state = await getLocalStorage([RAKURAKU_AUTO_POLL_KEY]);
+      return state[RAKURAKU_AUTO_POLL_KEY] !== false;
     }
     function getNextRakurakuPollDelayMinutes() {
       return RAKURAKU_AUTO_POLL_MIN_MINUTES + Math.random() * RAKURAKU_AUTO_POLL_JITTER_MINUTES;
+    }
+    function normalizeNextPollDelayMinutes(value) {
+      const seconds = Number(value);
+      if (!Number.isFinite(seconds) || seconds < 60 || seconds > 60 * 60) {
+        return null;
+      }
+      return seconds / 60;
     }
     async function setRelistPending(payload) {
       if (!payload || typeof payload !== "object") {
@@ -792,11 +785,11 @@
         await setLocalStorage({ [RELIST_PENDING_KEY]: pendingItem });
         await createTab({ url: MERCARI_SELL_URL, active: true });
         return { success: true };
-      } catch (error) {
-        console.error("[furimanager-extension] set relist pending failed", error);
+      } catch {
+        console.error("[furimanager-extension] set relist pending failed");
         return {
           success: false,
-          message: error instanceof Error ? error.message : "\u51FA\u54C1\u30C7\u30FC\u30BF\u306E\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F"
+          message: "\u51FA\u54C1\u30C7\u30FC\u30BF\u306E\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F"
         };
       }
     }
@@ -823,11 +816,11 @@
       try {
         await createTab({ url: url.toString(), active: true });
         return { success: true };
-      } catch (error) {
-        console.error("[furimanager-extension] open inventory link failed", error);
+      } catch {
+        console.error("[furimanager-extension] open inventory link failed");
         return {
           success: false,
-          message: error instanceof Error ? error.message : "\u5728\u5EAB\u9023\u643A\u30DA\u30FC\u30B8\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F"
+          message: "\u5728\u5EAB\u9023\u643A\u30DA\u30FC\u30B8\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F"
         };
       }
     }

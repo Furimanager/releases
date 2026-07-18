@@ -10,7 +10,7 @@ const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
 const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
 const FURIMANE_LOCAL_RESEARCH_CACHE_PREFIX = "furimane-research-local-cache:";
 const FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const FURIMANE_ACCESS_CACHE_TTL_MS = 5 * 60 * 1000;
+const FURIMANE_ACCESS_CACHE_TTL_MS = 30 * 1000;
 const FURIMANE_RESEARCH_ENABLED_KEY = "furimaneResearchEnabled";
 
 declare namespace chrome {
@@ -99,7 +99,19 @@ type ResearchFlowOptions = {
   retryCount?: number;
 };
 
-type ResearchErrorKind = "auth" | "plan" | "limit" | "timeout" | "scraping" | "dom_changed" | "mapping" | "unknown";
+type ResearchErrorKind =
+  | "auth"
+  | "plan"
+  | "limit"
+  | "rate_limit"
+  | "payload_too_large"
+  | "update_required"
+  | "maintenance"
+  | "timeout"
+  | "scraping"
+  | "dom_changed"
+  | "mapping"
+  | "unknown";
 
 type ResearchOverlayWindow = Window & {
   FurimanagerResearchApi?: {
@@ -608,6 +620,22 @@ function getResearchErrorKind(error: unknown): ResearchErrorKind {
     return "limit";
   }
 
+  if (message === "rate_limited") {
+    return "rate_limit";
+  }
+
+  if (message === "payload_too_large") {
+    return "payload_too_large";
+  }
+
+  if (message === "extension_update_required") {
+    return "update_required";
+  }
+
+  if (message === "research_temporarily_disabled") {
+    return "maintenance";
+  }
+
   if (message === "api_timeout" || message === "network_error") {
     return "timeout";
   }
@@ -631,6 +659,15 @@ function getResearchErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function getResearchRetryAfter(error: unknown) {
+  const retryAfter = error && typeof error === "object" ? (error as { retryAfter?: unknown }).retryAfter : null;
+  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : null;
+}
+
+function isRetryableResearchErrorKind(kind: ResearchErrorKind) {
+  return !["auth", "plan", "limit", "rate_limit", "payload_too_large", "update_required", "maintenance"].includes(kind);
+}
+
 function canContinueResearchWithoutAccessCheck(
   error: unknown,
   api: NonNullable<ResearchOverlayWindow["FurimanagerResearchApi"]>
@@ -642,6 +679,11 @@ function canContinueResearchWithoutAccessCheck(
     (message === "network_error" || message === "api_timeout") &&
     /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(appUrl)
   );
+}
+
+function canShowLocalCacheAfterAccessError(error: unknown) {
+  const message = getResearchErrorMessage(error);
+  return message === "network_error" || message === "api_timeout";
 }
 
 function getResearchFetchFunction(scraper: NonNullable<ResearchOverlayWindow["FurimanagerResearchScraper"]>) {
@@ -756,6 +798,30 @@ function getResearchErrorCopy(kind: ResearchErrorKind) {
         description: "今月の利用上限に達しました。来月1日にリセットされます。",
         actionLabel: "プランを確認する"
       };
+    case "rate_limit":
+      return {
+        title: "短時間にアクセスが集中しています",
+        description: "安全のため一時的にリクエストを制限しています。少し時間を置いてから再試行してください。",
+        actionLabel: "再試行する"
+      };
+    case "payload_too_large":
+      return {
+        title: "取得データが多すぎます",
+        description: "一度に送信するリサーチデータが上限を超えました。ページを再読み込みして、時間を置いてから再度お試しください。",
+        actionLabel: "再試行する"
+      };
+    case "update_required":
+      return {
+        title: "拡張機能の更新が必要です",
+        description: "現在のフリマネ拡張ではこのリサーチAPIを利用できません。Chromeの拡張機能管理画面から更新してから再度お試しください。",
+        actionLabel: "更新方法を確認する"
+      };
+    case "maintenance":
+      return {
+        title: "リサーチ機能を一時停止しています",
+        description: "メンテナンスまたは保護設定のため、現在リサーチ機能を一時停止しています。少し時間を置いて再試行してください。",
+        actionLabel: "再試行する"
+      };
     case "timeout":
       return {
         title: "通信エラーが発生しました",
@@ -798,6 +864,7 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
 
   const copy = getResearchErrorCopy(kind);
   const errorMessage = getResearchErrorMessage(error);
+  const retryAfter = getResearchRetryAfter(error);
   const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
   const wrapper = document.createElement("div");
   wrapper.className = "furimane-research-overlay__state furimane-research-overlay__state--error";
@@ -808,6 +875,10 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
 
   const description = createParagraph(copy.description);
   wrapper.append(title, description);
+
+  if ((kind === "rate_limit" || kind === "maintenance") && retryAfter) {
+    wrapper.appendChild(createParagraph(`約${retryAfter}秒後に再度お試しください。`, "furimane-research-overlay__support-text"));
+  }
 
   if (kind === "scraping" || kind === "unknown") {
     const detail = createParagraph(`原因コード: ${errorMessage}`, "furimane-research-overlay__support-text");
@@ -822,10 +893,20 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
     link.rel = "noopener noreferrer";
     link.textContent = copy.actionLabel;
     wrapper.appendChild(link);
-  } else if (retryCount < FURIMANE_MAX_RETRY_COUNT) {
+  } else if (isRetryableResearchErrorKind(kind) && retryCount < FURIMANE_MAX_RETRY_COUNT) {
     wrapper.appendChild(createButton(copy.actionLabel, retry, "secondary"));
   } else {
-    const support = createParagraph("再試行上限に達しました。ページを再読み込みしても直らない場合はサポートへ連絡してください。");
+    const support = createParagraph(
+      kind === "update_required"
+        ? "Chromeの拡張機能管理画面でフリマネージャーを更新してください。"
+        : kind === "payload_too_large"
+          ? "何度も発生する場合は、対象ページのURLを添えてサポートへ連絡してください。"
+        : kind === "rate_limit"
+          ? "少し時間を置いてから、もう一度リサーチを開いてください。"
+        : kind === "maintenance"
+          ? "メンテナンス解除後に、もう一度リサーチを開いてください。"
+        : "再試行上限に達しました。ページを再読み込みしても直らない場合はサポートへ連絡してください。"
+    );
     support.className = "furimane-research-overlay__support-text";
     wrapper.appendChild(support);
   }
@@ -1115,7 +1196,7 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
         throw error;
       }
 
-      if (hasRenderableResearchData(localCachedData)) {
+      if (canShowLocalCacheAfterAccessError(error) && hasRenderableResearchData(localCachedData)) {
         renderResults(container, localCachedData, "ブラウザキャッシュ");
         return;
       }

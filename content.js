@@ -4,6 +4,7 @@ const FULL_SCRAPE_MAX_PAGES = 50;
 const DELTA_SCRAPE_MAX_PAGES = 20;
 const PAGE_CHANGE_TIMEOUT_MS = 10000;
 const PAGE_CHANGE_POLL_MS = 300;
+const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
 
 function getParser() {
   const parser = window.FurimanagerParser;
@@ -13,6 +14,12 @@ function getParser() {
   }
 
   return parser;
+}
+
+function assertMercariSoldPage() {
+  if (!window.location.pathname.startsWith("/mypage/listings/sold")) {
+    throw new Error("メルカリ販売履歴ページを開いてから同期してください");
+  }
 }
 
 function buildPingResponse() {
@@ -34,9 +41,81 @@ function getItemIdentity(item) {
   return [item?.itemName || "", item?.soldAtText || "", item?.soldPrice ?? ""].join("|");
 }
 
-function getStorageItemId(item) {
-  const id = getItemIdentity(item);
-  return id || null;
+function normalizeAnchorExternalId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalizedValue = value.trim();
+
+  if (!normalizedValue || normalizedValue.includes("|")) {
+    return null;
+  }
+
+  return normalizedValue;
+}
+
+function getAnchorExternalId(item) {
+  return normalizeAnchorExternalId(item?.mercariTransactionId);
+}
+
+function collectAnchorExternalIds(items, limit = SYNC_ANCHOR_EXTERNAL_ID_LIMIT) {
+  const anchorExternalIds = [];
+  const seen = new Set();
+
+  for (const item of items) {
+    const externalId = getAnchorExternalId(item);
+
+    if (!externalId || seen.has(externalId)) {
+      continue;
+    }
+
+    seen.add(externalId);
+    anchorExternalIds.push(externalId);
+
+    if (anchorExternalIds.length >= limit) {
+      break;
+    }
+  }
+
+  return anchorExternalIds.slice(0, SYNC_ANCHOR_EXTERNAL_ID_LIMIT);
+}
+
+function normalizeAnchorExternalIds(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const normalizedValues = [];
+  const seen = new Set();
+
+  for (const value of values) {
+    const externalId = normalizeAnchorExternalId(value);
+
+    if (!externalId || seen.has(externalId)) {
+      continue;
+    }
+
+    seen.add(externalId);
+    normalizedValues.push(externalId);
+
+    if (normalizedValues.length >= SYNC_ANCHOR_EXTERNAL_ID_LIMIT) {
+      break;
+    }
+  }
+
+  return normalizedValues;
+}
+
+function buildPreviousAnchorExternalIds(anchorInput) {
+  const anchorExternalIds = normalizeAnchorExternalIds(anchorInput?.lastSyncedExternalIds);
+  const legacyLastItemId = normalizeAnchorExternalId(anchorInput?.lastItemId);
+
+  if (legacyLastItemId && !anchorExternalIds.includes(legacyLastItemId)) {
+    anchorExternalIds.push(legacyLastItemId);
+  }
+
+  return anchorExternalIds.slice(0, SYNC_ANCHOR_EXTERNAL_ID_LIMIT);
 }
 
 function parseCurrentPageItems() {
@@ -60,6 +139,8 @@ function dedupeItems(items) {
 }
 
 function buildScrapeResponse() {
+  assertMercariSoldPage();
+
   const items = parseCurrentPageItems();
 
   console.log("[furimanager-extension] scrape result", items);
@@ -208,14 +289,22 @@ async function moveToFirstPage() {
 }
 
 async function scrapeAllPages() {
+  assertMercariSoldPage();
+
   const startPageResetCount = await moveToFirstPage();
   const allItems = [];
   let pageCount = 0;
+  let reachedPageLimit = false;
 
   while (pageCount < FULL_SCRAPE_MAX_PAGES) {
     const currentItems = parseCurrentPageItems();
     allItems.push(...currentItems);
     pageCount += 1;
+
+    if (pageCount >= FULL_SCRAPE_MAX_PAGES) {
+      reachedPageLimit = Boolean(findNextPageButton());
+      break;
+    }
 
     const moved = await goToNextPage(currentItems);
 
@@ -225,7 +314,7 @@ async function scrapeAllPages() {
   }
 
   const items = dedupeItems(allItems);
-  const reachedPageLimit = pageCount >= FULL_SCRAPE_MAX_PAGES;
+  const anchorExternalIds = collectAnchorExternalIds(items);
 
   console.log("[furimanager-extension] scrape all pages result", items);
 
@@ -235,34 +324,45 @@ async function scrapeAllPages() {
     items,
     pageCount,
     reachedPageLimit,
+    gapSuspected: reachedPageLimit,
+    anchorExternalIds,
+    newLastItemId: anchorExternalIds[0] || null,
     startPageResetCount,
   };
 }
 
-async function scrapeDeltaPages(lastItemId) {
-  const normalizedLastItemId =
-    typeof lastItemId === "string" && lastItemId.trim() !== "" ? lastItemId.trim() : null;
+async function scrapeDeltaPages(anchorInput = {}) {
+  assertMercariSoldPage();
 
-  if (!normalizedLastItemId) {
+  const previousAnchorExternalIds = buildPreviousAnchorExternalIds(anchorInput);
+  const previousAnchorExternalIdSet = new Set(previousAnchorExternalIds);
+
+  if (previousAnchorExternalIds.length === 0) {
     const fullResult = await scrapeAllPages();
 
     return {
       ...fullResult,
-      newLastItemId: getStorageItemId(fullResult.items[0]) || null,
+      matchedAnchorExternalId: null,
     };
   }
 
   const startPageResetCount = await moveToFirstPage();
   const collectedItems = [];
+  const scannedItems = [];
   let pageCount = 0;
-  let matchedLastItemId = false;
+  let matchedAnchorExternalId = null;
+  let reachedPageLimit = false;
 
-  while (pageCount < DELTA_SCRAPE_MAX_PAGES && !matchedLastItemId) {
+  while (pageCount < DELTA_SCRAPE_MAX_PAGES && !matchedAnchorExternalId) {
     const currentItems = parseCurrentPageItems();
 
     for (const item of currentItems) {
-      if (getStorageItemId(item) === normalizedLastItemId) {
-        matchedLastItemId = true;
+      scannedItems.push(item);
+
+      const anchorExternalId = getAnchorExternalId(item);
+
+      if (anchorExternalId && previousAnchorExternalIdSet.has(anchorExternalId)) {
+        matchedAnchorExternalId = anchorExternalId;
         break;
       }
 
@@ -271,7 +371,12 @@ async function scrapeDeltaPages(lastItemId) {
 
     pageCount += 1;
 
-    if (matchedLastItemId) {
+    if (matchedAnchorExternalId) {
+      break;
+    }
+
+    if (pageCount >= DELTA_SCRAPE_MAX_PAGES) {
+      reachedPageLimit = Boolean(findNextPageButton());
       break;
     }
 
@@ -283,16 +388,17 @@ async function scrapeDeltaPages(lastItemId) {
   }
 
   const items = dedupeItems(collectedItems);
-  const currentPageItems = parseCurrentPageItems();
-  const sourceFirstItem = items[0] || currentPageItems[0] || null;
-  const newLastItemId = getStorageItemId(sourceFirstItem);
-  const reachedPageLimit = !matchedLastItemId && pageCount >= DELTA_SCRAPE_MAX_PAGES;
+  const anchorExternalIds = collectAnchorExternalIds(scannedItems.length > 0 ? scannedItems : items);
+  const newLastItemId = anchorExternalIds[0] || null;
+  const gapSuspected = !matchedAnchorExternalId && reachedPageLimit;
 
   console.log("[furimanager-extension] scrape delta pages result", {
     count: items.length,
     newLastItemId,
+    anchorExternalIds,
     pageCount,
     reachedPageLimit,
+    gapSuspected,
     items,
   });
 
@@ -301,10 +407,13 @@ async function scrapeDeltaPages(lastItemId) {
     count: items.length,
     items,
     newLastItemId,
+    anchorExternalIds,
     pageCount,
     reachedPageLimit,
+    gapSuspected,
     startPageResetCount,
-    matchedLastItemId,
+    matchedLastItemId: Boolean(matchedAnchorExternalId),
+    matchedAnchorExternalId,
   };
 }
 
@@ -349,7 +458,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.action === "scrapeDeltaPages") {
-    scrapeDeltaPages(message.lastItemId)
+    scrapeDeltaPages({
+      lastItemId: message.lastItemId,
+      lastSyncedExternalIds: message.lastSyncedExternalIds,
+    })
       .then((response) => {
         sendResponse(response);
       })

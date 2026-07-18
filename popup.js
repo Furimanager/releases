@@ -1,4 +1,10 @@
-const SCRAPE_STORAGE_KEYS = ["lastFetchDate", "lastItemId", "lastFetchedCount"];
+const SCRAPE_STORAGE_KEYS = [
+  "lastFetchDate",
+  "lastItemId",
+  "lastFetchedCount",
+  "lastSyncedExternalIds",
+  "gapSuspected"
+];
 const AUTH_STORAGE_KEYS = [
   "supabaseAccessToken",
   "supabaseRefreshToken",
@@ -8,6 +14,7 @@ const AUTH_STORAGE_KEYS = [
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
+const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
 
 const statusText = document.getElementById("statusText");
 const statusDetails = document.getElementById("statusDetails");
@@ -232,11 +239,11 @@ function getConfig() {
   const anonKey = String(config?.SUPABASE_ANON_KEY || "").trim();
 
   if (!url || !anonKey) {
-    throw new Error("config.js の Supabase 設定が未入力です");
+    throw new Error("config.js のログイン設定が未入力です");
   }
 
   if (url.includes("YOUR_PROJECT") || anonKey.includes("YOUR_SUPABASE_ANON_KEY")) {
-    throw new Error("config.js に Supabase の実値を入れてください");
+    throw new Error("config.js にログイン設定の実値を入れてください");
   }
 
   return {
@@ -248,6 +255,19 @@ function getConfig() {
 function getAppBaseUrl() {
   const appUrl = String(window.FurimanagerConfig?.APP_URL || DEFAULT_APP_URL).trim().replace(/\/+$/, "");
   return appUrl;
+}
+
+function isMercariSoldPageUrl(url) {
+  if (typeof url !== "string") {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    return parsedUrl.hostname === "jp.mercari.com" && parsedUrl.pathname.startsWith("/mypage/listings/sold");
+  } catch (_error) {
+    return false;
+  }
 }
 
 function formatYen(value) {
@@ -361,7 +381,6 @@ function renderRakurakuTask(task) {
     return;
   }
 
-  const payload = task.payload || {};
   rakurakuTaskState.textContent = task.status === "pending" ? "待機中 1件" : `最新タスク：${task.status || "状態不明"}`;
   rakurakuTaskPanel.hidden = false;
 
@@ -370,11 +389,11 @@ function renderRakurakuTask(task) {
   }
 
   if (rakurakuTaskTitle) {
-    rakurakuTaskTitle.textContent = payload.title || "商品名未取得";
+    rakurakuTaskTitle.textContent = task.action === "price_drop" ? "値下げタスク" : "再出品タスク";
   }
 
   if (rakurakuTaskPrice) {
-    rakurakuTaskPrice.textContent = formatYen(payload.soldPrice);
+    rakurakuTaskPrice.textContent = "詳細はWebで確認してください";
   }
 
   if (rakurakuTaskStatus) {
@@ -408,11 +427,11 @@ function renderRakurakuApprovalCandidate(candidate) {
   }
 
   if (rakurakuTaskTitle) {
-    rakurakuTaskTitle.textContent = candidate.title || "商品名未取得";
+    rakurakuTaskTitle.textContent = "承認待ち候補";
   }
 
   if (rakurakuTaskPrice) {
-    rakurakuTaskPrice.textContent = formatYen(candidate.sold_price);
+    rakurakuTaskPrice.textContent = "詳細はWebで確認してください";
   }
 
   if (rakurakuTaskStatus) {
@@ -458,11 +477,11 @@ async function loadRakurakuAutoPollState() {
   try {
     const response = await sendRuntimeMessage({ type: "GET_RAKURAKU_AUTO_POLL_STATE" });
     renderRakurakuAutoPollState(response?.enabled === true, response?.isRunningTask === true);
-  } catch (error) {
+  } catch {
     if (rakurakuAutoPollState) {
       rakurakuAutoPollState.textContent = "自動チェック：確認失敗";
     }
-    console.warn("[furimane-rakuraku] auto poll state failed", error);
+    console.warn("[furimane-rakuraku] auto poll state failed");
   }
 }
 
@@ -477,11 +496,11 @@ async function handleRakurakuAutoPollToggle() {
       enabled: !rakurakuAutoPollEnabled
     });
     renderRakurakuAutoPollState(response?.enabled === true, response?.isRunningTask === true);
-  } catch (error) {
+  } catch {
     if (rakurakuAutoPollState) {
       rakurakuAutoPollState.textContent = "自動チェック：切替失敗";
     }
-    console.warn("[furimane-rakuraku] auto poll toggle failed", error);
+    console.warn("[furimane-rakuraku] auto poll toggle failed");
   } finally {
     if (rakurakuAutoPollToggleButton) {
       rakurakuAutoPollToggleButton.disabled = false;
@@ -491,17 +510,19 @@ async function handleRakurakuAutoPollToggle() {
 
 async function loadRakurakuExecutionMode() {
   try {
+    const storage = await getLocalStorage([RAKURAKU_EXECUTION_MODE_KEY]);
+    const mode = storage[RAKURAKU_EXECUTION_MODE_KEY] === "dry-run" ? "dry-run" : "real";
     if (rakurakuExecutionModeSelect) {
-      rakurakuExecutionModeSelect.value = "real";
+      rakurakuExecutionModeSelect.value = mode;
     }
-    await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: "real" });
-  } catch (error) {
-    console.warn("[furimane-rakuraku] execution mode load failed", error);
+  } catch {
+    console.warn("[furimane-rakuraku] execution mode load failed");
   }
 }
 
 async function handleRakurakuExecutionModeChange() {
-  await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: "real" });
+  const mode = rakurakuExecutionModeSelect?.value === "dry-run" ? "dry-run" : "real";
+  await setLocalStorage({ [RAKURAKU_EXECUTION_MODE_KEY]: mode });
 }
 
 async function fetchAppApi(path, options = {}) {
@@ -529,10 +550,9 @@ async function fetchAppApi(path, options = {}) {
     });
   } catch (error) {
     console.error("[furimane-rakuraku] api request exception", {
-      requestUrl,
+      path: getSafeApiLogPath(path),
       credentials: credentialsMode,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      errorStack: error instanceof Error ? error.stack : null
+      errorName: error instanceof Error ? error.name : "Error"
     });
     throw error;
   }
@@ -549,22 +569,33 @@ async function fetchAppApi(path, options = {}) {
   }
 
   console.log("[furimane-rakuraku] api response", {
-    requestUrl,
+    path: getSafeApiLogPath(path),
     status: response.status,
     ok: response.ok,
-    credentials: credentialsMode,
-    responseText
+    credentials: credentialsMode
   });
 
   if (!response.ok || data?.success === false) {
-    throw new Error(`API failed: ${response.status} ${responseText || data?.error || "empty response"}`);
+    const errorReason = typeof data?.message === "string" ? data.message : typeof data?.error === "string" ? data.error : "empty response";
+    throw new Error(`API failed: ${response.status} ${errorReason}`);
   }
 
   return data;
 }
 
+function getSafeApiLogPath(path) {
+  return path
+    .replace(/\/api\/automation\/tasks\/[^/]+/g, "/api/automation/tasks/[id]")
+    .replace(/\/api\/rakuraku\/relist-candidates\/[^/]+/g, "/api/rakuraku/relist-candidates/[id]");
+}
+
 async function runTabAction(action, extraMessage = {}) {
   const tab = await queryActiveTab();
+
+  if (action !== "ping" && !isMercariSoldPageUrl(tab.url)) {
+    throw new Error("メルカリ販売履歴ページを開いてから同期してください");
+  }
+
   return sendMessageToTab(tab.id, { action, ...extraMessage });
 }
 
@@ -603,6 +634,82 @@ function getUserFacingSyncErrorMessage(error) {
   }
 
   return message;
+}
+
+function normalizeAnchorExternalId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalizedValue = value.trim();
+
+  if (!normalizedValue || normalizedValue.includes("|")) {
+    return null;
+  }
+
+  return normalizedValue;
+}
+
+function normalizeAnchorExternalIds(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const anchorExternalIds = [];
+  const seen = new Set();
+
+  for (const value of values) {
+    const externalId = normalizeAnchorExternalId(value);
+
+    if (!externalId || seen.has(externalId)) {
+      continue;
+    }
+
+    seen.add(externalId);
+    anchorExternalIds.push(externalId);
+
+    if (anchorExternalIds.length >= SYNC_ANCHOR_EXTERNAL_ID_LIMIT) {
+      break;
+    }
+  }
+
+  return anchorExternalIds;
+}
+
+function getPreviousAnchorExternalIds(storageState) {
+  const anchorExternalIds = normalizeAnchorExternalIds(storageState.lastSyncedExternalIds);
+  const legacyLastItemId = normalizeAnchorExternalId(storageState.lastItemId);
+
+  if (legacyLastItemId && !anchorExternalIds.includes(legacyLastItemId)) {
+    anchorExternalIds.push(legacyLastItemId);
+  }
+
+  return anchorExternalIds.slice(0, SYNC_ANCHOR_EXTERNAL_ID_LIMIT);
+}
+
+function getResponseAnchorExternalIds(response) {
+  return normalizeAnchorExternalIds(response?.anchorExternalIds);
+}
+
+function getGapSuspected(response) {
+  return response?.gapSuspected === true;
+}
+
+function getGapWarningDetails(response) {
+  if (!getGapSuspected(response)) {
+    return [];
+  }
+
+  return [
+    {
+      label: "注意",
+      value: "前回の同期位置が確認できなかったため、安全のため多めに取得しました"
+    },
+    {
+      label: "補足",
+      value: "重複は自動で除外されます。ページ上限より古い履歴は未確認です"
+    }
+  ];
 }
 
 function getTokenExpiresAt(expiresIn) {
@@ -882,11 +989,6 @@ async function insertTransactions(records) {
   }
 
   console.log("status:", response.status);
-  console.log("raw:", rawText);
-
-  if (parsed !== null) {
-    console.log("json:", parsed);
-  }
 
   if (response.ok) {
     return;
@@ -895,12 +997,39 @@ async function insertTransactions(records) {
   throw new Error(parseSupabaseError(parsed || rawText, "transactions 送信に失敗しました"));
 }
 
-async function saveScrapeState(lastItemId, count) {
+async function saveScrapeState(lastItemId, count, options = {}) {
+  const lastSyncedExternalIds = normalizeAnchorExternalIds(options.lastSyncedExternalIds);
+
   await setLocalStorage({
     lastFetchDate: new Date().toISOString(),
     lastItemId,
-    lastFetchedCount: count
+    lastFetchedCount: count,
+    lastSyncedExternalIds,
+    gapSuspected: options.gapSuspected === true
   });
+}
+
+async function restoreScrapeWarningState() {
+  const storageState = await getLocalStorage(SCRAPE_STORAGE_KEYS);
+
+  if (storageState.gapSuspected !== true) {
+    return;
+  }
+
+  setStatus("error", "未確認区間があります", [
+    {
+      label: "内容",
+      value: "前回の同期位置が確認できなかったため、ページ上限より古い履歴は未確認です"
+    },
+    {
+      label: "前回同期",
+      value: storageState.lastFetchDate ? new Date(storageState.lastFetchDate).toLocaleString("ja-JP") : "不明"
+    },
+    {
+      label: "補足",
+      value: "通常の同期は継続できます。重複は自動で除外されます"
+    }
+  ]);
 }
 
 async function handleLoginSubmit(event) {
@@ -961,9 +1090,7 @@ async function handlePing() {
       response.isMercariSoldPage ? "success" : "error",
       response.isMercariSoldPage ? "接続OK" : "接続OK（対象外ページ）",
       [
-        { label: "現在URL", value: response.currentUrl || "不明" },
-        { label: "販売履歴ページ", value: response.isMercariSoldPage ? "はい" : "いいえ" },
-        { label: "ページタイトル", value: response.title || "不明" }
+        { label: "販売履歴ページ", value: response.isMercariSoldPage ? "はい" : "いいえ" }
       ]
     );
   } catch (error) {
@@ -995,8 +1122,7 @@ async function handleScrape() {
     }
 
     setStatus("success", "1ページ取得OK", [
-      { label: "取得件数", value: response.count ?? 0 },
-      { label: "先頭1件", value: response.items?.[0]?.itemName || "データなし" }
+      { label: "取得件数", value: response.count ?? 0 }
     ]);
   } catch (error) {
     setStatus("error", "取得失敗", [
@@ -1028,7 +1154,6 @@ async function handleScrapeAll() {
 
     setStatus("success", "全ページ取得OK", [
       { label: "総取得件数", value: response.count ?? 0 },
-      { label: "先頭1件", value: response.items?.[0]?.itemName || "データなし" },
       { label: "読み込みページ数", value: response.pageCount ?? 0 },
       { label: "上限到達", value: response.reachedPageLimit ? "はい" : "いいえ" }
     ]);
@@ -1054,13 +1179,12 @@ async function handleScrapeDelta() {
 
   try {
     const storageState = await getLocalStorage(SCRAPE_STORAGE_KEYS);
-    const previousLastItemId =
-      typeof storageState.lastItemId === "string" && storageState.lastItemId.trim() !== ""
-        ? storageState.lastItemId
-        : null;
+    const previousLastItemId = normalizeAnchorExternalId(storageState.lastItemId);
+    const previousAnchorExternalIds = getPreviousAnchorExternalIds(storageState);
 
     const response = await runTabAction("scrapeDeltaPages", {
-      lastItemId: previousLastItemId
+      lastItemId: previousLastItemId,
+      lastSyncedExternalIds: previousAnchorExternalIds
     });
 
     if (!response || response.success !== true) {
@@ -1068,17 +1192,25 @@ async function handleScrapeDelta() {
       return;
     }
 
-    const nextLastItemId = response.newLastItemId || previousLastItemId || null;
+    const nextAnchorExternalIds = normalizeAnchorExternalIds([
+      ...getResponseAnchorExternalIds(response),
+      ...previousAnchorExternalIds
+    ]);
+    const nextLastItemId = nextAnchorExternalIds[0] || null;
+    const gapSuspected = getGapSuspected(response) || storageState.gapSuspected === true;
 
-    await saveScrapeState(nextLastItemId, response.count ?? 0);
+    await saveScrapeState(nextLastItemId, response.count ?? 0, {
+      lastSyncedExternalIds: nextAnchorExternalIds,
+      gapSuspected
+    });
 
-    setStatus("success", "差分取得OK", [
+    setStatus("success", gapSuspected ? "差分取得OK（未確認あり）" : "差分取得OK", [
+      ...getGapWarningDetails(response),
       { label: "新規取得件数", value: response.count ?? 0 },
-      { label: "先頭1件", value: response.items?.[0]?.itemName || "データなし" },
       { label: "読み込みページ数", value: response.pageCount ?? 0 },
       { label: "上限到達", value: response.reachedPageLimit ? "はい" : "いいえ" },
-      { label: "保存lastItemId", value: nextLastItemId || "未設定" },
-      { label: "取得モード", value: previousLastItemId ? "差分取得" : "初回取得" }
+      { label: "保存アンカー数", value: nextAnchorExternalIds.length },
+      { label: "取得モード", value: previousAnchorExternalIds.length > 0 ? "差分取得" : "初回取得" }
     ]);
   } catch (error) {
     setStatus("error", "差分取得失敗", [
@@ -1120,23 +1252,24 @@ async function handleResetDeltaState() {
 async function handleScrapeAndSend() {
   if (!isLoggedIn()) {
     setStatus("error", "送信不可", [
-      { label: "詳細", value: "Supabase にログインしてから送信してください" }
+      { label: "詳細", value: "ログインしてから送信してください" }
     ]);
     return;
   }
 
   setActionButtonsDisabled(true);
-  setStatus("idle", "差分取得して送信中...");
+  setStatus("idle", "差分取得して送信中...", [
+    { label: "お願い", value: "完了するまでこのポップアップを閉じないでください" }
+  ]);
 
   try {
     const storageState = await getLocalStorage(SCRAPE_STORAGE_KEYS);
-    const previousLastItemId =
-      typeof storageState.lastItemId === "string" && storageState.lastItemId.trim() !== ""
-        ? storageState.lastItemId
-        : null;
+    const previousLastItemId = normalizeAnchorExternalId(storageState.lastItemId);
+    const previousAnchorExternalIds = getPreviousAnchorExternalIds(storageState);
 
     const response = await runTabAction("scrapeDeltaPages", {
-      lastItemId: previousLastItemId
+      lastItemId: previousLastItemId,
+      lastSyncedExternalIds: previousAnchorExternalIds
     });
 
     if (!response || response.success !== true) {
@@ -1144,23 +1277,31 @@ async function handleScrapeAndSend() {
       return;
     }
 
-    const nextLastItemId = response.newLastItemId || previousLastItemId || null;
+    const nextAnchorExternalIds = normalizeAnchorExternalIds([
+      ...getResponseAnchorExternalIds(response),
+      ...previousAnchorExternalIds
+    ]);
+    const nextLastItemId = nextAnchorExternalIds[0] || null;
+    const gapSuspected = getGapSuspected(response) || storageState.gapSuspected === true;
     const records = buildInsertPayload(response.items || []);
 
     if (records.length > 0) {
       await insertTransactions(records);
     }
 
-    await saveScrapeState(nextLastItemId, response.count ?? 0);
+    await saveScrapeState(nextLastItemId, response.count ?? 0, {
+      lastSyncedExternalIds: nextAnchorExternalIds,
+      gapSuspected
+    });
 
-    setStatus("success", records.length > 0 ? "送信完了" : "送信対象なし", [
+    setStatus("success", gapSuspected ? "送信完了（未確認あり）" : records.length > 0 ? "送信完了" : "送信対象なし", [
+      ...getGapWarningDetails(response),
       { label: "差分取得件数", value: response.count ?? 0 },
       { label: "送信対象件数", value: records.length },
       { label: "送信対象外(取引IDなし等)", value: Math.max((response.count ?? 0) - records.length, 0) },
-      { label: "先頭1件", value: response.items?.[0]?.itemName || "データなし" },
       { label: "読み込みページ数", value: response.pageCount ?? 0 },
       { label: "上限到達", value: response.reachedPageLimit ? "はい" : "いいえ" },
-      { label: "保存lastItemId", value: nextLastItemId || "未設定" }
+      { label: "保存アンカー数", value: nextAnchorExternalIds.length }
     ]);
   } catch (error) {
     // TODO: 送信失敗時の pendingItems 保持は今後の改善候補
@@ -1204,9 +1345,9 @@ async function loadRakurakuPendingTaskPreview() {
     }
 
     setRakurakuEmptyState("自動処理待ちタスクはありません。");
-  } catch (error) {
+  } catch {
     setRakurakuEmptyState("状態の取得に失敗しました。時間をおいてもう一度開いてください。");
-    console.warn("[furimane-rakuraku] pending task preview failed", error);
+    console.warn("[furimane-rakuraku] pending task preview failed");
   }
 }
 
@@ -1227,7 +1368,11 @@ async function handleRakurakuTaskCheck() {
   try {
     const backgroundResult = await sendRuntimeMessage({ type: "POLL_RAKURAKU_NOW" });
 
-    console.log("[furimane-rakuraku] background poll result", backgroundResult);
+    console.log("[furimane-rakuraku] background poll result", {
+      success: backgroundResult?.success === true,
+      reason: backgroundResult?.reason || null,
+      hasTask: Boolean(backgroundResult?.task)
+    });
 
     if (!backgroundResult?.success) {
       throw new Error(backgroundResult?.message || "background poll failed");
@@ -1237,11 +1382,8 @@ async function handleRakurakuTaskCheck() {
     renderRakurakuTask(backgroundResult.task || null);
 
     if (backgroundResult.task) {
-      const payload = backgroundResult.task.payload || {};
       console.log("[furimane-rakuraku] pending task", {
-        id: backgroundResult.task.id,
-        title: payload.title,
-        soldPrice: payload.soldPrice,
+        action: backgroundResult.task.action,
         status: backgroundResult.task.status
       });
     } else {
@@ -1249,24 +1391,21 @@ async function handleRakurakuTaskCheck() {
 
       if (approvalCandidate) {
         setStatus("success", "承認待ち候補あり", [
-          { label: "商品名", value: approvalCandidate.title || "商品名未取得" },
-          { label: "価格", value: formatYen(approvalCandidate.sold_price) },
           { label: "操作", value: "許可して開始を押すと再出品タスクを作成します" }
         ]);
         return;
       }
 
       const diagnostics = backgroundResult.diagnostics || {};
-      const latestTask = diagnostics.latestTask || null;
+      const latestTask = Array.isArray(diagnostics.safeTasks) ? diagnostics.safeTasks[0] : null;
       const statusCounts = Object.entries(diagnostics.statusCounts || {})
         .map(([status, count]) => `${status}:${count}`)
         .join(", ");
 
       setStatus("success", "待機中タスクなし", [
         { label: "理由", value: backgroundResult.reason || "no_pending_task" },
-        { label: "認証ユーザー", value: diagnostics.authenticatedUserId || authState.user?.id || "不明" },
         { label: "状態別件数", value: statusCounts || "relistタスクなし" },
-        { label: "最新タスク", value: latestTask ? `${latestTask.status || "状態不明"} / ${latestTask.id}` : "なし" }
+        { label: "最新タスク", value: latestTask ? `${latestTask.status || "状態不明"} / ${latestTask.action || "action不明"}` : "なし" }
       ]);
     }
   } catch (error) {
@@ -1302,7 +1441,6 @@ async function handleRakurakuTaskStart() {
 
       renderRakurakuTask(backgroundResult.task || null);
       setStatus("success", "許可して実行しました", [
-        { label: "候補ID", value: candidate.id },
         { label: "結果", value: backgroundResult.reason || "started" }
       ]);
       return;
@@ -1319,7 +1457,6 @@ async function handleRakurakuTaskStart() {
       status: "running"
     });
     setStatus("success", "タスクを実行しました", [
-      { label: "タスクID", value: currentRakurakuTask.id },
       { label: "実行モード", value: rakurakuExecutionModeSelect?.value || "dry-run" }
     ]);
   } catch (error) {
@@ -1349,8 +1486,11 @@ async function initializePopup() {
   try {
     await loadResearchFeatureSetting();
     await restoreAuthState();
-    await loadRakurakuExecutionMode();
-    await loadRakurakuPendingTaskPreview();
+    await restoreScrapeWarningState();
+    if (rakurakuTaskState || rakurakuTaskPanel) {
+      await loadRakurakuExecutionMode();
+      await loadRakurakuPendingTaskPreview();
+    }
   } catch (error) {
     updateAuthUi();
     setAuthMessage("error", error instanceof Error ? error.message : "ログイン状態の復元に失敗しました");

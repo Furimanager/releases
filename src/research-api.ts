@@ -198,8 +198,12 @@ type MinimalChromeApi = {
     };
   };
   runtime?: {
+    id?: string;
     lastError?: {
       message?: string;
+    };
+    getManifest?: () => {
+      version?: string;
     };
   };
 };
@@ -256,7 +260,9 @@ const RESEARCH_API_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
 const SITE_CONFIG_STORAGE_KEY = "furimaneResearchSiteConfig";
+const RESEARCH_SESSION_STORAGE_KEY = "furimaneResearchSessionId";
 const SITE_CONFIG_TTL_MS = 24 * 60 * 60 * 1000;
+const RESEARCH_API_SCHEMA = "research-v1";
 const DEFAULT_SITE_CONFIG: ResearchSiteConfig = {
   version: 0,
   platform: "mercari",
@@ -495,6 +501,50 @@ async function getAccessToken() {
   return refreshAccessToken(storage);
 }
 
+function createResearchRequestId() {
+  return globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createResearchSessionId() {
+  return globalThis.crypto?.randomUUID?.() ?? `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getExtensionVersion() {
+  return window.chrome?.runtime?.getManifest?.().version ?? "unknown";
+}
+
+function getExtensionId() {
+  return window.chrome?.runtime?.id ?? "unknown";
+}
+
+async function getResearchSessionId() {
+  const storage = await getChromeStorage([RESEARCH_SESSION_STORAGE_KEY]);
+  const currentSessionId = storage[RESEARCH_SESSION_STORAGE_KEY];
+
+  if (typeof currentSessionId === "string" && currentSessionId.trim()) {
+    return currentSessionId.trim();
+  }
+
+  const sessionId = createResearchSessionId();
+  await setChromeStorage({ [RESEARCH_SESSION_STORAGE_KEY]: sessionId });
+  return sessionId;
+}
+
+async function buildResearchRequestHeaders(accessToken: string, inputHeaders?: HeadersInit) {
+  const headers = new Headers(inputHeaders);
+  headers.set("Content-Type", headers.get("Content-Type") || "application/json");
+  headers.set("Accept", headers.get("Accept") || "application/json");
+  headers.set("Authorization", `Bearer ${accessToken}`);
+  headers.set("X-Furimane-Client", "chrome-extension");
+  headers.set("X-Furimane-Extension-Version", getExtensionVersion());
+  headers.set("X-Furimane-Extension-Id", getExtensionId());
+  headers.set("X-Furimane-Request-Id", createResearchRequestId());
+  headers.set("X-Furimane-Api-Schema", RESEARCH_API_SCHEMA);
+  headers.set("X-Furimane-Session-Id", await getResearchSessionId());
+
+  return headers;
+}
+
 async function requestJson<T>(path: string, options: RequestInit & ResearchRequestOptions = {}) {
   const accessToken = await getAccessToken();
 
@@ -502,21 +552,18 @@ async function requestJson<T>(path: string, options: RequestInit & ResearchReque
     throw new Error("auth_required");
   }
 
+  const headers = await buildResearchRequestHeaders(accessToken, options.headers);
+
   const response = await fetch(`${getAppUrl()}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-      ...(options.headers ?? {})
-    },
+    headers,
     credentials: "omit"
   });
 
   const data = (await response.json().catch(() => null)) as T | { error?: string } | null;
 
   if (!response.ok) {
-    const message = getApiErrorMessage(data, "リサーチAPIの呼び出しに失敗しました。");
-    throw new Error(message);
+    throw createResearchApiError(response, data, "リサーチAPIの呼び出しに失敗しました。");
   }
 
   return data as T;
@@ -536,13 +583,10 @@ async function requestJsonSafe<T>(path: string, options: RequestInit & ResearchR
   options.signal?.addEventListener("abort", abortHandler, { once: true });
 
   try {
+    const headers = await buildResearchRequestHeaders(accessToken, options.headers);
     const response = await fetch(`${getAppUrl()}${path}`, {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-        ...(options.headers ?? {})
-      },
+      headers,
       credentials: "omit",
       signal: controller.signal
     });
@@ -550,15 +594,12 @@ async function requestJsonSafe<T>(path: string, options: RequestInit & ResearchR
     const data = (await response.json().catch(() => null)) as T | { error?: string } | null;
 
     if (!response.ok) {
-      const message = getApiErrorMessage(data, "api_request_failed");
-      const errorCode = response.status === 401 ? "auth_required" : response.status === 403 ? "plan_required" : message;
+      const apiError = createResearchApiError(response, data, "api_request_failed");
       console.error("[furimane-research] api request failed", {
         path,
         status: response.status,
-        error: message
+        error: apiError.message
       });
-      const apiError = new Error(errorCode);
-      apiError.name = "ResearchApiError";
       throw apiError;
     }
 
@@ -595,6 +636,48 @@ function getApiErrorMessage(data: unknown, fallback: string) {
 
   const error = (data as { error?: unknown }).error;
   return typeof error === "string" && error.trim() ? error : fallback;
+}
+
+function getApiErrorCode(response: Response, data: unknown, fallback: string) {
+  const message = getApiErrorMessage(data, fallback);
+
+  if (response.status === 401) {
+    return "auth_required";
+  }
+
+  if (response.status === 403) {
+    return "plan_required";
+  }
+
+  if (response.status === 413) {
+    return "payload_too_large";
+  }
+
+  if (response.status === 426) {
+    return "extension_update_required";
+  }
+
+  if (response.status === 429) {
+    return message === "research_monthly_limit_exceeded" ? message : "rate_limited";
+  }
+
+  if (response.status === 503) {
+    return "research_temporarily_disabled";
+  }
+
+  return message;
+}
+
+function createResearchApiError(response: Response, data: unknown, fallback: string) {
+  const apiError = new Error(getApiErrorCode(response, data, fallback)) as Error & {
+    status?: number;
+    retryAfter?: number | null;
+  };
+  const retryAfter = Number(response.headers.get("retry-after"));
+  apiError.name = "ResearchApiError";
+  apiError.status = response.status;
+  apiError.retryAfter = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null;
+  return apiError;
 }
 
 async function checkAccess(options: ResearchRequestOptions = {}) {

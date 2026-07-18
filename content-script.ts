@@ -3314,7 +3314,9 @@
     const imageSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : source;
     const jsonItem = itemId && detailSource instanceof Document ? findCurrentItemJsonObject(detailSource, itemId) : null;
     const title = extractTitle(source);
-    const price = extractJsonPrice(jsonItem) ?? extractPrice(source);
+    const price = PRODUCT_PATH_PATTERN.test(window.location.pathname)
+      ? extractItemDetailPrice(detailSource)
+      : extractItemDetailPrice(detailSource) ?? extractJsonPrice(jsonItem) ?? extractPrice(source);
     const imageUrls = extractImageUrls(imageSource, itemId);
     const thumbnailUrl = imageUrls[0] ?? extractThumbnail(source);
     const description = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? extractDescription(document) : null;
@@ -3362,7 +3364,7 @@
       return {
         itemId,
         title: extractTitle(parsedDocument),
-        price: extractJsonPrice(jsonItem) ?? extractPrice(parsedDocument),
+        price: extractItemDetailPrice(parsedDocument),
         itemUrl,
         thumbnailUrl: imageUrls[0] ?? extractThumbnail(parsedDocument),
         imageUrls,
@@ -3989,7 +3991,7 @@
 
   function extractPrice(source: ParentNode): number | null {
     const selectors = [
-      '[data-testid*="price"]',
+      '[data-testid="price"]',
       '[aria-label*="価格"]',
       '[itemprop="price"]',
       'meta[itemprop="price"]',
@@ -4007,6 +4009,8 @@
           if (price !== null) {
             return price;
           }
+
+          continue;
         }
 
         const price = parsePrice(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("content") ?? ""}`);
@@ -4017,8 +4021,81 @@
       }
     }
 
-    const bodyText = source instanceof Document ? `${source.body?.innerText ?? ""} ${source.body?.textContent ?? ""}` : source.textContent ?? "";
-    return parsePrice(bodyText);
+    return null;
+  }
+
+  function extractItemDetailPrice(source: ParentNode): number | null {
+    const rootSelectors = [
+      '#item-info[data-testid="item-detail-container"]',
+      '[data-testid="item-detail-container"]',
+      '#item-info',
+    ];
+    const roots: Element[] = [];
+
+    if (source instanceof Element && (source.matches('#item-info') || source.matches('[data-testid="item-detail-container"]'))) {
+      roots.push(source);
+    }
+
+    for (const selector of rootSelectors) {
+      const element = source.querySelector(selector);
+
+      if (element instanceof Element) {
+        roots.push(element);
+      }
+    }
+
+    for (const root of Array.from(new Set(roots))) {
+      const priceBlocks = Array.from(root.querySelectorAll('[data-testid="price"]'));
+
+      for (const priceBlock of priceBlocks) {
+        const price = extractItemDetailPriceBlock(priceBlock);
+
+        if (price !== null) {
+          return price;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function extractItemDetailPriceBlock(element: Element): number | null {
+    const currency = Array.from(element.querySelectorAll('span.currency, span[class*="currency"]'))
+      .find((span) => /^[¥￥]$/.test(normalizeText(span.textContent ?? "")));
+
+    if (!currency) {
+      return null;
+    }
+
+    const amount = Array.from(element.querySelectorAll("span"))
+      .filter((span) => span !== currency)
+      .find((span) => /^[0-9０-９,，]+$/.test(normalizeText(span.textContent ?? "")));
+
+    if (!amount) {
+      return null;
+    }
+
+    if (!hasItemDetailPriceContext(element)) {
+      return null;
+    }
+
+    return parsePrice(`${currency.textContent ?? ""}${amount.textContent ?? ""}`);
+  }
+
+  function hasItemDetailPriceContext(element: Element): boolean {
+    let current: Element | null = element;
+
+    for (let depth = 0; current && depth < 4; depth += 1) {
+      const text = normalizeText(current.textContent ?? "");
+
+      if (text.includes("送料込み") || text.includes("税込")) {
+        return true;
+      }
+
+      current = current.parentElement;
+    }
+
+    return false;
   }
 
   function extractJsonPrice(source: Record<string, unknown> | null): number | null {

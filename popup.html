@@ -12,9 +12,6 @@
         <p class="hero-card__eyebrow">FURIMANAGER EXTENSION</p>
         <h1 class="hero-card__title">
           <span class="hero-card__brand">フリマネージャー</span>
-          <span class="hero-card__pro-badge">
-            <span class="hero-card__pro-text">PRO</span>
-          </span>
         </h1>
         <p class="hero-card__description">
           メルカリ販売履歴の取得から送信までを、拡張パネル上でまとめて扱うための補助ツールです。
@@ -25,7 +22,7 @@
         <div class="auth-card__header">
           <div>
             <p class="auth-card__eyebrow">Account</p>
-            <h2 class="auth-card__title">Supabase 認証</h2>
+            <h2 class="auth-card__title">アカウント</h2>
           </div>
           <p id="authStateText" class="auth-card__state auth-card__state--idle">未ログイン</p>
         </div>
@@ -40,7 +37,7 @@
             <input id="passwordInput" class="field__input" type="password" autocomplete="current-password" />
           </label>
           <button id="loginButton" class="action-button action-button--auth" type="submit">
-            ログイン
+            <span class="action-button__label">ログイン</span>
           </button>
         </form>
 
@@ -87,58 +84,6 @@
         </div>
         <p id="statusText" class="status-card__value status-card__value--idle">待機中</p>
         <dl id="statusDetails" class="status-details"></dl>
-      </section>
-
-      <section class="panel rakuraku-card" aria-live="polite">
-        <div class="panel__header">
-          <div>
-            <p class="panel__eyebrow">Rakuraku</p>
-            <h2 class="panel__title">らくらく運用アシスト</h2>
-          </div>
-          <p id="rakurakuTaskState" class="rakuraku-card__state">未確認</p>
-        </div>
-        <p class="rakuraku-card__description">
-          半自動では承認待ち候補を許可して開始できます。全自動では承認済みタスクを1件ずつ処理します。
-        </p>
-        <div class="rakuraku-mode-summary">
-          <div>
-            <span class="rakuraku-mode-summary__label">現在のモード</span>
-            <strong id="rakurakuModeText">確認中</strong>
-          </div>
-          <span id="rakurakuModeBadge" class="rakuraku-mode-summary__badge">-</span>
-        </div>
-        <label class="rakuraku-mode-row" hidden>
-          <span>実行モード</span>
-          <select id="rakurakuExecutionModeSelect">
-            <option value="dry-run">dry-run（テスト）</option>
-            <option value="real">real（次フェーズ）</option>
-          </select>
-        </label>
-        <p id="rakurakuEmptyState" class="rakuraku-empty-state">ログイン後に状態を確認します。</p>
-        <div id="rakurakuTaskPanel" class="rakuraku-task" hidden>
-          <dl class="status-details">
-            <div class="status-details__row">
-              <dt>商品名</dt>
-              <dd id="rakurakuTaskTitle">-</dd>
-            </div>
-            <div class="status-details__row">
-              <dt>価格</dt>
-              <dd id="rakurakuTaskPrice">-</dd>
-            </div>
-            <div class="status-details__row">
-              <dt>状態</dt>
-              <dd id="rakurakuTaskStatus">-</dd>
-            </div>
-          </dl>
-          <div class="rakuraku-card__actions">
-            <button id="rakurakuTaskStartButton" class="action-button action-button--send rakuraku-card__button" type="button" hidden>
-              許可して開始
-            </button>
-            <button id="rakurakuWebOpenButton" class="mini-button rakuraku-card__web-button" type="button">
-              Webで開く
-            </button>
-          </div>
-        </div>
       </section>
 
       <section class="panel actions-card">

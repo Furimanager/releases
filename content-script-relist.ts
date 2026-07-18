@@ -653,7 +653,10 @@
       return;
     }
 
-    await ensurePriceBeforeFinalAction(item);
+    if (!(await ensurePriceBeforeFinalAction(item))) {
+      showToast("価格が元の商品価格と一致しないため、出品を止めました");
+      return;
+    }
     await sleep(SAFE_CLICK_SETTLE_MS);
     const button = await waitForFinalListingSubmitButton();
 
@@ -695,15 +698,6 @@
         };
       }
 
-      if (current === "/sell") {
-        return {
-          result: "success",
-          signal: "url-sell",
-          from,
-          to: current,
-        };
-      }
-
       await sleep(RETRY_INTERVAL_MS);
     }
 
@@ -720,19 +714,10 @@
       };
     }
 
-    if (current === "/sell") {
-      return {
-        result: "success",
-        signal: "url-sell",
-        from,
-        to: current,
-      };
-    }
-
     const message = findListingBlockingMessage();
     return {
       result: "failed",
-      signal: message ? "validation-or-blocking-message" : "no-sell-url",
+      signal: message ? "validation-or-blocking-message" : current === "/sell" ? "sell-url-without-completion-message" : "no-completion-message",
       from,
       current,
       message,
@@ -744,8 +729,25 @@
   }
 
   function findListingCompletionMessage(): string | undefined {
-    const bodyText = normalizeText(document.body?.innerText ?? "");
-    return bodyText.includes("出品が完了しました") ? "出品が完了しました" : undefined;
+    const selectors = [
+      '[data-testid="listing-complete-popup"]',
+      '#listing-complete-popup',
+      '[role="dialog"]',
+      '[aria-modal="true"]',
+      '.merModalBase',
+      '.popup',
+    ];
+
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      const text = normalizeText(element?.textContent ?? "");
+
+      if (text.includes("出品が完了しました")) {
+        return "出品が完了しました";
+      }
+    }
+
+    return undefined;
   }
 
   function findListingBlockingMessage(): string | undefined {
@@ -823,7 +825,10 @@
       return;
     }
 
-    await ensurePriceBeforeFinalAction(item);
+    if (!(await ensurePriceBeforeFinalAction(item))) {
+      showToast("価格が元の商品価格と一致しないため、下書き保存を止めました");
+      return;
+    }
     await sleep(SAFE_CLICK_SETTLE_MS);
     const button = await waitForDraftSaveButton();
 
@@ -895,18 +900,28 @@
     return null;
   }
 
-  async function ensurePriceBeforeFinalAction(item: RelistPendingItem): Promise<void> {
+  async function ensurePriceBeforeFinalAction(item: RelistPendingItem): Promise<boolean> {
     if (typeof item.price !== "number") {
-      return;
+      return false;
     }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       if (fillPriceField(item.price)) {
-        return;
+        return true;
       }
 
       await sleep(RETRY_INTERVAL_MS);
     }
+
+    logRelistFlow("価格チェック失敗", {
+      pathname: window.location.pathname,
+      mode: item.mode,
+      expectedPrice: item.price,
+      priceFieldFound: findPriceField() !== null,
+      priceFieldValue: findPriceField()?.value ?? null,
+    }, { force: true });
+
+    return false;
   }
 
   async function waitForDraftSaveButton(): Promise<HTMLElement | null> {
@@ -1278,7 +1293,7 @@
       return parsePriceValue(field.value) === price;
     }
 
-    return isPriceAlreadyDisplayed(price);
+    return false;
   }
 
   async function fillImageField(imageUrls: string[]): Promise<boolean> {
@@ -2821,6 +2836,8 @@
 
   function findPriceField(): FieldElement | null {
     const directField = findInputLike([
+      'input[name="price"][data-testid="price-input"]',
+      'input[data-testid="price-input"]',
       'input[name="price"]',
       'input[name*="price"]',
       'input[placeholder*="価格"]',
@@ -2844,7 +2861,7 @@
       ].filter(Boolean).join(" "));
 
       return /価格|販売価格|開始価格/.test(text);
-    }) ?? inputs.find((input) => input.inputMode === "numeric") ?? null;
+    }) ?? null;
   }
 
   function fillPriceField(price: number): boolean {
@@ -2857,10 +2874,10 @@
 
       setFieldValue(field, String(price));
 
-      return true;
+      return parsePriceValue(field.value) === price;
     }
 
-    return isPriceAlreadyDisplayed(price);
+    return false;
   }
 
   function isPriceAlreadyDisplayed(price: number): boolean {

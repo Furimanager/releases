@@ -11,7 +11,7 @@
   const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
   const FURIMANE_LOCAL_RESEARCH_CACHE_PREFIX = "furimane-research-local-cache:";
   const FURIMANE_LOCAL_RESEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
-  const FURIMANE_ACCESS_CACHE_TTL_MS = 5 * 60 * 1e3;
+  const FURIMANE_ACCESS_CACHE_TTL_MS = 30 * 1e3;
   const FURIMANE_RESEARCH_ENABLED_KEY = "furimaneResearchEnabled";
   let currentAbortController = null;
   let currentResearchPageKey = null;
@@ -286,6 +286,18 @@
     if (message === "research_monthly_limit_exceeded") {
       return "limit";
     }
+    if (message === "rate_limited") {
+      return "rate_limit";
+    }
+    if (message === "payload_too_large") {
+      return "payload_too_large";
+    }
+    if (message === "extension_update_required") {
+      return "update_required";
+    }
+    if (message === "research_temporarily_disabled") {
+      return "maintenance";
+    }
     if (message === "api_timeout" || message === "network_error") {
       return "timeout";
     }
@@ -303,10 +315,21 @@
   function getResearchErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
   }
+  function getResearchRetryAfter(error) {
+    const retryAfter = error && typeof error === "object" ? error.retryAfter : null;
+    return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : null;
+  }
+  function isRetryableResearchErrorKind(kind) {
+    return !["auth", "plan", "limit", "rate_limit", "payload_too_large", "update_required", "maintenance"].includes(kind);
+  }
   function canContinueResearchWithoutAccessCheck(error, api) {
     const message = getResearchErrorMessage(error);
     const appUrl = api.getAppUrl?.() ?? "";
     return (message === "network_error" || message === "api_timeout") && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(appUrl);
+  }
+  function canShowLocalCacheAfterAccessError(error) {
+    const message = getResearchErrorMessage(error);
+    return message === "network_error" || message === "api_timeout";
   }
   function getResearchFetchFunction(scraper) {
     return scraper.fetchSellerResearchData ?? scraper.scrapeSellerPage ?? null;
@@ -399,6 +422,30 @@
           description: "\u4ECA\u6708\u306E\u5229\u7528\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F\u3002\u6765\u67081\u65E5\u306B\u30EA\u30BB\u30C3\u30C8\u3055\u308C\u307E\u3059\u3002",
           actionLabel: "\u30D7\u30E9\u30F3\u3092\u78BA\u8A8D\u3059\u308B"
         };
+      case "rate_limit":
+        return {
+          title: "\u77ED\u6642\u9593\u306B\u30A2\u30AF\u30BB\u30B9\u304C\u96C6\u4E2D\u3057\u3066\u3044\u307E\u3059",
+          description: "\u5B89\u5168\u306E\u305F\u3081\u4E00\u6642\u7684\u306B\u30EA\u30AF\u30A8\u30B9\u30C8\u3092\u5236\u9650\u3057\u3066\u3044\u307E\u3059\u3002\u5C11\u3057\u6642\u9593\u3092\u7F6E\u3044\u3066\u304B\u3089\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
+      case "payload_too_large":
+        return {
+          title: "\u53D6\u5F97\u30C7\u30FC\u30BF\u304C\u591A\u3059\u304E\u307E\u3059",
+          description: "\u4E00\u5EA6\u306B\u9001\u4FE1\u3059\u308B\u30EA\u30B5\u30FC\u30C1\u30C7\u30FC\u30BF\u304C\u4E0A\u9650\u3092\u8D85\u3048\u307E\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u3001\u6642\u9593\u3092\u7F6E\u3044\u3066\u304B\u3089\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
+      case "update_required":
+        return {
+          title: "\u62E1\u5F35\u6A5F\u80FD\u306E\u66F4\u65B0\u304C\u5FC5\u8981\u3067\u3059",
+          description: "\u73FE\u5728\u306E\u30D5\u30EA\u30DE\u30CD\u62E1\u5F35\u3067\u306F\u3053\u306E\u30EA\u30B5\u30FC\u30C1API\u3092\u5229\u7528\u3067\u304D\u307E\u305B\u3093\u3002Chrome\u306E\u62E1\u5F35\u6A5F\u80FD\u7BA1\u7406\u753B\u9762\u304B\u3089\u66F4\u65B0\u3057\u3066\u304B\u3089\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u66F4\u65B0\u65B9\u6CD5\u3092\u78BA\u8A8D\u3059\u308B"
+        };
+      case "maintenance":
+        return {
+          title: "\u30EA\u30B5\u30FC\u30C1\u6A5F\u80FD\u3092\u4E00\u6642\u505C\u6B62\u3057\u3066\u3044\u307E\u3059",
+          description: "\u30E1\u30F3\u30C6\u30CA\u30F3\u30B9\u307E\u305F\u306F\u4FDD\u8B77\u8A2D\u5B9A\u306E\u305F\u3081\u3001\u73FE\u5728\u30EA\u30B5\u30FC\u30C1\u6A5F\u80FD\u3092\u4E00\u6642\u505C\u6B62\u3057\u3066\u3044\u307E\u3059\u3002\u5C11\u3057\u6642\u9593\u3092\u7F6E\u3044\u3066\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
+        };
       case "timeout":
         return {
           title: "\u901A\u4FE1\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F",
@@ -438,6 +485,7 @@
     }
     const copy = getResearchErrorCopy(kind);
     const errorMessage = getResearchErrorMessage(error);
+    const retryAfter = getResearchRetryAfter(error);
     const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
     const wrapper = document.createElement("div");
     wrapper.className = "furimane-research-overlay__state furimane-research-overlay__state--error";
@@ -446,6 +494,9 @@
     title.textContent = copy.title;
     const description = createParagraph(copy.description);
     wrapper.append(title, description);
+    if ((kind === "rate_limit" || kind === "maintenance") && retryAfter) {
+      wrapper.appendChild(createParagraph(`\u7D04${retryAfter}\u79D2\u5F8C\u306B\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002`, "furimane-research-overlay__support-text"));
+    }
     if (kind === "scraping" || kind === "unknown") {
       const detail = createParagraph(`\u539F\u56E0\u30B3\u30FC\u30C9: ${errorMessage}`, "furimane-research-overlay__support-text");
       wrapper.appendChild(detail);
@@ -458,10 +509,12 @@
       link.rel = "noopener noreferrer";
       link.textContent = copy.actionLabel;
       wrapper.appendChild(link);
-    } else if (retryCount < FURIMANE_MAX_RETRY_COUNT) {
+    } else if (isRetryableResearchErrorKind(kind) && retryCount < FURIMANE_MAX_RETRY_COUNT) {
       wrapper.appendChild(createButton(copy.actionLabel, retry, "secondary"));
     } else {
-      const support = createParagraph("\u518D\u8A66\u884C\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u3082\u76F4\u3089\u306A\u3044\u5834\u5408\u306F\u30B5\u30DD\u30FC\u30C8\u3078\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      const support = createParagraph(
+        kind === "update_required" ? "Chrome\u306E\u62E1\u5F35\u6A5F\u80FD\u7BA1\u7406\u753B\u9762\u3067\u30D5\u30EA\u30DE\u30CD\u30FC\u30B8\u30E3\u30FC\u3092\u66F4\u65B0\u3057\u3066\u304F\u3060\u3055\u3044\u3002" : kind === "payload_too_large" ? "\u4F55\u5EA6\u3082\u767A\u751F\u3059\u308B\u5834\u5408\u306F\u3001\u5BFE\u8C61\u30DA\u30FC\u30B8\u306EURL\u3092\u6DFB\u3048\u3066\u30B5\u30DD\u30FC\u30C8\u3078\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044\u3002" : kind === "rate_limit" ? "\u5C11\u3057\u6642\u9593\u3092\u7F6E\u3044\u3066\u304B\u3089\u3001\u3082\u3046\u4E00\u5EA6\u30EA\u30B5\u30FC\u30C1\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044\u3002" : kind === "maintenance" ? "\u30E1\u30F3\u30C6\u30CA\u30F3\u30B9\u89E3\u9664\u5F8C\u306B\u3001\u3082\u3046\u4E00\u5EA6\u30EA\u30B5\u30FC\u30C1\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044\u3002" : "\u518D\u8A66\u884C\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u3082\u76F4\u3089\u306A\u3044\u5834\u5408\u306F\u30B5\u30DD\u30FC\u30C8\u3078\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044\u3002"
+      );
       support.className = "furimane-research-overlay__support-text";
       wrapper.appendChild(support);
     }
@@ -579,7 +632,7 @@
         if (error instanceof DOMException && error.name === "AbortError") {
           throw error;
         }
-        if (hasRenderableResearchData(localCachedData)) {
+        if (canShowLocalCacheAfterAccessError(error) && hasRenderableResearchData(localCachedData)) {
           renderResults(container, localCachedData, "\u30D6\u30E9\u30A6\u30B6\u30AD\u30E3\u30C3\u30B7\u30E5");
           return;
         }

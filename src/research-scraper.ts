@@ -573,8 +573,8 @@ function getSellerName(platform: ResearchPlatform | null = getPlatformFromCurren
   }
 
   const suffixPattern = platform === "mercari_shops"
-    ? /\s*[-|]\s*繝｡繝ｫ繧ｫ繝ｪShops.*$/
-    : /\s*[-|]\s*繝｡繝ｫ繧ｫ繝ｪ.*$/;
+    ? /\s*[-|]\s*メルカリShops.*$/
+    : /\s*[-|]\s*メルカリ.*$/;
 
   return document.title.replace(suffixPattern, "").trim() || null;
 }
