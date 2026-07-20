@@ -872,16 +872,27 @@ function parseSoldAtTextToDate(soldAtText) {
     return null;
   }
 
-  const normalizedText = soldAtText.trim();
+  const normalizedText = soldAtText.normalize("NFKC").trim();
   const matched =
-    normalizedText.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/) ||
-    normalizedText.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
+    normalizedText.match(/(?:^|[^\d])(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})(?=$|[^\d])/) ||
+    normalizedText.match(/(?:^|[^\d])(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
 
   if (!matched) {
     return null;
   }
 
   const [, year, month, day] = matched;
+  const yearNumber = Number(year);
+  const monthNumber = Number(month);
+  const dayNumber = Number(day);
+  const date = new Date(Date.UTC(yearNumber, monthNumber - 1, dayNumber));
+  if (
+    date.getUTCFullYear() !== yearNumber ||
+    date.getUTCMonth() + 1 !== monthNumber ||
+    date.getUTCDate() !== dayNumber
+  ) {
+    return null;
+  }
 
   return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
