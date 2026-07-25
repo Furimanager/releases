@@ -14,6 +14,7 @@ const AUTH_STORAGE_KEYS = [
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
+const SALES_RECIPE_STORAGE_KEY = "mercariSalesRecipeCache";
 const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
 
 const statusText = document.getElementById("statusText");
@@ -583,6 +584,63 @@ async function fetchAppApi(path, options = {}) {
   return data;
 }
 
+function normalizeSalesRecipe(value) {
+  const recipe = value?.recipe && typeof value.recipe === "object" ? value.recipe : value;
+  if (!recipe || typeof recipe !== "object" || Array.isArray(recipe)) {
+    return null;
+  }
+
+  if (!Number.isInteger(Number(recipe.recipeVersion))) {
+    return null;
+  }
+
+  if (!Array.isArray(recipe.rootSelectors) || !Array.isArray(recipe?.table?.rowLinkSelectors)) {
+    return null;
+  }
+
+  return recipe;
+}
+
+async function getCachedSalesRecipe() {
+  const storage = await getLocalStorage([SALES_RECIPE_STORAGE_KEY]);
+  return normalizeSalesRecipe(storage[SALES_RECIPE_STORAGE_KEY]?.recipe);
+}
+
+async function fetchSalesRecipe() {
+  try {
+    const recipe = normalizeSalesRecipe(await fetchAppApi("/api/scrape-recipes/mercari-sales"));
+    if (!recipe) {
+      throw new Error("invalid sales recipe");
+    }
+
+    await setLocalStorage({
+      [SALES_RECIPE_STORAGE_KEY]: {
+        recipe,
+        fetchedAt: new Date().toISOString()
+      }
+    });
+    return recipe;
+  } catch (error) {
+    const cachedRecipe = await getCachedSalesRecipe();
+    if (cachedRecipe) {
+      console.warn("[furimanager-extension] sales recipe fetch failed; using cached recipe");
+      return cachedRecipe;
+    }
+
+    throw new Error("サーバーに接続できません");
+  }
+}
+
+async function fetchLatestSalesAnchor() {
+  try {
+    const data = await fetchAppApi("/api/sales/latest-anchor");
+    return data?.anchor || null;
+  } catch {
+    console.warn("[furimanager-extension] latest sales anchor failed");
+    return null;
+  }
+}
+
 function getSafeApiLogPath(path) {
   return path
     .replace(/\/api\/automation\/tasks\/[^/]+/g, "/api/automation/tasks/[id]")
@@ -596,7 +654,8 @@ async function runTabAction(action, extraMessage = {}) {
     throw new Error("メルカリ販売履歴ページを開いてから同期してください");
   }
 
-  return sendMessageToTab(tab.id, { action, ...extraMessage });
+  const recipe = action === "ping" ? null : await fetchSalesRecipe();
+  return sendMessageToTab(tab.id, { action, ...extraMessage, ...(recipe ? { recipe } : {}) });
 }
 
 function showActionError(title, response, fallbackMessage) {
@@ -867,147 +926,6 @@ async function logoutFromSupabase() {
   await removeLocalStorage(AUTH_STORAGE_KEYS);
 }
 
-function parseSoldAtTextToDate(soldAtText) {
-  if (typeof soldAtText !== "string") {
-    return null;
-  }
-
-  const normalizedText = soldAtText.normalize("NFKC").trim();
-  const matched =
-    normalizedText.match(/(?:^|[^\d])(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})(?=$|[^\d])/) ||
-    normalizedText.match(/(?:^|[^\d])(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
-
-  if (!matched) {
-    return null;
-  }
-
-  const [, year, month, day] = matched;
-  const yearNumber = Number(year);
-  const monthNumber = Number(month);
-  const dayNumber = Number(day);
-  const date = new Date(Date.UTC(yearNumber, monthNumber - 1, dayNumber));
-  if (
-    date.getUTCFullYear() !== yearNumber ||
-    date.getUTCMonth() + 1 !== monthNumber ||
-    date.getUTCDate() !== dayNumber
-  ) {
-    return null;
-  }
-
-  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-}
-
-function resolveShippingCostForInsert(item) {
-  const shippingFee =
-    typeof item?.shippingFee === "number"
-      ? item.shippingFee
-      : typeof item?.shippingCost === "number"
-        ? item.shippingCost
-        : null;
-  const classification =
-    typeof item?.shippingFeeClassification === "string" && item.shippingFeeClassification
-      ? item.shippingFeeClassification
-      : shippingFee !== null
-        ? "unknown_numeric"
-        : "unknown";
-
-  if (classification === "buyer_paid" || classification === "buyer_cash_on_delivery") {
-    return 0;
-  }
-
-  if (
-    classification === "seller_paid" ||
-    classification === "seller_included" ||
-    classification === "unknown_numeric"
-  ) {
-    return shippingFee ?? 0;
-  }
-
-  return 0;
-}
-
-function convertItemToTransactionInsert(item) {
-  if (typeof item?.soldPrice !== "number") {
-    return null;
-  }
-
-  // B-2: external_id(取引ID)が取れない行は重複判定できないため送信しない。
-  const externalId =
-    typeof item?.mercariTransactionId === "string" ? item.mercariTransactionId.trim() : "";
-
-  if (!externalId) {
-    return null;
-  }
-
-  return {
-    platform: "mercari",
-    item_name: item.itemName || "",
-    sold_price: item.soldPrice,
-    shipping_cost: resolveShippingCostForInsert(item),
-    platform_fee_rate: 0.1,
-    sold_at: parseSoldAtTextToDate(item.soldAtText),
-    external_id: externalId,
-    // B-11: 取込元の判別用(sourceのCHECK制約に既存の許可値)。
-    source: "chrome_extension"
-  };
-}
-
-function buildInsertPayload(items) {
-  return items
-    .map((item) => convertItemToTransactionInsert(item))
-    .filter((record) => record !== null)
-    .map((record) => {
-      return {
-        ...record,
-        user_id: authState.user?.id || null
-      };
-    });
-}
-
-async function insertTransactions(records) {
-  const { url, anonKey } = getConfig();
-
-  if (!(await ensureFreshAuthSession())) {
-    authState.accessToken = null;
-  }
-
-  if (!authState.accessToken) {
-    throw new Error("ログインしてから送信してください");
-  }
-
-  // B-1: 既存取引(重複)が混ざっても新規分だけ登録する。
-  // on_conflict はDBのユニーク制約 transactions_user_external_unique (user_id, external_id) に対応。
-  const response = await fetch(`${url}/rest/v1/transactions?on_conflict=user_id,external_id`, {
-    method: "POST",
-    headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${authState.accessToken}`,
-      "Content-Type": "application/json",
-      Prefer: "resolution=ignore-duplicates,return=minimal"
-    },
-    body: JSON.stringify(records)
-  });
-
-  const rawText = await response.text();
-  let parsed = null;
-
-  if (rawText) {
-    try {
-      parsed = JSON.parse(rawText);
-    } catch (_error) {
-      parsed = null;
-    }
-  }
-
-  console.log("status:", response.status);
-
-  if (response.ok) {
-    return;
-  }
-
-  throw new Error(parseSupabaseError(parsed || rawText, "transactions 送信に失敗しました"));
-}
-
 async function saveScrapeState(lastItemId, count, options = {}) {
   const lastSyncedExternalIds = normalizeAnchorExternalIds(options.lastSyncedExternalIds);
 
@@ -1190,12 +1108,20 @@ async function handleScrapeDelta() {
 
   try {
     const storageState = await getLocalStorage(SCRAPE_STORAGE_KEYS);
-    const previousLastItemId = normalizeAnchorExternalId(storageState.lastItemId);
-    const previousAnchorExternalIds = getPreviousAnchorExternalIds(storageState);
+    const localAnchorExternalIds = getPreviousAnchorExternalIds(storageState);
+    const hasLocalSalesAnchor = Boolean(normalizeAnchorExternalId(storageState.lastItemId) || localAnchorExternalIds.length > 0);
+    const databaseAnchor = await fetchLatestSalesAnchor();
+    const databaseLastItemId = normalizeAnchorExternalId(databaseAnchor?.lastItemId);
+    const previousAnchorExternalIds = normalizeAnchorExternalIds([
+      ...(hasLocalSalesAnchor ? [databaseLastItemId] : []),
+      ...localAnchorExternalIds
+    ]);
+    const previousLastItemId = hasLocalSalesAnchor ? databaseLastItemId || normalizeAnchorExternalId(storageState.lastItemId) : null;
 
     const response = await runTabAction("scrapeDeltaPages", {
       lastItemId: previousLastItemId,
-      lastSyncedExternalIds: previousAnchorExternalIds
+      lastSyncedExternalIds: previousAnchorExternalIds,
+      lastSoldAt: typeof databaseAnchor?.lastSoldAt === "string" ? databaseAnchor.lastSoldAt : null
     });
 
     if (!response || response.success !== true) {
@@ -1221,7 +1147,7 @@ async function handleScrapeDelta() {
       { label: "読み込みページ数", value: response.pageCount ?? 0 },
       { label: "上限到達", value: response.reachedPageLimit ? "はい" : "いいえ" },
       { label: "保存アンカー数", value: nextAnchorExternalIds.length },
-      { label: "取得モード", value: previousAnchorExternalIds.length > 0 ? "差分取得" : "初回取得" }
+      { label: "取得モード", value: previousAnchorExternalIds.length > 0 || databaseAnchor?.lastSoldAt ? "差分取得" : "初回取得" }
     ]);
   } catch (error) {
     setStatus("error", "差分取得失敗", [
@@ -1275,12 +1201,20 @@ async function handleScrapeAndSend() {
 
   try {
     const storageState = await getLocalStorage(SCRAPE_STORAGE_KEYS);
-    const previousLastItemId = normalizeAnchorExternalId(storageState.lastItemId);
-    const previousAnchorExternalIds = getPreviousAnchorExternalIds(storageState);
+    const localAnchorExternalIds = getPreviousAnchorExternalIds(storageState);
+    const hasLocalSalesAnchor = Boolean(normalizeAnchorExternalId(storageState.lastItemId) || localAnchorExternalIds.length > 0);
+    const databaseAnchor = await fetchLatestSalesAnchor();
+    const databaseLastItemId = normalizeAnchorExternalId(databaseAnchor?.lastItemId);
+    const previousAnchorExternalIds = normalizeAnchorExternalIds([
+      ...(hasLocalSalesAnchor ? [databaseLastItemId] : []),
+      ...localAnchorExternalIds
+    ]);
+    const previousLastItemId = hasLocalSalesAnchor ? databaseLastItemId || normalizeAnchorExternalId(storageState.lastItemId) : null;
 
     const response = await runTabAction("scrapeDeltaPages", {
       lastItemId: previousLastItemId,
-      lastSyncedExternalIds: previousAnchorExternalIds
+      lastSyncedExternalIds: previousAnchorExternalIds,
+      lastSoldAt: typeof databaseAnchor?.lastSoldAt === "string" ? databaseAnchor.lastSoldAt : null
     });
 
     if (!response || response.success !== true) {
@@ -1288,30 +1222,33 @@ async function handleScrapeAndSend() {
       return;
     }
 
+    const importResult = await fetchAppApi("/api/sales/import", {
+      method: "POST",
+      body: JSON.stringify(response)
+    });
     const nextAnchorExternalIds = normalizeAnchorExternalIds([
-      ...getResponseAnchorExternalIds(response),
+      ...getResponseAnchorExternalIds(importResult),
       ...previousAnchorExternalIds
     ]);
     const nextLastItemId = nextAnchorExternalIds[0] || null;
-    const gapSuspected = getGapSuspected(response) || storageState.gapSuspected === true;
-    const records = buildInsertPayload(response.items || []);
+    const gapSuspected = getGapSuspected(importResult) || storageState.gapSuspected === true;
+    const savedCount = (importResult?.insertedCount ?? 0) + (importResult?.updatedCount ?? 0);
+    const normalizedCount = importResult?.normalizedCount ?? 0;
+    const invalidCount = importResult?.invalidCount ?? 0;
 
-    if (records.length > 0) {
-      await insertTransactions(records);
-    }
-
-    await saveScrapeState(nextLastItemId, response.count ?? 0, {
+    await saveScrapeState(nextLastItemId, importResult?.checkedCount ?? response.count ?? 0, {
       lastSyncedExternalIds: nextAnchorExternalIds,
       gapSuspected
     });
 
-    setStatus("success", gapSuspected ? "送信完了（未確認あり）" : records.length > 0 ? "送信完了" : "送信対象なし", [
-      ...getGapWarningDetails(response),
-      { label: "差分取得件数", value: response.count ?? 0 },
-      { label: "送信対象件数", value: records.length },
-      { label: "送信対象外(取引IDなし等)", value: Math.max((response.count ?? 0) - records.length, 0) },
-      { label: "読み込みページ数", value: response.pageCount ?? 0 },
-      { label: "上限到達", value: response.reachedPageLimit ? "はい" : "いいえ" },
+    setStatus("success", gapSuspected ? "送信完了（未確認あり）" : savedCount > 0 ? "送信完了" : "送信対象なし", [
+      ...getGapWarningDetails(importResult),
+      { label: "差分取得件数", value: importResult?.checkedCount ?? response.count ?? 0 },
+      { label: "保存対象件数", value: normalizedCount },
+      { label: "保存件数", value: savedCount },
+      { label: "確認待ち件数", value: invalidCount },
+      { label: "読み込みページ数", value: importResult?.pageCount ?? response.pageCount ?? 0 },
+      { label: "上限到達", value: importResult?.reachedPageLimit ? "はい" : "いいえ" },
       { label: "保存アンカー数", value: nextAnchorExternalIds.length }
     ]);
   } catch (error) {

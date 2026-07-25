@@ -165,9 +165,25 @@
 
     <script src="parser.js"></script>
     <script>
-      const items = window.FurimanagerParser.parseSoldItemsFromDocument(document);
-      console.log("[furimanager-extension] mock parse result", items);
-      document.getElementById("result").textContent = JSON.stringify(items, null, 2);
+      const recipe = {
+        recipeVersion: 1,
+        pagePathPrefix: "/mypage/listings/sold",
+        rootSelectors: ["#my-page-main-content", "main"],
+        table: {
+          rowLinkSelectors: ["tbody tr a[href*='/transaction/']", "tbody tr a[href*='/item/m']"],
+          headerSelectors: ["thead th", "[role='columnheader']", "tr:first-child th"]
+        },
+        pageDetection: { headerMarkers: ["購入完了日", "販売利益"] },
+        pagination: { nextLabels: ["次へ", "次のページ", "Next"], prevLabels: ["前へ", "前のページ", "Previous", "Prev"] },
+        emptyStateMarkers: ["販売履歴はありません", "取引はありません", "商品がありません"],
+        periodValidation: { requiredText: "全期間" },
+        stopDatePattern: "(?:^|[^\\d])(?:(\\d{4})[\\/.\\-](\\d{1,2})[\\/.\\-](\\d{1,2})|(\\d{4})年\\s*(\\d{1,2})月\\s*(\\d{1,2})日)(?=$|[^\\d])",
+        anchorIdPattern: "\\/(?:transaction|item)\\/(m\\d{6,})",
+        limits: { fullMaxSteps: 200, fullMaxItems: 1000, deltaMaxSteps: 120, deltaMaxItems: 400 }
+      };
+      const page = window.FurimanagerParser.collectSalesPage(document, recipe, 1);
+      console.log("[furimanager-extension] mock raw page result", page);
+      document.getElementById("result").textContent = JSON.stringify(page, null, 2);
     </script>
   </body>
 </html>

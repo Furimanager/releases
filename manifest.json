@@ -52,11 +52,6 @@
         "src/research-overlay.js"
       ],
       "run_at": "document_start"
-    },
-    {
-      "matches": ["https://furimanager.com/*", "https://www.furimanager.com/*"],
-      "js": ["src/extension-installed-detector.js"],
-      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
