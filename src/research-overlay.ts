@@ -15,7 +15,9 @@ const FURIMANE_RESEARCH_ENABLED_KEY = "furimaneResearchEnabled";
 
 declare namespace chrome {
   namespace runtime {
+    const lastError: { message?: string } | undefined;
     function getURL(path: string): string;
+    function sendMessage(message: unknown, callback: (response?: { success?: boolean; message?: string }) => void): void;
   }
   namespace storage {
     const local: {
@@ -783,8 +785,8 @@ function getResearchErrorCopy(kind: ResearchErrorKind) {
     case "auth":
       return {
         title: "フリマネにログインしてください",
-        description: "リサーチ機能を使うには、先にフリマネへログインしてください。",
-        actionLabel: "ログインページを開く"
+        description: "リサーチ機能を使うには、Chrome拡張側でフリマネにログインしてください。Web版のログイン状態とは別に保存されます。",
+        actionLabel: "拡張のログイン画面を開く"
       };
     case "plan":
       return {
@@ -855,6 +857,19 @@ function getResearchErrorCopy(kind: ResearchErrorKind) {
   }
 }
 
+function openExtensionLoginPage() {
+  if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+    showResearchNotice("拡張機能のログイン画面を開けませんでした。");
+    return;
+  }
+
+  chrome.runtime.sendMessage({ type: "OPEN_EXTENSION_LOGIN" }, (response) => {
+    if (chrome.runtime.lastError || !response?.success) {
+      showResearchNotice(response?.message ?? "拡張機能のログイン画面を開けませんでした。");
+    }
+  });
+}
+
 function renderResearchError(container: HTMLElement, error: unknown, retry: () => void, retryCount = 0) {
   const kind = getResearchErrorKind(error);
 
@@ -885,10 +900,12 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
     wrapper.appendChild(detail);
   }
 
-  if (kind === "auth" || kind === "plan" || kind === "limit") {
+  if (kind === "auth") {
+    wrapper.appendChild(createButton(copy.actionLabel, openExtensionLoginPage, "secondary"));
+  } else if (kind === "plan" || kind === "limit") {
     const link = document.createElement("a");
     link.className = "furimane-research-overlay__link-button";
-    link.href = kind === "auth" ? `${appUrl}/login` : `${appUrl}/dashboard/research`;
+    link.href = `${appUrl}/dashboard/research`;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.textContent = copy.actionLabel;
@@ -1558,17 +1575,34 @@ function installResearchSettingListener() {
   }
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local" || !(FURIMANE_RESEARCH_ENABLED_KEY in changes)) {
+    if (areaName !== "local") {
       return;
     }
 
-    if (changes[FURIMANE_RESEARCH_ENABLED_KEY]?.newValue === false) {
-      removeResearchOverlayUi();
-      currentResearchPageKey = null;
+    if (FURIMANE_RESEARCH_ENABLED_KEY in changes) {
+      if (changes[FURIMANE_RESEARCH_ENABLED_KEY]?.newValue === false) {
+        removeResearchOverlayUi();
+        currentResearchPageKey = null;
+        return;
+      }
+
+      scheduleResearchOverlaySync();
       return;
     }
 
-    scheduleResearchOverlaySync();
+    const authSessionChanged = ["supabaseAccessToken", "supabaseRefreshToken", "supabaseUser"]
+      .some((key) => key in changes);
+
+    if (!authSessionChanged) {
+      return;
+    }
+
+    cachedResearchAccess = null;
+    const overlay = document.getElementById(FURIMANE_OVERLAY_ID);
+
+    if (overlay) {
+      void runResearchFlowSafe(overlay, { retryCount: 0 });
+    }
   });
 }
 

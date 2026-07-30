@@ -67,6 +67,41 @@ body {
     rgba(15, 23, 42, 0.88);
 }
 
+.hero-card__identity {
+  display: contents;
+}
+
+.hero-card__logo,
+.hero-card__description--login,
+.auth-card__login-heading {
+  display: none;
+}
+
+.auth-card__signup {
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.auth-card__signup:not([hidden]) {
+  display: flex;
+}
+
+.auth-card__signup p {
+  display: none;
+}
+
+.auth-card__signup a {
+  color: #c4b5fd;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+
+.auth-card__signup a:hover {
+  color: white;
+}
+
 .hero-card__eyebrow,
 .panel__eyebrow {
   margin: 0;
@@ -468,7 +503,7 @@ body {
   position: relative;
   border: 0.5px solid transparent;
   background:
-    linear-gradient(135deg, #7c3aed, #f97316) padding-box,
+    linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%) padding-box,
     linear-gradient(#8f879d, #8f879d) border-box;
   box-shadow: 0 4px 10px rgba(2, 6, 23, 0.14);
   filter: none;
@@ -486,7 +521,7 @@ body {
 
 .action-button--auth:hover {
   background:
-    linear-gradient(135deg, #7c3aed, #f97316) padding-box,
+    linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%) padding-box,
     linear-gradient(#9b93aa, #9b93aa) border-box;
   box-shadow: 0 5px 12px rgba(2, 6, 23, 0.16);
 }
@@ -494,7 +529,7 @@ body {
 .auth-card .action-button--auth:focus,
 .auth-card .action-button--auth:focus-visible {
   background:
-    linear-gradient(135deg, #7c3aed, #f97316) padding-box,
+    linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%) padding-box,
     linear-gradient(#a69eb5, #a69eb5) border-box;
   box-shadow: 0 5px 12px rgba(2, 6, 23, 0.16);
   outline: none;
@@ -524,4 +559,251 @@ body {
   cursor: wait;
   transform: none;
   box-shadow: none;
+}
+
+body.login-view {
+  width: auto;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.18), transparent 28%),
+    linear-gradient(180deg, #150c2b 0%, #0a0e1a 100%);
+}
+
+body.login-view .popup {
+  width: min(100%, 768px);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 40px 16px;
+  align-content: center;
+  gap: 20px;
+}
+
+body.login-view .panel {
+  display: none;
+}
+
+body.login-view .hero-card {
+  padding: 24px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 20px 60px rgba(8, 12, 24, 0.28);
+}
+
+body.login-view .hero-card__identity {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+body.login-view .hero-card__logo {
+  display: block;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 16px;
+  object-fit: cover;
+  box-shadow: 0 14px 34px rgba(124, 58, 237, 0.32);
+}
+
+body.login-view .hero-card__eyebrow {
+  color: #ddd6fe;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+}
+
+body.login-view .hero-card__title {
+  margin-top: 8px;
+  font-size: 30px;
+}
+
+body.login-view .hero-card__description--default {
+  display: none;
+}
+
+body.login-view .hero-card__description--login {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin-top: 12px;
+  color: #cbd5e1;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+body.login-view .auth-card {
+  padding: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  background: rgba(16, 24, 38, 0.95);
+  box-shadow: 0 20px 60px rgba(8, 12, 24, 0.35);
+}
+
+body.login-view .auth-card__header {
+  display: none;
+}
+
+body.login-view .auth-card__login-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+body.login-view .auth-card__login-mark {
+  display: flex;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #7c3aed 0%, #f97316 100%);
+  color: white;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+body.login-view .auth-card__login-icon {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.login-view .auth-card__login-title {
+  margin: 0;
+  color: white;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+body.login-view .auth-card__login-description {
+  margin: 3px 0 0;
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+body.login-view .auth-form {
+  margin-top: 32px;
+  gap: 20px;
+}
+
+body.login-view .field {
+  gap: 8px;
+}
+
+body.login-view .field__label {
+  color: #e2e8f0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+body.login-view .auth-form .field__input,
+body.login-view .auth-form input {
+  min-height: 56px;
+  padding: 16px;
+  border-color: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: #1a1a2e;
+  font-size: 16px;
+}
+
+body.login-view .auth-form .field__input:focus,
+body.login-view .auth-form input:focus {
+  border-color: #7c3aed;
+  background: #1a1a2e;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.3);
+}
+
+body.login-view .action-button--auth {
+  min-height: 56px;
+  padding: 16px 20px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%);
+  font-size: 16px;
+  box-shadow: 0 12px 32px rgba(124, 58, 237, 0.32);
+}
+
+body.login-view .account-panel {
+  margin-top: 32px;
+  padding: 16px;
+  border-radius: 16px;
+}
+
+body.login-view .account-panel .action-button--logout {
+  min-height: 48px;
+}
+
+body.login-view .auth-message {
+  margin-top: 16px;
+  font-size: 14px;
+}
+
+body.login-view .auth-message--error {
+  padding: 12px 16px;
+  border: 1px solid rgba(251, 113, 133, 0.3);
+  border-radius: 16px;
+  background: rgba(244, 63, 94, 0.1);
+  color: #ffe4e6;
+}
+
+body.login-view .auth-card__signup {
+  margin-top: 24px;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+body.login-view .auth-card__signup:not([hidden]) {
+  display: flex;
+}
+
+body.login-view .auth-card__signup p {
+  display: block;
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+body.login-view .auth-card__signup a {
+  flex: 0 0 auto;
+  color: #ddd6fe;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+body.login-view .auth-card__signup a:hover {
+  color: white;
+}
+
+@media (max-width: 520px) {
+  body.login-view .popup {
+    padding: 20px 12px;
+  }
+
+  body.login-view .hero-card,
+  body.login-view .auth-card {
+    padding: 20px;
+  }
+
+  body.login-view .hero-card__title {
+    font-size: 25px;
+  }
+
+  body.login-view .auth-card__signup:not([hidden]) {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }

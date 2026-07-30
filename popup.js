@@ -16,6 +16,10 @@ const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
 const SALES_RECIPE_STORAGE_KEY = "mercariSalesRecipeCache";
 const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
+const isLoginView = new URLSearchParams(window.location.search).get("view") === "login";
+
+document.body.classList.toggle("login-view", isLoginView);
+document.title = isLoginView ? "フリマネにログイン" : "フリマネージャー";
 
 const statusText = document.getElementById("statusText");
 const statusDetails = document.getElementById("statusDetails");
@@ -33,6 +37,12 @@ const sessionPanel = document.getElementById("sessionPanel");
 const sessionText = document.getElementById("sessionText");
 const authStateText = document.getElementById("authStateText");
 const authMessage = document.getElementById("authMessage");
+const loginViewAuthTitle = document.getElementById("loginViewAuthTitle");
+const loginViewAuthDescription = document.getElementById("loginViewAuthDescription");
+const loginViewLoggedOutIcon = document.getElementById("loginViewLoggedOutIcon");
+const loginViewLoggedInIcon = document.getElementById("loginViewLoggedInIcon");
+const signupPrompt = document.getElementById("signupPrompt");
+const signupLink = document.getElementById("signupLink");
 const researchFeatureState = document.getElementById("researchFeatureState");
 const researchFeatureToggle = document.getElementById("researchFeatureToggle");
 const researchFeatureMessage = document.getElementById("researchFeatureMessage");
@@ -62,6 +72,7 @@ let currentRakurakuApprovalCandidate = null;
 let rakurakuAutoPollEnabled = false;
 let currentRakurakuMode = null;
 let researchFeatureEnabled = false;
+let isAuthStateReady = false;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 
 function escapeHtml(value) {
@@ -123,6 +134,16 @@ function updateAuthUi() {
     ? "auth-card__state auth-card__state--success"
     : "auth-card__state auth-card__state--idle";
   sessionText.textContent = loggedIn ? userEmail : "ログイン中";
+  signupPrompt.hidden = loggedIn || !isAuthStateReady;
+
+  if (isLoginView) {
+    loginViewLoggedOutIcon.hidden = loggedIn;
+    loginViewLoggedInIcon.hidden = !loggedIn;
+    loginViewAuthTitle.textContent = loggedIn ? "拡張機能にログイン済み" : "フリマネにログイン";
+    loginViewAuthDescription.textContent = loggedIn
+      ? "このアカウントでリサーチ機能を利用できます"
+      : "登録済みアカウントでサインイン";
+  }
 }
 
 function setActionButtonsDisabled(disabled) {
@@ -840,6 +861,7 @@ async function refreshSupabaseSession() {
       return refreshSupabaseSession();
     }
 
+    await logoutFromSupabase();
     return false;
   }
 
@@ -885,6 +907,7 @@ async function restoreAuthState() {
     hasSession = await refreshSupabaseSession();
   }
 
+  isAuthStateReady = true;
   updateAuthUi();
   setAuthMessage(hasSession ? "success" : "idle", hasSession ? "ログイン状態を復元しました" : "未ログインです");
 }
@@ -977,6 +1000,7 @@ async function handleLoginSubmit(event) {
 
   try {
     await loginToSupabase(email, password);
+    isAuthStateReady = true;
     passwordInput.value = "";
     updateAuthUi();
     setAuthMessage("success", "ログインしました");
@@ -994,6 +1018,7 @@ async function handleLogout() {
 
   try {
     await logoutFromSupabase();
+    isAuthStateReady = true;
     updateAuthUi();
     setAuthMessage("idle", "ログアウトしました");
   } catch (error) {
@@ -1424,6 +1449,10 @@ async function initializePopup() {
   setStatus("idle", "待機中");
   updateAuthUi();
 
+  if (signupLink) {
+    signupLink.href = `${getAppBaseUrl()}/signup`;
+  }
+
   try {
     getConfig();
     setAuthMessage("idle", "ログイン情報を確認してください");
@@ -1440,6 +1469,7 @@ async function initializePopup() {
       await loadRakurakuPendingTaskPreview();
     }
   } catch (error) {
+    isAuthStateReady = true;
     updateAuthUi();
     setAuthMessage("error", error instanceof Error ? error.message : "ログイン状態の復元に失敗しました");
   }

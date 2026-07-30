@@ -407,8 +407,8 @@
       case "auth":
         return {
           title: "\u30D5\u30EA\u30DE\u30CD\u306B\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044",
-          description: "\u30EA\u30B5\u30FC\u30C1\u6A5F\u80FD\u3092\u4F7F\u3046\u306B\u306F\u3001\u5148\u306B\u30D5\u30EA\u30DE\u30CD\u3078\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
-          actionLabel: "\u30ED\u30B0\u30A4\u30F3\u30DA\u30FC\u30B8\u3092\u958B\u304F"
+          description: "\u30EA\u30B5\u30FC\u30C1\u6A5F\u80FD\u3092\u4F7F\u3046\u306B\u306F\u3001Chrome\u62E1\u5F35\u5074\u3067\u30D5\u30EA\u30DE\u30CD\u306B\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002Web\u7248\u306E\u30ED\u30B0\u30A4\u30F3\u72B6\u614B\u3068\u306F\u5225\u306B\u4FDD\u5B58\u3055\u308C\u307E\u3059\u3002",
+          actionLabel: "\u62E1\u5F35\u306E\u30ED\u30B0\u30A4\u30F3\u753B\u9762\u3092\u958B\u304F"
         };
       case "plan":
         return {
@@ -478,6 +478,17 @@
         };
     }
   }
+  function openExtensionLoginPage() {
+    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+      showResearchNotice("\u62E1\u5F35\u6A5F\u80FD\u306E\u30ED\u30B0\u30A4\u30F3\u753B\u9762\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      return;
+    }
+    chrome.runtime.sendMessage({ type: "OPEN_EXTENSION_LOGIN" }, (response) => {
+      if (chrome.runtime.lastError || !response?.success) {
+        showResearchNotice(response?.message ?? "\u62E1\u5F35\u6A5F\u80FD\u306E\u30ED\u30B0\u30A4\u30F3\u753B\u9762\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      }
+    });
+  }
   function renderResearchError(container, error, retry, retryCount = 0) {
     const kind = getResearchErrorKind(error);
     if (kind === "limit") {
@@ -501,10 +512,12 @@
       const detail = createParagraph(`\u539F\u56E0\u30B3\u30FC\u30C9: ${errorMessage}`, "furimane-research-overlay__support-text");
       wrapper.appendChild(detail);
     }
-    if (kind === "auth" || kind === "plan" || kind === "limit") {
+    if (kind === "auth") {
+      wrapper.appendChild(createButton(copy.actionLabel, openExtensionLoginPage, "secondary"));
+    } else if (kind === "plan" || kind === "limit") {
       const link = document.createElement("a");
       link.className = "furimane-research-overlay__link-button";
-      link.href = kind === "auth" ? `${appUrl}/login` : `${appUrl}/dashboard/research`;
+      link.href = `${appUrl}/dashboard/research`;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = copy.actionLabel;
@@ -906,15 +919,27 @@
       return;
     }
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local" || !(FURIMANE_RESEARCH_ENABLED_KEY in changes)) {
+      if (areaName !== "local") {
         return;
       }
-      if (changes[FURIMANE_RESEARCH_ENABLED_KEY]?.newValue === false) {
-        removeResearchOverlayUi();
-        currentResearchPageKey = null;
+      if (FURIMANE_RESEARCH_ENABLED_KEY in changes) {
+        if (changes[FURIMANE_RESEARCH_ENABLED_KEY]?.newValue === false) {
+          removeResearchOverlayUi();
+          currentResearchPageKey = null;
+          return;
+        }
+        scheduleResearchOverlaySync();
         return;
       }
-      scheduleResearchOverlaySync();
+      const authSessionChanged = ["supabaseAccessToken", "supabaseRefreshToken", "supabaseUser"].some((key) => key in changes);
+      if (!authSessionChanged) {
+        return;
+      }
+      cachedResearchAccess = null;
+      const overlay = document.getElementById(FURIMANE_OVERLAY_ID);
+      if (overlay) {
+        void runResearchFlowSafe(overlay, { retryCount: 0 });
+      }
     });
   }
   window.addEventListener("beforeunload", () => {

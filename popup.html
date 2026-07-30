@@ -9,16 +9,42 @@
   <body>
     <main class="popup">
       <header class="hero-card">
-        <p class="hero-card__eyebrow">FURIMANAGER EXTENSION</p>
-        <h1 class="hero-card__title">
-          <span class="hero-card__brand">フリマネージャー</span>
-        </h1>
-        <p class="hero-card__description">
+        <div class="hero-card__identity">
+          <img class="hero-card__logo" src="icons/icon-128.png" alt="" width="56" height="56" />
+          <div>
+            <p class="hero-card__eyebrow">FURIMANAGER EXTENSION</p>
+            <h1 class="hero-card__title">
+              <span class="hero-card__brand">フリマネージャー</span>
+            </h1>
+          </div>
+        </div>
+        <p class="hero-card__description hero-card__description--default">
           メルカリ販売履歴の取得から送信までを、拡張パネル上でまとめて扱うための補助ツールです。
+        </p>
+        <p class="hero-card__description hero-card__description--login">
+          フリマの売上・利益・仕入れ管理を、見やすくまとめて確認できる管理ツールです。
         </p>
       </header>
 
       <section class="auth-card" aria-live="polite">
+        <div class="auth-card__login-heading">
+          <div class="auth-card__login-mark" aria-hidden="true">
+            <svg id="loginViewLoggedOutIcon" class="auth-card__login-icon" viewBox="0 0 24 24">
+              <path d="m10 17 5-5-5-5" />
+              <path d="M15 12H3" />
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+            </svg>
+            <svg id="loginViewLoggedInIcon" class="auth-card__login-icon" viewBox="0 0 24 24" hidden>
+              <path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+          </div>
+          <div>
+            <h2 id="loginViewAuthTitle" class="auth-card__login-title">フリマネにログイン</h2>
+            <p id="loginViewAuthDescription" class="auth-card__login-description">登録済みアカウントでサインイン</p>
+          </div>
+        </div>
+
         <div class="auth-card__header">
           <div>
             <p class="auth-card__eyebrow">Account</p>
@@ -30,11 +56,11 @@
         <form id="loginForm" class="auth-form">
           <label class="field">
             <span class="field__label">メールアドレス</span>
-            <input id="emailInput" class="field__input" type="email" autocomplete="username" />
+            <input id="emailInput" class="field__input" type="email" inputmode="email" autocomplete="email" placeholder="example@furimane.jp" />
           </label>
           <label class="field">
             <span class="field__label">パスワード</span>
-            <input id="passwordInput" class="field__input" type="password" autocomplete="current-password" />
+            <input id="passwordInput" class="field__input" type="password" autocomplete="current-password" placeholder="パスワードを入力" />
           </label>
           <button id="loginButton" class="action-button action-button--auth" type="submit">
             <span class="action-button__label">ログイン</span>
@@ -52,6 +78,11 @@
         </div>
 
         <p id="authMessage" class="auth-message auth-message--idle">設定待ち</p>
+
+        <div id="signupPrompt" class="auth-card__signup" hidden>
+          <p>アカウントがない場合はこちら</p>
+          <a id="signupLink" href="https://furimanager.com/signup" target="_blank" rel="noopener noreferrer">アカウントを新規作成</a>
+        </div>
       </section>
 
       <section class="panel research-card" aria-live="polite">

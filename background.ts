@@ -88,6 +88,11 @@
       return true;
     }
 
+    if (message?.type === "OPEN_EXTENSION_LOGIN") {
+      void handleOpenExtensionLogin(respond);
+      return true;
+    }
+
     if (message?.type === "GET_RAKURAKU_AUTO_POLL_STATE") {
       void handleGetRakurakuAutoPollState(respond);
       return true;
@@ -323,6 +328,18 @@
 
   async function handleOpenInventoryLink(payload: any, respond: (response: any) => void) {
     respond(await openInventoryLink(payload));
+  }
+
+  async function handleOpenExtensionLogin(respond: (response: any) => void) {
+    try {
+      await createTab({ url: chromeApi.runtime.getURL("popup.html?view=login"), active: true });
+      respond({ success: true });
+    } catch {
+      respond({
+        success: false,
+        message: "拡張機能のログイン画面を開けませんでした"
+      });
+    }
   }
 
   async function handleGetRakurakuAutoPollState(respond: (response: any) => void) {

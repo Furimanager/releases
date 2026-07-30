@@ -74,6 +74,10 @@
         void handleOpenInventoryLink(message.payload, respond);
         return true;
       }
+      if (message?.type === "OPEN_EXTENSION_LOGIN") {
+        void handleOpenExtensionLogin(respond);
+        return true;
+      }
       if (message?.type === "GET_RAKURAKU_AUTO_POLL_STATE") {
         void handleGetRakurakuAutoPollState(respond);
         return true;
@@ -266,6 +270,17 @@
     }
     async function handleOpenInventoryLink(payload, respond) {
       respond(await openInventoryLink(payload));
+    }
+    async function handleOpenExtensionLogin(respond) {
+      try {
+        await createTab({ url: chromeApi.runtime.getURL("popup.html?view=login"), active: true });
+        respond({ success: true });
+      } catch {
+        respond({
+          success: false,
+          message: "\u62E1\u5F35\u6A5F\u80FD\u306E\u30ED\u30B0\u30A4\u30F3\u753B\u9762\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F"
+        });
+      }
     }
     async function handleGetRakurakuAutoPollState(respond) {
       const enabled = await isRakurakuAutoPollEnabled();
