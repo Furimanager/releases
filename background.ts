@@ -49,7 +49,7 @@
     return;
   }
 
-  chromeApi.runtime.onMessage.addListener((message: any, _sender: unknown, sendResponse: (response: any) => void) => {
+  chromeApi.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response: any) => void) => {
     const respond = (response: any) => {
       try {
         sendResponse(response);
@@ -59,6 +59,10 @@
     };
 
     if (message?.type === "FETCH_IMAGE_AS_DATA_URL") {
+      if (!isAllowedMercariPageSender(sender)) {
+        respond({ success: false, message: "Image fetch is not allowed from this page." });
+        return false;
+      }
       void handleFetchImage(message.url, respond);
       return true;
     }
@@ -1083,13 +1087,16 @@
   }
 
   async function fetchImageAsDataUrl(url: string | undefined) {
-    if (!url) {
+    const parsedUrl = getAllowedImageUrl(url);
+    if (!parsedUrl) {
       return { success: false, message: "画像URLが見つかりませんでした" };
     }
 
     try {
-      const response = await fetch(url, {
-        credentials: "include",
+      const response = await fetch(parsedUrl, {
+        credentials: "omit",
+        redirect: "error",
+        signal: AbortSignal.timeout(15000)
       });
 
       if (!response.ok) {
@@ -1103,16 +1110,17 @@
         return { success: false, message: "画像の取得に失敗しました" };
       }
 
-      const type = response.headers.get("content-type") || "image/jpeg";
-      const buffer = await response.arrayBuffer();
-
-      if (buffer.byteLength > MAX_IMAGE_BYTES) {
+      const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "";
+      if (!["image/jpeg", "image/png", "image/webp"].includes(type)) {
         return { success: false, message: "画像の取得に失敗しました" };
       }
 
+      const bytes = await readResponseBodyWithLimit(response, MAX_IMAGE_BYTES);
+      if (!bytes) return { success: false, message: "画像の取得に失敗しました" };
+
       return {
         success: true,
-        dataUrl: `data:${type};base64,${arrayBufferToBase64(buffer)}`,
+        dataUrl: `data:${type};base64,${bytesToBase64(bytes)}`,
         type,
       };
     } catch {
@@ -1120,8 +1128,52 @@
     }
   }
 
-  function arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
+  function isAllowedMercariPageSender(sender: any) {
+    try {
+      return new URL(sender?.url ?? sender?.tab?.url).origin === "https://jp.mercari.com";
+    } catch {
+      return false;
+    }
+  }
+
+  function getAllowedImageUrl(value: unknown) {
+    if (typeof value !== "string") return null;
+    try {
+      const parsedUrl = new URL(value);
+      const allowedHost = parsedUrl.hostname === "jp.mercari.com" || parsedUrl.hostname.endsWith(".mercdn.net");
+      return parsedUrl.protocol === "https:" && allowedHost ? parsedUrl.toString() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function readResponseBodyWithLimit(response: Response, maxBytes: number) {
+    if (!response.body) return null;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+
+    const bytes = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+
+  function bytesToBase64(bytes: Uint8Array): string {
     const chunkSize = 8192;
     let binary = "";
 

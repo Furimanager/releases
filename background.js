@@ -42,7 +42,7 @@
     if (!chromeApi?.runtime?.onMessage) {
       return;
     }
-    chromeApi.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const respond = (response) => {
         try {
           sendResponse(response);
@@ -51,6 +51,10 @@
         }
       };
       if (message?.type === "FETCH_IMAGE_AS_DATA_URL") {
+        if (!isAllowedMercariPageSender(sender)) {
+          respond({ success: false, message: "Image fetch is not allowed from this page." });
+          return false;
+        }
         void handleFetchImage(message.url, respond);
         return true;
       }
@@ -900,12 +904,15 @@
       });
     }
     async function fetchImageAsDataUrl(url) {
-      if (!url) {
+      const parsedUrl = getAllowedImageUrl(url);
+      if (!parsedUrl) {
         return { success: false, message: "\u753B\u50CFURL\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F" };
       }
       try {
-        const response = await fetch(url, {
-          credentials: "include"
+        const response = await fetch(parsedUrl, {
+          credentials: "omit",
+          redirect: "error",
+          signal: AbortSignal.timeout(15e3)
         });
         if (!response.ok) {
           return { success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" };
@@ -915,22 +922,62 @@
         if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
           return { success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" };
         }
-        const type = response.headers.get("content-type") || "image/jpeg";
-        const buffer = await response.arrayBuffer();
-        if (buffer.byteLength > MAX_IMAGE_BYTES) {
+        const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "";
+        if (!["image/jpeg", "image/png", "image/webp"].includes(type)) {
           return { success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" };
         }
+        const bytes = await readResponseBodyWithLimit(response, MAX_IMAGE_BYTES);
+        if (!bytes) return { success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" };
         return {
           success: true,
-          dataUrl: `data:${type};base64,${arrayBufferToBase64(buffer)}`,
+          dataUrl: `data:${type};base64,${bytesToBase64(bytes)}`,
           type
         };
       } catch {
         return { success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" };
       }
     }
-    function arrayBufferToBase64(buffer) {
-      const bytes = new Uint8Array(buffer);
+    function isAllowedMercariPageSender(sender) {
+      try {
+        return new URL(sender?.url ?? sender?.tab?.url).origin === "https://jp.mercari.com";
+      } catch {
+        return false;
+      }
+    }
+    function getAllowedImageUrl(value) {
+      if (typeof value !== "string") return null;
+      try {
+        const parsedUrl = new URL(value);
+        const allowedHost = parsedUrl.hostname === "jp.mercari.com" || parsedUrl.hostname.endsWith(".mercdn.net");
+        return parsedUrl.protocol === "https:" && allowedHost ? parsedUrl.toString() : null;
+      } catch {
+        return null;
+      }
+    }
+    async function readResponseBodyWithLimit(response, maxBytes) {
+      if (!response.body) return null;
+      const reader = response.body.getReader();
+      const chunks = [];
+      let totalBytes = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          return null;
+        }
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    }
+    function bytesToBase64(bytes) {
       const chunkSize = 8192;
       let binary = "";
       for (let index = 0; index < bytes.length; index += chunkSize) {

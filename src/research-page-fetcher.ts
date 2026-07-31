@@ -5,7 +5,10 @@
   const WATCH_SETTLE_MS = 9000;
   const DIRECT_FETCH_STATUS = "trading,sold_out";
   const DIRECT_FETCH_FALLBACK_STATUS: string | null = null;
-  const DIRECT_FETCH_MAX_PAGES_PER_STATUS = 500;
+  const DIRECT_FETCH_MAX_PAGES_PER_STATUS = 50;
+  const DIRECT_FETCH_MAX_TOTAL_PAGES = 50;
+  const DIRECT_FETCH_TIMEOUT_MS = 15000;
+  const DIRECT_FETCH_MIN_START_INTERVAL_MS = 5000;
   const DIRECT_FETCH_PAGE_LIMIT = 100;
   const DIRECT_FETCH_MIN_FULL_PAGE_COUNT = 100;
   const DIRECT_FETCH_SNAPSHOT_WAIT_MS = 400;
@@ -66,6 +69,8 @@
   const latestGetItemsUrlsBySellerId = new Map<string, URL>();
   const latestGetItemsRequestSnapshotsBySellerId = new Map<string, RequestSnapshot>();
   const directFetchRequestIds = new Set<string>();
+  let activeDirectFetchRequestId: string | null = null;
+  let lastDirectFetchStartedAt = 0;
 
   const originalFetch = window.fetch.bind(window);
   const OriginalXhr = window.XMLHttpRequest;
@@ -733,7 +738,19 @@
       return;
     }
 
+    if (activeDirectFetchRequestId || Date.now() - lastDirectFetchStartedAt < DIRECT_FETCH_MIN_START_INTERVAL_MS) {
+      watches.delete(requestId);
+      postToContent(requestId, {
+        ok: false,
+        sellerId: watch.sellerId,
+        error: "direct_fetch_rate_limited"
+      });
+      return;
+    }
+
     directFetchRequestIds.add(requestId);
+    activeDirectFetchRequestId = requestId;
+    lastDirectFetchStartedAt = Date.now();
 
     try {
       await waitForDirectFetchSnapshot(watch.sellerId);
@@ -751,6 +768,7 @@
       });
 
       let totalFetched = 0;
+      let totalRequestedPages = 0;
 
       const fetchPages = async (status: string | null) => {
         let fetchedCount = 0;
@@ -765,11 +783,18 @@
             break;
           }
 
+          if (totalRequestedPages >= DIRECT_FETCH_MAX_TOTAL_PAGES) {
+            stopReason = "total_page_limit";
+            break;
+          }
+
           const url = buildDirectFetchUrl(watch.sellerId, status, maxPagerId);
+          totalRequestedPages += 1;
           const response = await originalFetch(url.toString(), {
             method: "GET",
             headers: buildDirectFetchHeaders(watch.sellerId),
-            credentials: getDirectFetchCredentials(watch.sellerId)
+            credentials: getDirectFetchCredentials(watch.sellerId),
+            signal: AbortSignal.timeout(DIRECT_FETCH_TIMEOUT_MS)
           });
 
           if (!response.ok) {
@@ -864,7 +889,6 @@
 
       const primaryResult = await fetchPages(DIRECT_FETCH_STATUS);
       let finalStopReason = primaryResult.stopReason;
-      let totalPageCount = primaryResult.pageCount;
 
       if (!isCurrentWatch(requestId, watch)) {
         return;
@@ -873,7 +897,6 @@
       if (primaryResult.failed || primaryResult.fetchedCount === 0) {
         const fallbackResult = await fetchPages(DIRECT_FETCH_FALLBACK_STATUS);
         finalStopReason = fallbackResult.stopReason;
-        totalPageCount += fallbackResult.pageCount;
       }
 
       cacheWatchPayload(watch);
@@ -881,7 +904,7 @@
       log("direct_fetch_completed", {
         sellerId: watch.sellerId,
         totalFetched,
-        pageCount: totalPageCount,
+        pageCount: totalRequestedPages,
         stopReason: finalStopReason
       });
       if (!isCurrentWatch(requestId, watch)) {
@@ -921,6 +944,9 @@
       }
     } finally {
       directFetchRequestIds.delete(requestId);
+      if (activeDirectFetchRequestId === requestId) {
+        activeDirectFetchRequestId = null;
+      }
     }
   }
 
@@ -1143,6 +1169,11 @@
     }
 
     if (!data || data.type !== WATCH_REQUEST_TYPE || typeof data.requestId !== "string" || typeof data.sellerId !== "string") {
+      return;
+    }
+
+    if (normalizeSellerId(data.sellerId) !== normalizeSellerId(getCurrentProfileSellerId())) {
+      postToContent(data.requestId, { ok: false, error: "seller_context_mismatch" });
       return;
     }
 

@@ -1090,7 +1090,7 @@ async function runApiAssistAfterWatch(seller: ResearchSellerContext, signal?: Ab
 }
 
 function isDirectFetchFailure(error: unknown) {
-  return error instanceof Error && ["direct_fetch_empty", "direct_fetch_error", "direct_fetch_missing_snapshot"].includes(error.message);
+  return error instanceof Error && ["direct_fetch_empty", "direct_fetch_error", "direct_fetch_missing_snapshot", "direct_fetch_rate_limited"].includes(error.message);
 }
 
 function isServerAnalyzeFailure(error: unknown) {
