@@ -40,6 +40,7 @@ body {
 }
 
 .hero-card,
+.auth-card,
 .panel {
   position: relative;
   overflow: hidden;
@@ -51,6 +52,7 @@ body {
 }
 
 .hero-card::before,
+.auth-card::before,
 .panel::before {
   content: "";
   position: absolute;
@@ -136,21 +138,32 @@ body {
 
 .panel {
   padding: 16px;
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.14), transparent 38%),
+    radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.08), transparent 34%),
+    var(--panel-bg);
 }
 
 .auth-card {
   padding: 16px;
-  border: none;
+  border: 1px solid var(--panel-border);
   border-radius: 24px;
-  background: #111827;
-  box-shadow: none;
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.14), transparent 38%),
+    radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.08), transparent 34%),
+    var(--panel-bg);
+  box-shadow: var(--panel-shadow);
   outline: none;
 }
 
-.auth-card::before,
 .auth-card::after {
   content: none;
   display: none;
+}
+
+.auth-card::before {
+  content: "";
+  display: block;
 }
 
 .auth-card__header {
@@ -235,7 +248,9 @@ body {
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.02);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(124, 58, 237, 0.05)),
+    rgba(255, 255, 255, 0.03);
 }
 
 .field {
@@ -418,7 +433,9 @@ body {
   padding: 12px 14px;
   border: 1px solid rgba(124, 58, 237, 0.26);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(124, 58, 237, 0.05)),
+    rgba(255, 255, 255, 0.03);
 }
 
 .research-toggle-row strong,
@@ -489,7 +506,9 @@ body {
 .action-button--ghost,
 .action-button--logout {
   border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.035);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(124, 58, 237, 0.05)),
+    rgba(255, 255, 255, 0.03);
   color: var(--text);
 }
 
