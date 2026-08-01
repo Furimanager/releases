@@ -49,6 +49,11 @@ body {
 .hero-card,
 .auth-card,
 .panel {
+  --glass-sheen-start: 0.048;
+  --glass-sheen-mid: 0.014;
+  --glass-sheen-end: 0.026;
+  --glass-reflect-start: 0.075;
+  --glass-reflect-end: 0.035;
   --glass-purple-x: 8%;
   --glass-purple-y: 0%;
   --glass-orange-x: 100%;
@@ -60,7 +65,7 @@ body {
   border: 1px solid var(--panel-border);
   border-radius: 24px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.048), rgba(255, 255, 255, 0.014) 42%, rgba(255, 255, 255, 0.026) 100%),
+    linear-gradient(145deg, rgba(255, 255, 255, var(--glass-sheen-start)), rgba(255, 255, 255, var(--glass-sheen-mid)) 42%, rgba(255, 255, 255, var(--glass-sheen-end)) 100%),
     radial-gradient(circle at var(--glass-purple-x) var(--glass-purple-y), rgba(124, 58, 237, var(--glass-purple-alpha)), transparent 42%),
     radial-gradient(circle at var(--glass-orange-x) var(--glass-orange-y), rgba(249, 115, 22, var(--glass-orange-alpha)), transparent 38%),
     var(--panel-bg);
@@ -75,8 +80,8 @@ body {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.075), transparent 34%),
-    linear-gradient(315deg, rgba(255, 255, 255, 0.035), transparent 44%);
+    linear-gradient(135deg, rgba(255, 255, 255, var(--glass-reflect-start)), transparent 34%),
+    linear-gradient(315deg, rgba(255, 255, 255, var(--glass-reflect-end)), transparent 44%);
   pointer-events: none;
 }
 
@@ -158,6 +163,11 @@ body {
 }
 
 .panel {
+  --glass-sheen-start: 0.026;
+  --glass-sheen-mid: 0.008;
+  --glass-sheen-end: 0.014;
+  --glass-reflect-start: 0.04;
+  --glass-reflect-end: 0.018;
   --glass-purple-x: 10%;
   --glass-purple-y: 0%;
   --glass-orange-x: 96%;
@@ -166,6 +176,11 @@ body {
 }
 
 .auth-card {
+  --glass-sheen-start: 0.026;
+  --glass-sheen-mid: 0.008;
+  --glass-sheen-end: 0.014;
+  --glass-reflect-start: 0.04;
+  --glass-reflect-end: 0.018;
   --glass-purple-x: 0%;
   --glass-purple-y: 14%;
   --glass-orange-x: 100%;
@@ -291,9 +306,9 @@ body {
   border: 1px solid rgba(199, 210, 254, 0.14);
   border-radius: 18px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028) 48%, rgba(124, 58, 237, 0.06)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016) 48%, rgba(124, 58, 237, 0.055)),
     rgba(255, 255, 255, 0.03);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .field {
@@ -312,7 +327,7 @@ body {
   padding: 12px 14px;
   border: 1px solid rgba(199, 210, 254, 0.14);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(255, 255, 255, 0.026);
   color: var(--text);
   font-size: 13px;
   outline: none;
@@ -333,7 +348,7 @@ body {
     0 0 0 1px rgba(216, 180, 254, 0.12),
     0 10px 24px rgba(2, 6, 23, 0.18);
   outline: none;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, 0.034);
   background-image: none;
 }
 
@@ -481,9 +496,9 @@ body {
   border: 1px solid rgba(196, 181, 253, 0.26);
   border-radius: 14px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028) 48%, rgba(124, 58, 237, 0.08)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016) 48%, rgba(124, 58, 237, 0.075)),
     rgba(255, 255, 255, 0.03);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .research-toggle-row strong,
@@ -555,16 +570,16 @@ body {
 .action-button--logout {
   border-color: rgba(199, 210, 254, 0.14);
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.028) 52%, rgba(124, 58, 237, 0.07)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.016) 52%, rgba(124, 58, 237, 0.065)),
     rgba(255, 255, 255, 0.032);
   color: var(--text);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .action-button--ghost:hover,
 .action-button--logout:hover {
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.105), rgba(255, 255, 255, 0.04) 52%, rgba(124, 58, 237, 0.09)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.026) 52%, rgba(124, 58, 237, 0.085)),
     rgba(255, 255, 255, 0.045);
   border-color: rgba(216, 180, 254, 0.22);
 }
