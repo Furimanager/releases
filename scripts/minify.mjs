@@ -7,7 +7,16 @@ import { transform } from "esbuild";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(rootDir, "dist");
 const ignoredDirs = new Set(["node_modules", ".git", "dist", "scripts", "mock"]);
-const ignoredFiles = new Set(["package-lock.json", "package.json"]);
+const ignoredFiles = new Set([
+  ".prettierignore",
+  ".prettierrc",
+  "config.template.js",
+  "eslint.config.mjs",
+  "manifest.dev.json",
+  "mock-sold-page.html",
+  "package-lock.json",
+  "package.json"
+]);
 
 async function collectFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
