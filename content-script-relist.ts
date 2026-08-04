@@ -142,6 +142,40 @@
 
   mountedWindow.__furimanagerRelistAutofillMounted = true;
 
+  function getUserFacingRelistErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+
+    if (message === "edit page is not open") {
+      return "価格変更画面を確認できませんでした。商品編集ページを開き直してください。";
+    }
+
+    if (message === "price field not found") {
+      return "価格入力欄が見つかりませんでした。ページを再読み込みしてからもう一度お試しください。";
+    }
+
+    if (message === "current price could not be read") {
+      return "現在価格を読み取れませんでした。価格欄を確認してください。";
+    }
+
+    if (message.startsWith("minimum price reached:")) {
+      return "設定した下限価格を下回るため、価格変更を止めました。";
+    }
+
+    if (message === "edit submit button not found") {
+      return "変更を保存するボタンが見つかりませんでした。ページを再読み込みしてからもう一度お試しください。";
+    }
+
+    if (message.startsWith("price update was not completed:")) {
+      return "価格変更の完了を確認できませんでした。メルカリの商品ページを確認してください。";
+    }
+
+    if (/[ぁ-んァ-ヶ一-龠々]/.test(message)) {
+      return message;
+    }
+
+    return "商品操作に失敗しました。ページを再読み込みしてからもう一度お試しください。";
+  }
+
   chromeApi?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "APPLY_FURIMANE_PRICE_DROP_ON_EDIT") {
       return false;
@@ -157,7 +191,7 @@
       .catch((error) => {
         sendResponse({
           success: false,
-          reason: error instanceof Error ? error.message : "price drop failed",
+          reason: getUserFacingRelistErrorMessage(error),
         });
       });
 
@@ -247,7 +281,7 @@
       .catch((error) => {
         clearPendingListingManagementItem();
         console.warn("[furimanager] listing management failed", error);
-        showToast(error instanceof Error ? error.message : "商品操作に失敗しました");
+        showToast(getUserFacingRelistErrorMessage(error));
       });
 
     return true;

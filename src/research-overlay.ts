@@ -661,6 +661,14 @@ function getResearchErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function getResearchErrorSupportText(kind: ResearchErrorKind) {
+  if (kind === "scraping") {
+    return "原因: 商品情報を読み取れませんでした。ページを再読み込みしてからもう一度お試しください。";
+  }
+
+  return "原因: データ取得中に問題が発生しました。ページを再読み込みしてからもう一度お試しください。";
+}
+
 function getResearchRetryAfter(error: unknown) {
   const retryAfter = error && typeof error === "object" ? (error as { retryAfter?: unknown }).retryAfter : null;
   return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : null;
@@ -878,7 +886,6 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
   }
 
   const copy = getResearchErrorCopy(kind);
-  const errorMessage = getResearchErrorMessage(error);
   const retryAfter = getResearchRetryAfter(error);
   const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
   const wrapper = document.createElement("div");
@@ -896,7 +903,7 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
   }
 
   if (kind === "scraping" || kind === "unknown") {
-    const detail = createParagraph(`原因コード: ${errorMessage}`, "furimane-research-overlay__support-text");
+    const detail = createParagraph(getResearchErrorSupportText(kind), "furimane-research-overlay__support-text");
     wrapper.appendChild(detail);
   }
 

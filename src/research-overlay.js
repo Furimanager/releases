@@ -315,6 +315,12 @@
   function getResearchErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
   }
+  function getResearchErrorSupportText(kind) {
+    if (kind === "scraping") {
+      return "\u539F\u56E0: \u5546\u54C1\u60C5\u5831\u3092\u8AAD\u307F\u53D6\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
+    }
+    return "\u539F\u56E0: \u30C7\u30FC\u30BF\u53D6\u5F97\u4E2D\u306B\u554F\u984C\u304C\u767A\u751F\u3057\u307E\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
+  }
   function getResearchRetryAfter(error) {
     const retryAfter = error && typeof error === "object" ? error.retryAfter : null;
     return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : null;
@@ -495,7 +501,6 @@
       cachedResearchAccess = null;
     }
     const copy = getResearchErrorCopy(kind);
-    const errorMessage = getResearchErrorMessage(error);
     const retryAfter = getResearchRetryAfter(error);
     const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
     const wrapper = document.createElement("div");
@@ -509,7 +514,7 @@
       wrapper.appendChild(createParagraph(`\u7D04${retryAfter}\u79D2\u5F8C\u306B\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002`, "furimane-research-overlay__support-text"));
     }
     if (kind === "scraping" || kind === "unknown") {
-      const detail = createParagraph(`\u539F\u56E0\u30B3\u30FC\u30C9: ${errorMessage}`, "furimane-research-overlay__support-text");
+      const detail = createParagraph(getResearchErrorSupportText(kind), "furimane-research-overlay__support-text");
       wrapper.appendChild(detail);
     }
     if (kind === "auth") {

@@ -45,6 +45,31 @@
       return;
     }
     mountedWindow.__furimanagerRelistAutofillMounted = true;
+    function getUserFacingRelistErrorMessage(error) {
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+      if (message === "edit page is not open") {
+        return "\u4FA1\u683C\u5909\u66F4\u753B\u9762\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u5546\u54C1\u7DE8\u96C6\u30DA\u30FC\u30B8\u3092\u958B\u304D\u76F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
+      }
+      if (message === "price field not found") {
+        return "\u4FA1\u683C\u5165\u529B\u6B04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
+      }
+      if (message === "current price could not be read") {
+        return "\u73FE\u5728\u4FA1\u683C\u3092\u8AAD\u307F\u53D6\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u4FA1\u683C\u6B04\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
+      }
+      if (message.startsWith("minimum price reached:")) {
+        return "\u8A2D\u5B9A\u3057\u305F\u4E0B\u9650\u4FA1\u683C\u3092\u4E0B\u56DE\u308B\u305F\u3081\u3001\u4FA1\u683C\u5909\u66F4\u3092\u6B62\u3081\u307E\u3057\u305F\u3002";
+      }
+      if (message === "edit submit button not found") {
+        return "\u5909\u66F4\u3092\u4FDD\u5B58\u3059\u308B\u30DC\u30BF\u30F3\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
+      }
+      if (message.startsWith("price update was not completed:")) {
+        return "\u4FA1\u683C\u5909\u66F4\u306E\u5B8C\u4E86\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30E1\u30EB\u30AB\u30EA\u306E\u5546\u54C1\u30DA\u30FC\u30B8\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
+      }
+      if (/[ぁ-んァ-ヶ一-龠々]/.test(message)) {
+        return message;
+      }
+      return "\u5546\u54C1\u64CD\u4F5C\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
+    }
     chromeApi?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
       if (message?.type !== "APPLY_FURIMANE_PRICE_DROP_ON_EDIT") {
         return false;
@@ -57,7 +82,7 @@
       }).catch((error) => {
         sendResponse({
           success: false,
-          reason: error instanceof Error ? error.message : "price drop failed"
+          reason: getUserFacingRelistErrorMessage(error)
         });
       });
       return true;
@@ -123,7 +148,7 @@
       }).catch((error) => {
         clearPendingListingManagementItem();
         console.warn("[furimanager] listing management failed", error);
-        showToast(error instanceof Error ? error.message : "\u5546\u54C1\u64CD\u4F5C\u306B\u5931\u6557\u3057\u307E\u3057\u305F");
+        showToast(getUserFacingRelistErrorMessage(error));
       });
       return true;
     }

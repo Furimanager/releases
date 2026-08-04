@@ -61,6 +61,16 @@
     }
     return element;
   }
+  function containsJapaneseText(value) {
+    return /[ぁ-んァ-ヶ一-龠々]/.test(value);
+  }
+  function getResearchTableErrorMessage(error, fallbackMessage) {
+    const message = error instanceof Error ? error.message : typeof error === "string" ? error : fallbackMessage;
+    if (!message || !containsJapaneseText(message) && /[a-z]/i.test(message)) {
+      return fallbackMessage;
+    }
+    return message;
+  }
   function sanitizeResearchUrl(value) {
     if (!value) {
       return "#";
@@ -440,7 +450,7 @@
         refreshButton.disabled = false;
         refreshButton.classList.remove("furimane-research-table__action-button--loading");
         refreshButton.textContent = "\u66F4\u65B0";
-        window.alert(error instanceof Error ? error.message : "\u66F4\u65B0\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002");
+        window.alert(getResearchTableErrorMessage(error, "\u66F4\u65B0\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002"));
       }
     });
     const saveButton = createElement("button", "furimane-research-table__save-button", "\u2605 \u4FDD\u5B58\u3059\u308B");
@@ -459,7 +469,7 @@
         console.error("[furimane-research] seller save failed", error);
         saveButton.disabled = false;
         saveButton.textContent = "\u2605 \u4FDD\u5B58\u3059\u308B";
-        window.alert(error instanceof Error ? error.message : "\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002");
+        window.alert(getResearchTableErrorMessage(error, "\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002"));
       }
     });
     actions.append(usageCount, bookmarkCount, refreshButton, saveButton);
@@ -573,7 +583,7 @@
         bookmarkState.limit = previousLimit;
         setBookmarkButtonState(button, Boolean(existingBookmark));
         onUpdated();
-        showBookmarkToast(error instanceof Error ? error.message : "\u30D6\u30C3\u30AF\u30DE\u30FC\u30AF\u306E\u66F4\u65B0\u306B\u5931\u6557\u3057\u307E\u3057\u305F");
+        showBookmarkToast(getResearchTableErrorMessage(error, "\u30D6\u30C3\u30AF\u30DE\u30FC\u30AF\u306E\u66F4\u65B0\u306B\u5931\u6557\u3057\u307E\u3057\u305F"));
         button.disabled = false;
       }
     });

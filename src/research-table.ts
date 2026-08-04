@@ -281,6 +281,20 @@ function createElement<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 
+function containsJapaneseText(value: string) {
+  return /[ぁ-んァ-ヶ一-龠々]/.test(value);
+}
+
+function getResearchTableErrorMessage(error: unknown, fallbackMessage: string) {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : fallbackMessage;
+
+  if (!message || (!containsJapaneseText(message) && /[a-z]/i.test(message))) {
+    return fallbackMessage;
+  }
+
+  return message;
+}
+
 function sanitizeResearchUrl(value: string | null | undefined) {
   if (!value) {
     return "#";
@@ -848,7 +862,7 @@ function createResearchHero(
       refreshButton.disabled = false;
       refreshButton.classList.remove("furimane-research-table__action-button--loading");
       refreshButton.textContent = "更新";
-      window.alert(error instanceof Error ? error.message : "更新に失敗しました。");
+      window.alert(getResearchTableErrorMessage(error, "更新に失敗しました。"));
     }
   });
 
@@ -870,7 +884,7 @@ function createResearchHero(
       console.error("[furimane-research] seller save failed", error);
       saveButton.disabled = false;
       saveButton.textContent = "★ 保存する";
-      window.alert(error instanceof Error ? error.message : "保存に失敗しました。");
+      window.alert(getResearchTableErrorMessage(error, "保存に失敗しました。"));
     }
   });
 
@@ -1016,7 +1030,7 @@ function createBookmarkButton(
       bookmarkState.limit = previousLimit;
       setBookmarkButtonState(button, Boolean(existingBookmark));
       onUpdated();
-      showBookmarkToast(error instanceof Error ? error.message : "ブックマークの更新に失敗しました");
+      showBookmarkToast(getResearchTableErrorMessage(error, "ブックマークの更新に失敗しました"));
       button.disabled = false;
     }
   });

@@ -74,6 +74,16 @@ let currentRakurakuMode = null;
 let researchFeatureEnabled = false;
 let isAuthStateReady = false;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
+const USER_FACING_SYSTEM_CODE_MESSAGES = {
+  auth_required: "ログインが必要です。拡張機能にログインしてからもう一度お試しください。",
+  full_auto_disabled: "全自動モードがOFFのため、自動実行は待機中です。",
+  invalid_credentials: "メールアドレスまたはパスワードが正しくありません。",
+  no_pending_task: "待機中のタスクはありません。",
+  plan_required: "この機能を使うにはプランの確認が必要です。",
+  research_monthly_limit_exceeded: "今月のリサーチ上限に達しました。",
+  started: "処理を開始しました。",
+  task_already_running: "別のタスクを実行中です。完了してからもう一度お試しください。"
+};
 
 function escapeHtml(value) {
   return String(value)
@@ -108,6 +118,82 @@ function setStatus(type, text, details = []) {
 function setAuthMessage(type, text) {
   authMessage.textContent = text;
   authMessage.className = `auth-message auth-message--${type}`;
+}
+
+function getRawErrorMessage(error, fallbackMessage = "不明なエラーが発生しました") {
+  if (error instanceof Error) {
+    return error.message || fallbackMessage;
+  }
+
+  if (typeof error === "string") {
+    return error || fallbackMessage;
+  }
+
+  return fallbackMessage;
+}
+
+function containsJapaneseText(value) {
+  return /[ぁ-んァ-ヶ一-龠々]/.test(String(value || ""));
+}
+
+function getUserFacingSystemCodeMessage(value) {
+  return USER_FACING_SYSTEM_CODE_MESSAGES[String(value || "")] || null;
+}
+
+function getUserFacingErrorMessage(error, fallbackMessage = "不明なエラーが発生しました") {
+  const rawMessage = getRawErrorMessage(error, fallbackMessage);
+  const normalizedMessage = rawMessage.toLowerCase();
+  const systemCodeMessage = getUserFacingSystemCodeMessage(rawMessage);
+
+  if (systemCodeMessage) {
+    return systemCodeMessage;
+  }
+
+  if (
+    normalizedMessage.includes("could not establish connection") ||
+    normalizedMessage.includes("receiving end does not exist") ||
+    normalizedMessage.includes("content script")
+  ) {
+    return "メルカリ販売履歴ページと通信できませんでした。";
+  }
+
+  if (normalizedMessage.includes("message port closed")) {
+    return "ページとの通信が途中で切れました。メルカリ画面を再読み込みしてからもう一度お試しください。";
+  }
+
+  if (normalizedMessage.includes("extension context invalidated")) {
+    return "拡張機能が更新されました。ポップアップを開き直してください。";
+  }
+
+  if (normalizedMessage.includes("no tab with id")) {
+    return "操作中のタブを確認できませんでした。メルカリ販売履歴ページを開き直してください。";
+  }
+
+  if (normalizedMessage.includes("cannot access contents of url") || normalizedMessage.includes("chrome://")) {
+    return "このページでは拡張機能を使えません。メルカリ販売履歴ページでお試しください。";
+  }
+
+  if (normalizedMessage.includes("invalid login credentials")) {
+    return "メールアドレスまたはパスワードが正しくありません。";
+  }
+
+  if (normalizedMessage.includes("email not confirmed")) {
+    return "メール認証が完了していません。受信メールを確認してください。";
+  }
+
+  if (normalizedMessage.includes("failed to fetch") || normalizedMessage.includes("network")) {
+    return "サーバーに接続できませんでした。通信状態を確認してからもう一度お試しください。";
+  }
+
+  if (normalizedMessage.includes("background poll failed")) {
+    return "タスク確認処理が応答しませんでした。少し待ってからもう一度お試しください。";
+  }
+
+  if (!containsJapaneseText(rawMessage) && /[a-z]/i.test(rawMessage)) {
+    return fallbackMessage;
+  }
+
+  return rawMessage;
 }
 
 function isLoggedIn() {
@@ -308,6 +394,54 @@ function formatRakurakuMode(mode) {
   return mode === "full_auto" ? "全自動モード" : "半自動モード";
 }
 
+function formatRakurakuTaskStatus(status) {
+  const statusLabels = {
+    pending: "待機中",
+    running: "実行中",
+    completed: "完了",
+    failed: "失敗",
+    cancelled: "キャンセル済み"
+  };
+
+  return statusLabels[String(status || "")] || "状態不明";
+}
+
+function formatRakurakuTaskAction(action) {
+  const actionLabels = {
+    price_drop: "値下げ",
+    relist: "再出品"
+  };
+
+  return actionLabels[String(action || "")] || "操作不明";
+}
+
+function formatRakurakuExecutionMode(mode) {
+  const modeLabels = {
+    "dry-run": "確認のみ",
+    real: "実行"
+  };
+
+  return modeLabels[String(mode || "")] || "未設定";
+}
+
+function formatRakurakuReason(reason) {
+  const systemCodeMessage = getUserFacingSystemCodeMessage(reason);
+
+  if (systemCodeMessage) {
+    return systemCodeMessage;
+  }
+
+  if (!reason) {
+    return "理由を確認できませんでした。";
+  }
+
+  if (!containsJapaneseText(reason) && /[a-z]/i.test(String(reason))) {
+    return "理由を確認できませんでした。";
+  }
+
+  return String(reason);
+}
+
 function renderRakurakuMode(mode) {
   if (mode !== "full_auto" && mode !== "semi_auto") {
     currentRakurakuMode = null;
@@ -403,7 +537,7 @@ function renderRakurakuTask(task) {
     return;
   }
 
-  rakurakuTaskState.textContent = task.status === "pending" ? "待機中 1件" : `最新タスク：${task.status || "状態不明"}`;
+  rakurakuTaskState.textContent = task.status === "pending" ? "待機中 1件" : `最新タスク：${formatRakurakuTaskStatus(task.status)}`;
   rakurakuTaskPanel.hidden = false;
 
   if (rakurakuEmptyState) {
@@ -419,7 +553,7 @@ function renderRakurakuTask(task) {
   }
 
   if (rakurakuTaskStatus) {
-    rakurakuTaskStatus.textContent = task.status || "pending";
+    rakurakuTaskStatus.textContent = formatRakurakuTaskStatus(task.status || "pending");
   }
 
   if (rakurakuTaskStartButton) {
@@ -682,8 +816,8 @@ async function runTabAction(action, extraMessage = {}) {
 function showActionError(title, response, fallbackMessage) {
   setStatus("error", title, [
     {
-      label: "詳細",
-      value: response?.message || fallbackMessage
+      label: "原因",
+      value: getUserFacingErrorMessage(response?.message || fallbackMessage, fallbackMessage)
     }
   ]);
 }
@@ -713,7 +847,7 @@ function getUserFacingSyncErrorMessage(error) {
     return "すでに全て取得済みです。これ以上取得できません。";
   }
 
-  return message;
+  return getUserFacingErrorMessage(message, defaultMessage);
 }
 
 function normalizeAnchorExternalId(value) {
@@ -786,7 +920,7 @@ function getGapWarningDetails(response) {
       value: "前回の同期位置が確認できなかったため、安全のため多めに取得しました"
     },
     {
-      label: "補足",
+      label: "注意点",
       value: "重複は自動で除外されます。ページ上限より古い履歴は未確認です"
     }
   ];
@@ -978,7 +1112,7 @@ async function restoreScrapeWarningState() {
       value: storageState.lastFetchDate ? new Date(storageState.lastFetchDate).toLocaleString("ja-JP") : "不明"
     },
     {
-      label: "補足",
+      label: "注意点",
       value: "通常の同期は継続できます。重複は自動で除外されます"
     }
   ]);
@@ -1006,7 +1140,7 @@ async function handleLoginSubmit(event) {
     setAuthMessage("success", "ログインしました");
   } catch (error) {
     updateAuthUi();
-    setAuthMessage("error", error instanceof Error ? error.message : "ログインに失敗しました");
+    setAuthMessage("error", getUserFacingErrorMessage(error, "ログインに失敗しました"));
   } finally {
     setAuthControlsDisabled(false);
   }
@@ -1022,7 +1156,7 @@ async function handleLogout() {
     updateAuthUi();
     setAuthMessage("idle", "ログアウトしました");
   } catch (error) {
-    setAuthMessage("error", error instanceof Error ? error.message : "ログアウトに失敗しました");
+    setAuthMessage("error", getUserFacingErrorMessage(error, "ログアウトに失敗しました"));
   } finally {
     setAuthControlsDisabled(false);
   }
@@ -1036,7 +1170,7 @@ async function handlePing() {
     const response = await runTabAction("ping");
 
     if (!response || response.success !== true) {
-      showActionError("接続失敗", response, "content script と通信できませんでした");
+      showActionError("接続失敗", response, "メルカリ販売履歴ページと通信できませんでした");
       return;
     }
 
@@ -1050,11 +1184,11 @@ async function handlePing() {
   } catch (error) {
     setStatus("error", "接続失敗", [
       {
-        label: "詳細",
-        value: error instanceof Error ? error.message : "不明なエラーが発生しました"
+        label: "原因",
+        value: getUserFacingErrorMessage(error)
       },
       {
-        label: "補足",
+        label: "対応方法",
         value: "メルカリ販売履歴ページを開いた状態でお試しください"
       }
     ]);
@@ -1081,11 +1215,11 @@ async function handleScrape() {
   } catch (error) {
     setStatus("error", "取得失敗", [
       {
-        label: "詳細",
-        value: error instanceof Error ? error.message : "不明なエラーが発生しました"
+        label: "原因",
+        value: getUserFacingErrorMessage(error)
       },
       {
-        label: "補足",
+        label: "対応方法",
         value: "メルカリ販売履歴ページを開いた状態でお試しください"
       }
     ]);
@@ -1114,11 +1248,11 @@ async function handleScrapeAll() {
   } catch (error) {
     setStatus("error", "全ページ取得失敗", [
       {
-        label: "詳細",
-        value: error instanceof Error ? error.message : "不明なエラーが発生しました"
+        label: "原因",
+        value: getUserFacingErrorMessage(error)
       },
       {
-        label: "補足",
+        label: "対応方法",
         value: "メルカリ販売履歴ページを開いた状態でお試しください"
       }
     ]);
@@ -1177,11 +1311,11 @@ async function handleScrapeDelta() {
   } catch (error) {
     setStatus("error", "差分取得失敗", [
       {
-        label: "詳細",
-        value: error instanceof Error ? error.message : "不明なエラーが発生しました"
+        label: "原因",
+        value: getUserFacingErrorMessage(error)
       },
       {
-        label: "補足",
+        label: "対応方法",
         value: "メルカリ販売履歴ページを開いた状態でお試しください"
       }
     ]);
@@ -1197,13 +1331,13 @@ async function handleResetDeltaState() {
   try {
     await removeLocalStorage(SCRAPE_STORAGE_KEYS);
     setStatus("success", "差分状態をリセットしました", [
-      { label: "削除キー", value: SCRAPE_STORAGE_KEYS.join(", ") }
+      { label: "リセット内容", value: "前回の同期位置・取得件数を削除しました" }
     ]);
   } catch (error) {
     setStatus("error", "リセット失敗", [
       {
-        label: "詳細",
-        value: error instanceof Error ? error.message : "不明なエラーが発生しました"
+        label: "原因",
+        value: getUserFacingErrorMessage(error)
       }
     ]);
   } finally {
@@ -1214,7 +1348,7 @@ async function handleResetDeltaState() {
 async function handleScrapeAndSend() {
   if (!isLoggedIn()) {
     setStatus("error", "送信不可", [
-      { label: "詳細", value: "ログインしてから送信してください" }
+      { label: "対応方法", value: "ログインしてから送信してください" }
     ]);
     return;
   }
@@ -1280,7 +1414,7 @@ async function handleScrapeAndSend() {
     // TODO: 送信失敗時の pendingItems 保持は今後の改善候補
     setStatus("error", "送信失敗", [
       {
-        label: "詳細",
+        label: "原因",
         value: getUserFacingSyncErrorMessage(error)
       }
     ]);
@@ -1372,13 +1506,13 @@ async function handleRakurakuTaskCheck() {
       const diagnostics = backgroundResult.diagnostics || {};
       const latestTask = Array.isArray(diagnostics.safeTasks) ? diagnostics.safeTasks[0] : null;
       const statusCounts = Object.entries(diagnostics.statusCounts || {})
-        .map(([status, count]) => `${status}:${count}`)
+        .map(([status, count]) => `${formatRakurakuTaskStatus(status)}:${count}`)
         .join(", ");
 
       setStatus("success", "待機中タスクなし", [
-        { label: "理由", value: backgroundResult.reason || "no_pending_task" },
-        { label: "状態別件数", value: statusCounts || "relistタスクなし" },
-        { label: "最新タスク", value: latestTask ? `${latestTask.status || "状態不明"} / ${latestTask.action || "action不明"}` : "なし" }
+        { label: "理由", value: formatRakurakuReason(backgroundResult.reason || "no_pending_task") },
+        { label: "状態別件数", value: statusCounts || "再出品タスクなし" },
+        { label: "最新タスク", value: latestTask ? `${formatRakurakuTaskStatus(latestTask.status)} / ${formatRakurakuTaskAction(latestTask.action)}` : "なし" }
       ]);
     }
   } catch (error) {
@@ -1387,7 +1521,7 @@ async function handleRakurakuTaskCheck() {
       rakurakuTaskState.textContent = "取得失敗";
     }
     setStatus("error", "タスク取得に失敗", [
-      { label: "詳細", value: error instanceof Error ? error.message : "不明なエラーが発生しました" }
+      { label: "原因", value: getUserFacingErrorMessage(error) }
     ]);
   } finally {
     setActionButtonsDisabled(false);
@@ -1414,7 +1548,7 @@ async function handleRakurakuTaskStart() {
 
       renderRakurakuTask(backgroundResult.task || null);
       setStatus("success", "許可して実行しました", [
-        { label: "結果", value: backgroundResult.reason || "started" }
+        { label: "結果", value: formatRakurakuReason(backgroundResult.reason || "started") }
       ]);
       return;
     }
@@ -1430,11 +1564,11 @@ async function handleRakurakuTaskStart() {
       status: "running"
     });
     setStatus("success", "タスクを実行しました", [
-      { label: "実行モード", value: rakurakuExecutionModeSelect?.value || "dry-run" }
+      { label: "実行モード", value: formatRakurakuExecutionMode(rakurakuExecutionModeSelect?.value || "dry-run") }
     ]);
   } catch (error) {
     setStatus("error", "タスク開始に失敗", [
-      { label: "詳細", value: error instanceof Error ? error.message : "不明なエラーが発生しました" }
+      { label: "原因", value: getUserFacingErrorMessage(error) }
     ]);
   } finally {
     setActionButtonsDisabled(false);
@@ -1457,7 +1591,7 @@ async function initializePopup() {
     getConfig();
     setAuthMessage("idle", "ログイン情報を確認してください");
   } catch (error) {
-    setAuthMessage("error", error instanceof Error ? error.message : "config.js を確認してください");
+    setAuthMessage("error", getUserFacingErrorMessage(error, "config.js を確認してください"));
   }
 
   try {
@@ -1471,7 +1605,7 @@ async function initializePopup() {
   } catch (error) {
     isAuthStateReady = true;
     updateAuthUi();
-    setAuthMessage("error", error instanceof Error ? error.message : "ログイン状態の復元に失敗しました");
+    setAuthMessage("error", getUserFacingErrorMessage(error, "ログイン状態の復元に失敗しました"));
   }
 }
 
