@@ -228,8 +228,8 @@
 .furimane-research-open-button {
   position: fixed;
   right: 20px;
-  bottom: 20px;
-  z-index: 9999;
+  bottom: 84px;
+  z-index: 2147483647;
   padding: 12px 20px;
   border: 0;
   border-radius: 999px;

@@ -777,10 +777,15 @@
     button.className = "furimane-research-open-button";
     button.type = "button";
     button.textContent = "\u30EA\u30B5\u30FC\u30C1\u3092\u958B\u304F";
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       localStorage.removeItem(FURIMANE_CLOSED_STORAGE_KEY);
       button.remove();
-      renderResearchOverlay();
+      renderResearchOverlay({ forceFallback: true, scrollIntoView: true });
+    });
+    button.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
     });
     document.body.appendChild(button);
   }
@@ -811,7 +816,7 @@
     container.append(header, body);
     return container;
   }
-  function renderResearchOverlay() {
+  function renderResearchOverlay(options = {}) {
     const supportStatus = getResearchPageSupportStatus();
     const pageKey = getResearchPageKey();
     if (supportStatus === "unsupported") {
@@ -833,12 +838,17 @@
     const overlay = createResearchOverlay();
     let insertTarget = findOverlayInsertTarget();
     if (!insertTarget) {
-      overlayInsertRetryCount += 1;
-      if (overlayInsertRetryCount <= FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT) {
-        scheduleResearchOverlaySync();
-        return;
+      if (options.forceFallback) {
+        insertTarget = findOverlayFallbackInsertTarget();
       }
-      insertTarget = findOverlayFallbackInsertTarget();
+      if (!insertTarget) {
+        overlayInsertRetryCount += 1;
+        if (overlayInsertRetryCount <= FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT) {
+          scheduleResearchOverlaySync();
+          return;
+        }
+        insertTarget = findOverlayFallbackInsertTarget();
+      }
       if (!insertTarget) {
         scheduleResearchOverlaySync();
         return;
@@ -851,6 +861,9 @@
     }
     insertTarget.parent.insertBefore(overlay, insertTarget.before);
     console.log("[furimane-research] overlay inserted", { reason: insertTarget.reason });
+    if (options.scrollIntoView && !insertTarget.isFixedFallback) {
+      overlay.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
     void runResearchFlowSafe(overlay);
   }
   function removeResearchOverlayUi() {

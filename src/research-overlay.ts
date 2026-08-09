@@ -4,7 +4,7 @@ const FURIMANE_OVERLAY_ID = "furimane-research-overlay";
 const FURIMANE_OPEN_BUTTON_ID = "furimane-research-open-button";
 const FURIMANE_CLOSED_STORAGE_KEY = "furimane-research-closed";
 const FURIMANE_MAX_RETRY_COUNT = 3;
-const FURIMANE_DEFAULT_FETCH_STRATEGY = "api";
+const FURIMANE_DEFAULT_FETCH_STRATEGY: "api" | "dom" = "api";
 const FURIMANE_READY_DELAY_MS = 250;
 const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
 const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
@@ -99,6 +99,11 @@ type ResearchProgressDetails = {
 type ResearchFlowOptions = {
   forceRefresh?: boolean;
   retryCount?: number;
+};
+
+type RenderResearchOverlayOptions = {
+  forceFallback?: boolean;
+  scrollIntoView?: boolean;
 };
 
 type ResearchErrorKind =
@@ -1392,10 +1397,16 @@ function createOpenButton() {
   button.type = "button";
   button.textContent = "リサーチを開く";
 
-  button.addEventListener("click", () => {
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     localStorage.removeItem(FURIMANE_CLOSED_STORAGE_KEY);
     button.remove();
-    renderResearchOverlay();
+    renderResearchOverlay({ forceFallback: true, scrollIntoView: true });
+  });
+
+  button.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
   });
 
   document.body.appendChild(button);
@@ -1437,7 +1448,7 @@ function createResearchOverlay() {
   return container;
 }
 
-function renderResearchOverlay() {
+function renderResearchOverlay(options: RenderResearchOverlayOptions = {}) {
   const supportStatus = getResearchPageSupportStatus();
   const pageKey = getResearchPageKey();
 
@@ -1467,14 +1478,20 @@ function renderResearchOverlay() {
   let insertTarget = findOverlayInsertTarget();
 
   if (!insertTarget) {
-    overlayInsertRetryCount += 1;
-
-    if (overlayInsertRetryCount <= FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT) {
-      scheduleResearchOverlaySync();
-      return;
+    if (options.forceFallback) {
+      insertTarget = findOverlayFallbackInsertTarget();
     }
 
-    insertTarget = findOverlayFallbackInsertTarget();
+    if (!insertTarget) {
+      overlayInsertRetryCount += 1;
+
+      if (overlayInsertRetryCount <= FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT) {
+        scheduleResearchOverlaySync();
+        return;
+      }
+
+      insertTarget = findOverlayFallbackInsertTarget();
+    }
 
     if (!insertTarget) {
       scheduleResearchOverlaySync();
@@ -1490,6 +1507,11 @@ function renderResearchOverlay() {
 
   insertTarget.parent.insertBefore(overlay, insertTarget.before);
   console.log("[furimane-research] overlay inserted", { reason: insertTarget.reason });
+
+  if (options.scrollIntoView && !insertTarget.isFixedFallback) {
+    overlay.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+
   void runResearchFlowSafe(overlay);
 }
 
