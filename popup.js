@@ -11,7 +11,7 @@ const AUTH_STORAGE_KEYS = [
   "supabaseUser",
   "supabaseTokenExpiresAt"
 ];
-const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const TOKEN_REFRESH_MARGIN_MS = 30 * 60 * 1000;
 const DEFAULT_APP_URL = "https://furimanager.com";
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
 const SALES_RECIPE_STORAGE_KEY = "mercariSalesRecipeCache";
@@ -398,7 +398,9 @@ function formatRakurakuTaskStatus(status) {
   const statusLabels = {
     pending: "待機中",
     running: "実行中",
+    manual_confirmation_required: "手動確認待ち",
     completed: "完了",
+    succeeded: "完了",
     failed: "失敗",
     cancelled: "キャンセル済み"
   };
@@ -733,7 +735,7 @@ async function fetchAppApi(path, options = {}) {
 
   if (!response.ok || data?.success === false) {
     const errorReason = typeof data?.message === "string" ? data.message : typeof data?.error === "string" ? data.error : "empty response";
-    throw new Error(`API failed: ${response.status} ${errorReason}`);
+    throw new Error(errorReason);
   }
 
   return data;
@@ -828,6 +830,19 @@ function parseSupabaseError(data, fallbackMessage) {
   }
 
   return data.error_description || data.msg || data.message || data.error || fallbackMessage;
+}
+
+function isInvalidRefreshSessionError(data) {
+  const normalizedMessage = parseSupabaseError(data, "").toLowerCase();
+
+  return (
+    normalizedMessage.includes("invalid_grant") ||
+    (normalizedMessage.includes("refresh token") &&
+      (normalizedMessage.includes("not found") ||
+        normalizedMessage.includes("invalid") ||
+        normalizedMessage.includes("expired") ||
+        normalizedMessage.includes("already used")))
+  );
 }
 
 function isDuplicateSyncErrorMessage(message) {
@@ -931,7 +946,7 @@ function getTokenExpiresAt(expiresIn) {
 }
 
 function shouldRefreshAuthToken(expiresAt) {
-  return typeof expiresAt === "number" && Date.now() >= expiresAt - TOKEN_REFRESH_MARGIN_MS;
+  return typeof expiresAt !== "number" || Date.now() >= expiresAt - TOKEN_REFRESH_MARGIN_MS;
 }
 
 async function persistAuthSession(data, fallbackRefreshToken = null, fallbackUser = null) {
@@ -995,7 +1010,10 @@ async function refreshSupabaseSession() {
       return refreshSupabaseSession();
     }
 
-    await logoutFromSupabase();
+    if (isInvalidRefreshSessionError(data)) {
+      await logoutFromSupabase();
+    }
+
     return false;
   }
 
@@ -1177,9 +1195,9 @@ async function handlePing() {
     setStatus(
       response.isMercariSoldPage ? "success" : "error",
       response.isMercariSoldPage ? "接続OK" : "接続OK（対象外ページ）",
-      [
-        { label: "販売履歴ページ", value: response.isMercariSoldPage ? "はい" : "いいえ" }
-      ]
+      response.isMercariSoldPage
+        ? [{ label: "次の操作", value: "「販売履歴を同期」を押してください" }]
+        : [{ label: "対応方法", value: "メルカリ販売履歴ページを開いてください" }]
     );
   } catch (error) {
     setStatus("error", "接続失敗", [
@@ -1394,22 +1412,29 @@ async function handleScrapeAndSend() {
     const savedCount = (importResult?.insertedCount ?? 0) + (importResult?.updatedCount ?? 0);
     const normalizedCount = importResult?.normalizedCount ?? 0;
     const invalidCount = importResult?.invalidCount ?? 0;
+    const hasSendTarget = gapSuspected || savedCount > 0 || invalidCount > 0;
 
     await saveScrapeState(nextLastItemId, importResult?.checkedCount ?? response.count ?? 0, {
       lastSyncedExternalIds: nextAnchorExternalIds,
       gapSuspected
     });
 
-    setStatus("success", gapSuspected ? "送信完了（未確認あり）" : savedCount > 0 ? "送信完了" : "送信対象なし", [
-      ...getGapWarningDetails(importResult),
-      { label: "差分取得件数", value: importResult?.checkedCount ?? response.count ?? 0 },
-      { label: "保存対象件数", value: normalizedCount },
-      { label: "保存件数", value: savedCount },
-      { label: "確認待ち件数", value: invalidCount },
-      { label: "読み込みページ数", value: importResult?.pageCount ?? response.pageCount ?? 0 },
-      { label: "上限到達", value: importResult?.reachedPageLimit ? "はい" : "いいえ" },
-      { label: "保存アンカー数", value: nextAnchorExternalIds.length }
-    ]);
+    setStatus(
+      "success",
+      gapSuspected ? "送信完了（未確認あり）" : savedCount > 0 ? "送信完了" : "送信対象なし",
+      hasSendTarget
+        ? [
+            ...getGapWarningDetails(importResult),
+            { label: "差分取得件数", value: importResult?.checkedCount ?? response.count ?? 0 },
+            { label: "保存対象件数", value: normalizedCount },
+            { label: "保存件数", value: savedCount },
+            { label: "確認待ち件数", value: invalidCount },
+            { label: "読み込みページ数", value: importResult?.pageCount ?? response.pageCount ?? 0 },
+            { label: "上限到達", value: importResult?.reachedPageLimit ? "はい" : "いいえ" },
+            { label: "保存アンカー数", value: nextAnchorExternalIds.length }
+          ]
+        : []
+    );
   } catch (error) {
     // TODO: 送信失敗時の pendingItems 保持は今後の改善候補
     setStatus("error", "送信失敗", [

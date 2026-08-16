@@ -6,6 +6,7 @@
       return;
     }
     mountedWindow.__furimanagerMercariActionButtonsMounted = true;
+    installToastPreviewControls();
     const TOOLBAR_ATTRIBUTE = "data-furimanager-action-toolbar";
     const TOOLBAR_KIND_ATTRIBUTE = "data-furimanager-action-kind";
     const TOOLBAR_BUTTONS_ATTRIBUTE = "data-furimanager-action-buttons";
@@ -14,9 +15,108 @@
     const LISTING_SELLER_PANEL_VERSION_ATTRIBUTE = "data-furimanager-listing-seller-version";
     const LISTING_SELLER_PENDING_ATTRIBUTE = "data-furimanager-listing-seller-pending";
     const LISTING_SELLER_PANEL_VERSION = "compact-overlay-v17";
+    const TOAST_PREVIEW_KEY = "furimanager_toast_preview";
+    const TOAST_PREVIEW_MESSAGE_KEY = "furimanager_toast_preview_message";
+    const TOAST_STYLE_RULES = `
+      .furimanager-toast {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 2147483647;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: min(440px, calc(100vw - 32px));
+        padding: 16px 12px 16px 18px;
+        border: 1.5px solid transparent;
+        border-radius: 14px;
+        background:
+          linear-gradient(180deg, #FDF6FC 0%, #FAEDF8 100%) padding-box,
+          linear-gradient(112deg, #FF7A2F 0%, #F5386B 13%, #E0329C 29%, #B03BC8 46%, #6F4FDE 70%, #3F6BEF 100%) border-box;
+        box-shadow: 0 10px 30px rgba(74, 32, 96, 0.12), 0 2px 6px rgba(74, 32, 96, 0.06);
+        color: #2A2735;
+        font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, system-ui, -apple-system, "Segoe UI", sans-serif;
+        text-align: left;
+      }
+
+      .furimanager-toast__icon {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-image: linear-gradient(135deg, #FF8A2B 0%, #F5356C 34%, #C13BB4 64%, #4F5BE0 100%);
+      }
+
+      .furimanager-toast__icon svg,
+      .furimanager-toast__close svg {
+        display: block;
+      }
+
+      .furimanager-toast__message {
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+        color: #2A2735;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1.5;
+        letter-spacing: 0.01em;
+        overflow-wrap: anywhere;
+      }
+
+      .furimanager-toast__meta {
+        flex: none;
+        align-self: flex-start;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 21px;
+      }
+
+      .furimanager-toast__time {
+        color: #8B8797;
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .furimanager-toast__close {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #6F6B7D;
+        cursor: pointer;
+        -webkit-appearance: none;
+        appearance: none;
+      }
+
+      .furimanager-toast__close:hover {
+        background: rgba(110, 90, 140, 0.12);
+      }
+
+      .furimanager-toast--preview {
+        cursor: default;
+      }
+  `;
     const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
     const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
     const PRODUCT_PAGE_RELIST_PENDING_KEY = "furimanager_product_page_relist_pending";
+    const PRODUCT_PAGE_RELIST_RECLICK_WAIT_MS = 15e3;
+    const PRODUCT_PAGE_RELIST_RECLICK_RETRY_MS = 500;
     const MERCARI_ITEM_DETAIL_MESSAGE_TYPE = "FETCH_MERCARI_ITEM_DETAIL";
     const MERCARI_USER_PROFILE_MESSAGE_TYPE = "FETCH_MERCARI_USER_PROFILE";
     const MERCARI_USER_IDENTITY_BADGE_MESSAGE_TYPE = "FETCH_MERCARI_USER_IDENTITY_BADGE";
@@ -124,6 +224,7 @@
       "\u30B3\u30D4\u30FC\u51FA\u54C1",
       "\u30B3\u30D4\u30FC\u3057\u3066\u51FA\u54C1"
     ];
+    const AUTOMATION_TASK_ID_KEY = "furimanager_automation_task_id";
     chromeApi?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
       try {
         if (message?.type === "DETECT_MERCARI_RELIST_BUTTON") {
@@ -134,7 +235,7 @@
           return false;
         }
         if (message?.type === "CLICK_FURIMANE_COPY_LISTING_BUTTON") {
-          void clickFurimaneCopyListingButton(message.mercariItemId ?? null).then((result) => {
+          void clickFurimaneCopyListingButton(message.mercariItemId ?? null, typeof message.taskId === "string" ? message.taskId : null).then((result) => {
             sendResponse({
               success: true,
               ...result
@@ -159,6 +260,7 @@
     let injectionTimer = null;
     let retryTimer = null;
     let retryCount = 0;
+    let productPageRelistReclickInProgressKey = null;
     function detectPageKind() {
       const path = window.location.pathname;
       if (isActionDisabledPage(path)) {
@@ -697,22 +799,7 @@
         }
       }
 
-      .furimanager-toast {
-        position: fixed;
-        top: 16px;
-        right: 16px;
-        z-index: 2147483647;
-        max-width: min(360px, calc(100vw - 32px));
-        padding: 12px 14px;
-        border: 1px solid #5B5FE8;
-        border-radius: 12px;
-        background: #111827;
-        color: #FFFFFF;
-        font-size: 13px;
-        font-weight: 600;
-        line-height: 1.5;
-        box-shadow: 0 12px 28px rgba(17, 24, 39, 0.28);
-      }
+      ${TOAST_STYLE_RULES}
     `;
       if (!existingStyle) {
         document.documentElement.appendChild(style);
@@ -763,6 +850,7 @@
       }
       retryCount = 0;
       injectStyles();
+      ensurePersistentToastPreview();
       targets.forEach((target) => {
         ensureToolbar(target, buttonDefinitions, pageKind);
       });
@@ -2300,20 +2388,52 @@
       }
       const currentItemId = extractMercariItemId(window.location.href);
       if (currentItemId !== pending.itemId) {
-        sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+        clearProductPageRelistState();
         return false;
       }
-      const pageKind = detectPageKind();
-      if (pageKind !== "ownProduct") {
+      const processingKey = `${pending.itemId}:${pending.mode}`;
+      if (productPageRelistReclickInProgressKey === processingKey) {
         return false;
       }
-      const context = getProductPageTarget(pageKind);
-      if (!context) {
-        return false;
+      productPageRelistReclickInProgressKey = processingKey;
+      void reclickProductPageRelistButton(pending, processingKey);
+      return false;
+    }
+    async function reclickProductPageRelistButton(pending, processingKey) {
+      const startedAt = Date.now();
+      const action = pending.mode === "draft" ? "save-draft" : "relist";
+      const selector = `button[data-furimanager-action="${action}"]`;
+      while (Date.now() - startedAt < PRODUCT_PAGE_RELIST_RECLICK_WAIT_MS) {
+        const currentItemId = extractMercariItemId(window.location.href);
+        if (currentItemId !== pending.itemId) {
+          clearProductPageRelistState();
+          return;
+        }
+        const button = document.querySelector(selector);
+        if (button instanceof HTMLButtonElement && isVisible(button) && !button.disabled) {
+          sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+          productPageRelistReclickInProgressKey = null;
+          console.info("[furimanager-extension] product page relist button reclicked", {
+            itemId: pending.itemId,
+            mode: pending.mode,
+            action,
+            elapsedMs: Date.now() - startedAt
+          });
+          button.click();
+          return;
+        }
+        await sleep(PRODUCT_PAGE_RELIST_RECLICK_RETRY_MS);
       }
+      if (productPageRelistReclickInProgressKey === processingKey) {
+        productPageRelistReclickInProgressKey = null;
+        clearProductPageRelistState();
+        showToast("\u5546\u54C1\u30DA\u30FC\u30B8\u306E\u30D5\u30EA\u30DE\u30CD\u30DC\u30BF\u30F3\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u5546\u54C1\u30DA\u30FC\u30B8\u4E0A\u306E\u30DC\u30BF\u30F3\u3092\u3082\u3046\u4E00\u5EA6\u62BC\u3057\u3066\u304F\u3060\u3055\u3044");
+      }
+    }
+    function clearProductPageRelistState() {
       sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
-      void saveRelistPending(context, pending.mode);
-      return true;
+      productPageRelistReclickInProgressKey = null;
+      sessionStorage.removeItem(AUTOMATION_TASK_ID_KEY);
     }
     function getPendingProductPageRelistItem() {
       try {
@@ -2324,7 +2444,7 @@
         const parsed = JSON.parse(raw);
         const isFresh = typeof parsed.savedAt === "number" && Date.now() - parsed.savedAt <= 12e4;
         if (typeof parsed.itemId !== "string" || !/^m\d{8,}$/.test(parsed.itemId) || parsed.mode !== "relist" && parsed.mode !== "draft" || !isFresh) {
-          sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+          clearProductPageRelistState();
           return null;
         }
         return {
@@ -2333,7 +2453,7 @@
           savedAt: parsed.savedAt
         };
       } catch {
-        sessionStorage.removeItem(PRODUCT_PAGE_RELIST_PENDING_KEY);
+        clearProductPageRelistState();
         return null;
       }
     }
@@ -2487,12 +2607,38 @@
       return links.find((link) => extractMercariItemId(link.href) === itemId) ?? links[0] ?? null;
     }
     async function saveRelistPending(context, mode) {
-      const item = await collectRelistData(context, mode);
+      const taskId = sessionStorage.getItem(AUTOMATION_TASK_ID_KEY);
+      let item = await collectRelistData(context, mode);
+      if (PRODUCT_PATH_PATTERN.test(window.location.pathname) && typeof item.price !== "number") {
+        item = await waitForProductPageRelistPrice(context, mode, item);
+      }
+      if (taskId) {
+        item.taskId = taskId;
+        sessionStorage.removeItem(AUTOMATION_TASK_ID_KEY);
+      }
       if (typeof item.price !== "number") {
         showToast("\u4FA1\u683C\u3092\u53D6\u5F97\u3067\u304D\u306A\u304B\u3063\u305F\u305F\u3081\u3001\u65B0\u898F\u51FA\u54C1\u30DA\u30FC\u30B8\u3092\u958B\u304D\u307E\u305B\u3093\u3067\u3057\u305F");
         return;
       }
       await sendRelistPending(item);
+    }
+    async function waitForProductPageRelistPrice(context, mode, initialItem) {
+      const startedAt = Date.now();
+      let latestItem = initialItem;
+      while (Date.now() - startedAt < PRODUCT_PAGE_RELIST_RECLICK_WAIT_MS) {
+        await sleep(PRODUCT_PAGE_RELIST_RECLICK_RETRY_MS);
+        latestItem = await collectRelistData(context, mode);
+        if (typeof latestItem.price === "number") {
+          console.info("[furimanager-extension] product page price detected after wait", {
+            itemId: latestItem.itemId ?? context.itemId,
+            mode,
+            price: latestItem.price,
+            elapsedMs: Date.now() - startedAt
+          });
+          return latestItem;
+        }
+      }
+      return latestItem;
     }
     async function handleInventoryLink(context) {
       const item = await collectRelistData(context, "relist");
@@ -2550,7 +2696,7 @@
       const imageSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : source;
       const jsonItem = itemId && detailSource instanceof Document ? findCurrentItemJsonObject(detailSource, itemId) : null;
       const title = extractTitle(source);
-      const price = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? extractItemDetailPrice(detailSource) : extractItemDetailPrice(detailSource) ?? extractJsonPrice(jsonItem) ?? extractPrice(source);
+      const price = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? extractItemDetailPrice(detailSource) ?? extractJsonPrice(jsonItem) ?? extractProductPageFallbackPrice(detailSource) : extractItemDetailPrice(detailSource) ?? extractJsonPrice(jsonItem) ?? extractPrice(source);
       const imageUrls = extractImageUrls(imageSource, itemId);
       const thumbnailUrl = imageUrls[0] ?? extractThumbnail(source);
       const description = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? extractDescription(document) : null;
@@ -2845,7 +2991,7 @@
         candidates
       };
     }
-    async function clickFurimaneCopyListingButton(expectedItemId) {
+    async function clickFurimaneCopyListingButton(expectedItemId, taskId) {
       const detection = await waitForFurimaneCopyListingButton(expectedItemId);
       if (!detection.detected || !detection.button) {
         return {
@@ -2857,6 +3003,9 @@
           currentItemId: detection.currentItemId,
           pageUrl: detection.pageUrl
         };
+      }
+      if (taskId) {
+        sessionStorage.setItem(AUTOMATION_TASK_ID_KEY, taskId);
       }
       detection.button.click();
       console.log("[furimanager-extension] relist action button clicked", {
@@ -3151,6 +3300,73 @@
         const priceBlocks = Array.from(root.querySelectorAll('[data-testid="price"]'));
         for (const priceBlock of priceBlocks) {
           const price = extractItemDetailPriceBlock(priceBlock);
+          if (price !== null) {
+            return price;
+          }
+        }
+      }
+      return null;
+    }
+    function extractProductPageFallbackPrice(source) {
+      const detailRoot = source.querySelector('#item-info[data-testid="item-detail-container"], [data-testid="item-detail-container"], #item-info');
+      const scopedPrice = detailRoot ? extractPrice(detailRoot) : null;
+      if (scopedPrice !== null) {
+        return scopedPrice;
+      }
+      const visiblePrice = extractProductPageVisiblePrice(source);
+      if (visiblePrice !== null) {
+        return visiblePrice;
+      }
+      return extractMetaPrice(source);
+    }
+    function extractProductPageVisiblePrice(source) {
+      const main = source.querySelector("main") ?? source;
+      const title = main.querySelector("h1");
+      const roots = [];
+      let current = title?.parentElement ?? null;
+      for (let depth = 0; current && depth < 5; depth += 1) {
+        roots.push(current);
+        if (current === main) {
+          break;
+        }
+        current = current.parentElement;
+      }
+      if (main instanceof Element) {
+        roots.push(main);
+      }
+      for (const root of Array.from(new Set(roots))) {
+        const price = parseProductPageVisiblePriceText(root.textContent ?? "");
+        if (price !== null) {
+          return price;
+        }
+      }
+      return null;
+    }
+    function parseProductPageVisiblePriceText(value) {
+      const text = normalizeText(value);
+      const matches = text.matchAll(/[¥￥]\s*([0-9０-９,，]+)([^¥￥]{0,80})/g);
+      for (const match of matches) {
+        const context = match[2] ?? "";
+        if (!/税込|送料込み/.test(context)) {
+          continue;
+        }
+        const price = parsePrice(match[0]);
+        if (price !== null) {
+          return price;
+        }
+      }
+      return null;
+    }
+    function extractMetaPrice(source) {
+      const selectors = [
+        'meta[itemprop="price"]',
+        'meta[property="product:price:amount"]',
+        'meta[property="og:price:amount"]'
+      ];
+      for (const selector of selectors) {
+        const element = source.querySelector(selector);
+        if (element instanceof HTMLMetaElement) {
+          const price = parsePrice(element.content);
           if (price !== null) {
             return price;
           }
@@ -3968,17 +4184,113 @@
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     }
+    function createSvgElement(tag, attributes) {
+      const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      Object.entries(attributes).forEach(([name, value]) => {
+        element.setAttribute(name, value);
+      });
+      return element;
+    }
+    function createToastIcon() {
+      const icon = document.createElement("span");
+      icon.className = "furimanager-toast__icon";
+      icon.setAttribute("aria-hidden", "true");
+      const mark = createSvgElement("svg", { viewBox: "0 0 24 24", width: "21", height: "21", focusable: "false" });
+      mark.appendChild(createSvgElement("circle", { cx: "12", cy: "12", r: "10.1", fill: "none", stroke: "#FFFFFF", "stroke-width": "1.8" }));
+      mark.appendChild(createSvgElement("circle", { cx: "12", cy: "7.7", r: "1.3", fill: "#FFFFFF" }));
+      mark.appendChild(createSvgElement("rect", { x: "10.9", y: "10.7", width: "2.2", height: "6.5", rx: "1.1", fill: "#FFFFFF" }));
+      icon.appendChild(mark);
+      return icon;
+    }
+    function createToastCloseButton(toast) {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "furimanager-toast__close";
+      close.setAttribute("aria-label", "\u9589\u3058\u308B");
+      const mark = createSvgElement("svg", { viewBox: "0 0 16 16", width: "14", height: "14", focusable: "false" });
+      mark.appendChild(createSvgElement("path", {
+        d: "M3.4 3.4 L12.6 12.6 M12.6 3.4 L3.4 12.6",
+        fill: "none",
+        stroke: "currentColor",
+        "stroke-width": "1.5",
+        "stroke-linecap": "round"
+      }));
+      close.appendChild(mark);
+      close.addEventListener("click", () => {
+        if (toast.classList.contains("furimanager-toast--preview")) {
+          sessionStorage.removeItem(TOAST_PREVIEW_KEY);
+          sessionStorage.removeItem(TOAST_PREVIEW_MESSAGE_KEY);
+        }
+        toast.remove();
+      });
+      return close;
+    }
+    function renderToastContent(toast, message) {
+      toast.textContent = "";
+      toast.setAttribute("role", "status");
+      toast.appendChild(createToastIcon());
+      const text = document.createElement("span");
+      text.className = "furimanager-toast__message";
+      text.textContent = message;
+      toast.appendChild(text);
+      const meta = document.createElement("span");
+      meta.className = "furimanager-toast__meta";
+      const now = /* @__PURE__ */ new Date();
+      const time = document.createElement("span");
+      time.className = "furimanager-toast__time";
+      time.textContent = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      meta.appendChild(time);
+      meta.appendChild(createToastCloseButton(toast));
+      toast.appendChild(meta);
+    }
     function showToast(message) {
       injectStyles();
-      const existing = document.querySelector(".furimanager-toast");
+      const existing = document.querySelector(".furimanager-toast:not(.furimanager-toast--preview)");
       existing?.remove();
       const toast = document.createElement("div");
       toast.className = "furimanager-toast";
-      toast.textContent = message;
+      renderToastContent(toast, message);
       document.body.appendChild(toast);
       window.setTimeout(() => {
         toast.remove();
       }, 3600);
+    }
+    function installToastPreviewControls() {
+      const previewWindow = window;
+      previewWindow.furimanagerToastPreview = (message) => {
+        sessionStorage.setItem(TOAST_PREVIEW_KEY, "true");
+        if (typeof message === "string" && message.trim()) {
+          sessionStorage.setItem(TOAST_PREVIEW_MESSAGE_KEY, message.trim());
+        }
+        ensurePersistentToastPreview();
+      };
+      previewWindow.furimanagerToastPreviewOff = () => {
+        sessionStorage.removeItem(TOAST_PREVIEW_KEY);
+        sessionStorage.removeItem(TOAST_PREVIEW_MESSAGE_KEY);
+        document.querySelector(".furimanager-toast--preview")?.remove();
+      };
+      window.setTimeout(ensurePersistentToastPreview, 0);
+    }
+    function ensurePersistentToastPreview() {
+      if (sessionStorage.getItem(TOAST_PREVIEW_KEY) !== "true") {
+        return;
+      }
+      injectStyles();
+      const existing = document.querySelector(".furimanager-toast--preview");
+      const message = sessionStorage.getItem(TOAST_PREVIEW_MESSAGE_KEY) || "\u4FA1\u683C\u3092\u53D6\u5F97\u3067\u304D\u306A\u304B\u3063\u305F\u305F\u3081\u3001\u65B0\u898F\u51FA\u54C1\u30DA\u30FC\u30B8\u3092\u958B\u304D\u307E\u305B\u3093\u3067\u3057\u305F";
+      if (existing) {
+        const existingMessage = existing.querySelector(".furimanager-toast__message");
+        if (existingMessage) {
+          existingMessage.textContent = message;
+        } else {
+          renderToastContent(existing, message);
+        }
+        return;
+      }
+      const toast = document.createElement("div");
+      toast.className = "furimanager-toast furimanager-toast--preview";
+      renderToastContent(toast, message);
+      document.body.appendChild(toast);
     }
     function scheduleInjection() {
       if (isBrowsingHistoryPage(window.location.pathname)) {

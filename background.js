@@ -7,6 +7,7 @@
     }
     const chromeApi = globalThis.chrome;
     const RELIST_PENDING_KEY = "relist_pending";
+    const MANUAL_CONFIRMATION_REQUIRED_KEY = "furimanager_manual_confirmation_required";
     const RAKURAKU_AUTO_POLL_KEY = "rakurakuAutoPollEnabledV2";
     const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
     const RAKURAKU_ALARM_NAME = "rakurakuPoll";
@@ -20,8 +21,7 @@
     const MOCK_RELIST_PATH = "mock/mercari-relist.html";
     const REAL_RELIST_DETECTION_TIMEOUT_MS = 15e3;
     const REAL_RELIST_DETECTION_RETRY_MS = 700;
-    const REAL_RELIST_PENDING_CREATE_TIMEOUT_MS = 3e4;
-    const REAL_RELIST_SUBMIT_TIMEOUT_MS = 12e4;
+    const REAL_RELIST_MANUAL_CONFIRMATION_TIMEOUT_MS = 12e4;
     const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
     const AUTH_STORAGE_KEYS = [
       "supabaseAccessToken",
@@ -422,6 +422,8 @@
       if (typeof tab?.id !== "number") {
         throw new Error("real-copy-listing: item page tab could not be opened");
       }
+      await removeLocalStorage([MANUAL_CONFIRMATION_REQUIRED_KEY]);
+      const manualConfirmationStartedAt = Date.now();
       await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
       await sleep(1200);
       const result = await sendTabMessageWithRetry(tab.id, {
@@ -435,11 +437,11 @@
         action: result?.action,
         reason: result?.reason
       });
-      if (result?.action !== "relist") {
-        throw new Error("real-copy-listing: relist button was not clicked");
+      if (result?.action !== "relist" && result?.action !== "copy-listing") {
+        throw new Error("real-copy-listing: relist action button was not clicked");
       }
-      await waitForRelistSubmitCompletion(mercariItemId);
-      const completed = await completeTask(task.id, true, "relist_completed");
+      await waitForManualConfirmationRequired(mercariItemId, ["relist", "copy"], manualConfirmationStartedAt, task.id);
+      const completed = await completeTask(task.id, true, "manual_confirmation_required", { requiresAttention: true });
       return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
     }
     async function executePriceDropTask(task) {
@@ -454,6 +456,7 @@
       if (typeof tab?.id !== "number") {
         throw new Error("price-drop: edit page tab could not be opened");
       }
+      await removeLocalStorage([MANUAL_CONFIRMATION_REQUIRED_KEY]);
       await waitForTabComplete(tab.id, REAL_RELIST_DETECTION_TIMEOUT_MS);
       await sleep(1200);
       const result = await sendTabMessageWithRetry(tab.id, {
@@ -467,16 +470,16 @@
         submitted: result?.submitted === true,
         reason: result?.reason
       });
-      if (result?.submitted === true) {
-        const completed = await completeTask(task.id, true, "price_drop_completed");
+      if (result?.manualConfirmationRequired === true) {
+        const completed = await completeTask(task.id, true, "manual_confirmation_required", { requiresAttention: true, result });
         return completed?.task ? { ...task, ...completed.task, payload: completed.task.payload_json || task.payload } : { ...task, status: "succeeded" };
       }
       throw new Error("price_drop_failed");
     }
-    async function completeTask(taskId, success, message) {
+    async function completeTask(taskId, success, message, extra = {}) {
       return fetchAppApi(`/api/automation/tasks/${taskId}/complete`, {
         method: "POST",
-        body: JSON.stringify({ success, message })
+        body: JSON.stringify({ success, message, ...extra })
       });
     }
     function buildMockRelistUrl() {
@@ -580,39 +583,31 @@
       }
       throw lastError instanceof Error ? lastError : new Error("real-copy-listing: content script did not respond");
     }
-    async function waitForRelistSubmitCompletion(mercariItemId) {
-      const createStartedAt = Date.now();
-      let matchedPending = false;
-      while (Date.now() - createStartedAt < REAL_RELIST_PENDING_CREATE_TIMEOUT_MS) {
-        if (matchesRelistPendingItem(await getRelistPendingItem(), mercariItemId)) {
-          matchedPending = true;
-          break;
+    async function waitForManualConfirmationRequired(mercariItemId, actions, startedAt, taskId) {
+      const waitStartedAt = Date.now();
+      while (Date.now() - waitStartedAt < REAL_RELIST_MANUAL_CONFIRMATION_TIMEOUT_MS) {
+        const items = await getLocalStorage([MANUAL_CONFIRMATION_REQUIRED_KEY]);
+        const confirmation = items[MANUAL_CONFIRMATION_REQUIRED_KEY];
+        if (matchesManualConfirmationRequired(confirmation, mercariItemId, actions, startedAt, taskId)) {
+          return confirmation;
         }
         await sleep(REAL_RELIST_DETECTION_RETRY_MS);
       }
-      if (!matchedPending) {
-        throw new Error("real-copy-listing: relist pending was not created");
-      }
-      const submitStartedAt = Date.now();
-      while (Date.now() - submitStartedAt < REAL_RELIST_SUBMIT_TIMEOUT_MS) {
-        if (!matchesRelistPendingItem(await getRelistPendingItem(), mercariItemId)) {
-          return;
-        }
-        await sleep(REAL_RELIST_DETECTION_RETRY_MS);
-      }
-      throw new Error("real-copy-listing: listing submit did not finish");
+      throw new Error("manual confirmation was not detected");
     }
-    async function getRelistPendingItem() {
-      const items = await getLocalStorage([RELIST_PENDING_KEY]);
-      return items[RELIST_PENDING_KEY] ?? null;
-    }
-    function matchesRelistPendingItem(item, mercariItemId) {
-      if (!item || typeof item !== "object" || item.mode !== "relist") {
+    function matchesManualConfirmationRequired(item, mercariItemId, actions, startedAt, taskId) {
+      if (!item || typeof item !== "object" || item.status !== "manual_confirmation_required") {
+        return false;
+      }
+      if (typeof item.savedAt !== "number" || item.savedAt < startedAt) {
+        return false;
+      }
+      if (item.taskId !== taskId) {
         return false;
       }
       const itemId = normalizeMercariItemId(item.itemId);
-      const itemUrl = typeof item.itemUrl === "string" ? item.itemUrl : "";
-      return itemId === mercariItemId || itemUrl.includes(mercariItemId);
+      const itemUrlId = normalizeMercariItemId(item.itemUrl);
+      return actions.includes(String(item.action || "")) && (itemId === mercariItemId || itemUrlId === mercariItemId);
     }
     function sendTabMessage(tabId, message) {
       return new Promise((resolve, reject) => {
@@ -797,6 +792,7 @@
         shippingMethod: payload.shippingMethod ?? null,
         shippingFrom: payload.shippingFrom ?? null,
         shippingDays: payload.shippingDays ?? null,
+        taskId: typeof payload.taskId === "string" ? payload.taskId : void 0,
         mode: payload.mode ?? "relist",
         savedAt: (/* @__PURE__ */ new Date()).toISOString()
       };

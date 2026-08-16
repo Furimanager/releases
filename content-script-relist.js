@@ -3,6 +3,104 @@
     const mountedWindow = window;
     const chromeApi = globalThis.chrome;
     const RELIST_PENDING_KEY = "relist_pending";
+    const MANUAL_CONFIRMATION_REQUIRED_KEY = "furimanager_manual_confirmation_required";
+    const TOAST_PREVIEW_KEY = "furimanager_toast_preview";
+    const TOAST_PREVIEW_MESSAGE_KEY = "furimanager_toast_preview_message";
+    const TOAST_STYLE_RULES = `
+      .furimanager-toast {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 2147483647;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: min(440px, calc(100vw - 32px));
+        padding: 16px 12px 16px 18px;
+        border: 1.5px solid transparent;
+        border-radius: 14px;
+        background:
+          linear-gradient(180deg, #FDF6FC 0%, #FAEDF8 100%) padding-box,
+          linear-gradient(112deg, #FF7A2F 0%, #F5386B 13%, #E0329C 29%, #B03BC8 46%, #6F4FDE 70%, #3F6BEF 100%) border-box;
+        box-shadow: 0 10px 30px rgba(74, 32, 96, 0.12), 0 2px 6px rgba(74, 32, 96, 0.06);
+        color: #2A2735;
+        font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, system-ui, -apple-system, "Segoe UI", sans-serif;
+        text-align: left;
+      }
+
+      .furimanager-toast__icon {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-image: linear-gradient(135deg, #FF8A2B 0%, #F5356C 34%, #C13BB4 64%, #4F5BE0 100%);
+      }
+
+      .furimanager-toast__icon svg,
+      .furimanager-toast__close svg {
+        display: block;
+      }
+
+      .furimanager-toast__message {
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+        color: #2A2735;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1.5;
+        letter-spacing: 0.01em;
+        overflow-wrap: anywhere;
+      }
+
+      .furimanager-toast__meta {
+        flex: none;
+        align-self: flex-start;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 21px;
+      }
+
+      .furimanager-toast__time {
+        color: #8B8797;
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .furimanager-toast__close {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #6F6B7D;
+        cursor: pointer;
+        -webkit-appearance: none;
+        appearance: none;
+      }
+
+      .furimanager-toast__close:hover {
+        background: rgba(110, 90, 140, 0.12);
+      }
+
+      .furimanager-toast--preview {
+        cursor: default;
+      }
+  `;
     const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
     const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
     const MAX_WAIT_MS = 12e3;
@@ -12,8 +110,6 @@
     const METADATA_SELECT_WAIT_MS = 250;
     const SELECTION_POLL_MS = 75;
     const SAFE_CLICK_SETTLE_MS = 150;
-    const LISTING_COMPLETION_WAIT_MS = 25e3;
-    const PRICE_ADJUST_COMPLETION_WAIT_MS = 25e3;
     const FINAL_ACTION_AFTER_COMPLETE_WAIT_MS = 1e3;
     const FINAL_ACTION_MIN_WAIT_MS = 1e4;
     const FINAL_ACTION_DOM_STABLE_MS = 800;
@@ -45,6 +141,7 @@
       return;
     }
     mountedWindow.__furimanagerRelistAutofillMounted = true;
+    installToastPreviewControls();
     function getUserFacingRelistErrorMessage(error) {
       const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
       if (message === "edit page is not open") {
@@ -183,7 +280,14 @@
         if (!suspendButton) {
           throw new Error("\u300C\u51FA\u54C1\u3092\u4E00\u6642\u505C\u6B62\u3059\u308B\u300D\u30DC\u30BF\u30F3\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F");
         }
-        clickButtonLike(suspendButton);
+        const details2 = {
+          action: "stop",
+          itemId: pending.itemId,
+          reason: "suspend-button-ready",
+          ...getButtonLogDetails(suspendButton)
+        };
+        logRelistFlow("\u505C\u6B62\u30DC\u30BF\u30F3\u691C\u77E5", { pathname: window.location.pathname, ...details2 }, { force: true });
+        handOffManualConfirmation(details2, "\u505C\u6B62\u30DC\u30BF\u30F3\u3092\u691C\u77E5\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u505C\u6B62\u64CD\u4F5C\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
         return;
       }
       const deleteButton = await waitForActionButton(findInitialDeleteListingButton);
@@ -195,7 +299,14 @@
       if (!confirmButton) {
         throw new Error("\u524A\u9664\u78BA\u8A8D\u30C0\u30A4\u30A2\u30ED\u30B0\u306E\u300C\u524A\u9664\u3059\u308B\u300D\u30DC\u30BF\u30F3\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F");
       }
-      clickButtonLike(confirmButton);
+      const details = {
+        action: "delete",
+        itemId: pending.itemId,
+        reason: "delete-confirmation-button-ready",
+        ...getButtonLogDetails(confirmButton)
+      };
+      logRelistFlow("\u524A\u9664\u78BA\u8A8D\u30DC\u30BF\u30F3\u691C\u77E5", { pathname: window.location.pathname, ...details }, { force: true });
+      handOffManualConfirmation(details, "\u524A\u9664\u78BA\u8A8D\u30C0\u30A4\u30A2\u30ED\u30B0\u3092\u8868\u793A\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u524A\u9664\u64CD\u4F5C\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
     }
     async function waitForActionButton(finder) {
       const startedAt = Date.now();
@@ -335,7 +446,7 @@
         hasFilledAnyField = result.filled || hasFilledAnyField;
         const readinessBeforeWait = getFinalActionReadiness(item);
         const canProceedWithPartialFields = canProceedWithNonBlockingMissingFields(item, result, readinessBeforeWait);
-        const canHandOffCopyListing = canHandOffCopyListingToUser(item, result);
+        const canHandOffCopyListing = canHandOffCopyListingToUser(item, result, readinessBeforeWait);
         const flowStatus = getFlowStatus(result, readinessBeforeWait, canProceedWithPartialFields);
         logRelistFlow("\u5165\u529B\u72B6\u6CC1", {
           elapsedMs: Date.now() - startedAt,
@@ -356,16 +467,26 @@
           ...readinessBeforeWait.details
         });
         if (canHandOffCopyListing) {
-          logRelistFlow("\u30B3\u30D4\u30FC\u51FA\u54C1\u306F\u624B\u52D5\u78BA\u8A8D\u3078", {
+          logRelistFlow("\u30B3\u30D4\u30FC\u51FA\u54C1\u306F\u624B\u52D5\u78BA\u8A8D\u5F85\u3061", {
             elapsedMs: Date.now() - startedAt,
             elapsedSec: getElapsedSec(startedAt),
             pathname: window.location.pathname,
             mode: item.mode,
             reason: result.complete ? "copy-ready" : "copy-ready-with-non-blocking-fields-skipped",
-            skippedMissingFields: result.complete ? [] : result.missingFields
+            skippedMissingFields: result.complete ? [] : result.missingFields,
+            ...readinessBeforeWait.details
           }, { force: true });
+          handOffManualConfirmation({
+            action: "copy",
+            itemId: item.itemId,
+            itemUrl: item.itemUrl,
+            taskId: item.taskId,
+            mode: item.mode,
+            reason: result.complete ? "copy-ready" : "copy-ready-with-non-blocking-fields-skipped",
+            missingFields: result.missingFields,
+            ...readinessBeforeWait.details
+          }, "\u30B3\u30D4\u30FC\u51FA\u54C1\u306E\u5165\u529B\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u51FA\u54C1\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
           clearPendingItem();
-          showToast("\u30B3\u30D4\u30FC\u51FA\u54C1\u306E\u5165\u529B\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u51FA\u54C1\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
           return;
         }
         if (result.complete || canProceedWithPartialFields) {
@@ -385,7 +506,7 @@
             await sleep(RETRY_INTERVAL_MS);
             continue;
           }
-          logRelistFlow("\u6700\u7D42\u30DC\u30BF\u30F3\u62BC\u4E0B\u3078", {
+          logRelistFlow("\u6700\u7D42\u30DC\u30BF\u30F3\u691C\u77E5", {
             elapsedMs: Date.now() - startedAt,
             elapsedSec: getElapsedSec(startedAt),
             pathname: window.location.pathname,
@@ -396,12 +517,12 @@
           }, { force: true });
           if (item.mode === "draft") {
             await saveDraftAfterFill(item);
-          } else if (item.mode === "relist") {
+          } else if (item.mode === "relist" || item.mode === "copy") {
             await submitListingAfterFill(item);
           }
           return;
         }
-        if (hasFilledAnyField && Date.now() - startedAt > FINAL_ACTION_MIN_WAIT_MS && (result.complete || canProceedWithPartialFields) && await clickVisibleFinalActionIfReady(item, { requireStableDom: false })) {
+        if (hasFilledAnyField && Date.now() - startedAt > FINAL_ACTION_MIN_WAIT_MS && (result.complete || canProceedWithPartialFields) && await detectVisibleFinalActionIfReady(item, { requireStableDom: false })) {
           return;
         }
         await sleep(RETRY_INTERVAL_MS);
@@ -410,8 +531,8 @@
         const readiness = getFinalActionReadiness(item, { requireStableDom: false });
         const canClickAfterTimeout = latestResult !== null && (latestResult.complete || canProceedWithNonBlockingMissingFields(item, latestResult, readiness));
         if (canClickAfterTimeout) {
-          logRelistFlow("\u901A\u5E38\u5F85\u6A5F\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8\u5F8C\u306E\u4FDD\u967A\u30AF\u30EA\u30C3\u30AF", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
-          await clickVisibleFinalActionIfReady(item, { requireStableDom: false });
+          logRelistFlow("\u901A\u5E38\u5F85\u6A5F\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8\u5F8C\u306E\u4FDD\u967A\u691C\u77E5", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
+          await detectVisibleFinalActionIfReady(item, { requireStableDom: false });
           return;
         }
         logRelistFlow("\u901A\u5E38\u5F85\u6A5F\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8\uFF08\u672A\u5B8C\u4E86\uFF09", {
@@ -469,88 +590,18 @@
         return;
       }
       sessionStorage.setItem(LISTING_SUBMIT_DONE_KEY, "true");
-      const from = window.location.pathname;
-      logRelistFlow("\u51FA\u54C1\u30DC\u30BF\u30F3\u62BC\u4E0B", { pathname: from, mode: item.mode }, { force: true });
-      clickButtonLike(button);
-      const completion = await waitForListingCompletion(from);
-      logListingCompletion(completion);
-      chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
-      if (completion.result === "success") {
-        showToast("\u51FA\u54C1\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F");
-        return;
-      }
-      showToast("\u51FA\u54C1\u5B8C\u4E86\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u753B\u9762\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
-    }
-    async function waitForListingCompletion(from) {
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < LISTING_COMPLETION_WAIT_MS) {
-        const current2 = window.location.pathname;
-        const completionMessage2 = findListingCompletionMessage();
-        if (completionMessage2) {
-          return {
-            result: "success",
-            signal: "completion-message",
-            from,
-            to: current2,
-            message: completionMessage2
-          };
-        }
-        await sleep(RETRY_INTERVAL_MS);
-      }
-      const current = window.location.pathname;
-      const completionMessage = findListingCompletionMessage();
-      if (completionMessage) {
-        return {
-          result: "success",
-          signal: "completion-message",
-          from,
-          to: current,
-          message: completionMessage
-        };
-      }
-      const message = findListingBlockingMessage();
-      return {
-        result: "failed",
-        signal: message ? "validation-or-blocking-message" : current === "/sell" ? "sell-url-without-completion-message" : "no-completion-message",
-        from,
-        current,
-        message
+      const details = {
+        action: item.mode === "copy" ? "copy" : "relist",
+        itemId: item.itemId,
+        itemUrl: item.itemUrl,
+        taskId: item.taskId,
+        mode: item.mode,
+        reason: "listing-submit-button-ready",
+        ...getButtonLogDetails(button)
       };
-    }
-    function logListingCompletion(completion) {
-      logRelistFlow("\u5B8C\u4E86\u691C\u77E5", completion, { force: true });
-    }
-    function findListingCompletionMessage() {
-      const selectors = [
-        '[data-testid="listing-complete-popup"]',
-        "#listing-complete-popup",
-        '[role="dialog"]',
-        '[aria-modal="true"]',
-        ".merModalBase",
-        ".popup"
-      ];
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        const text = normalizeText(element?.textContent ?? "");
-        if (text.includes("\u51FA\u54C1\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F")) {
-          return "\u51FA\u54C1\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F";
-        }
-      }
-      return void 0;
-    }
-    function findListingBlockingMessage() {
-      const patterns = [/選択してください/, /入力してください/, /必須項目/, /必須/, /エラー/];
-      const candidates = Array.from(document.querySelectorAll('[role="alert"], [aria-live], p, span, div'));
-      for (const candidate of candidates) {
-        if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) {
-          continue;
-        }
-        const text = normalizeText(candidate.textContent ?? "");
-        if (text && text.length <= 160 && patterns.some((pattern) => pattern.test(text))) {
-          return text;
-        }
-      }
-      return void 0;
+      logRelistFlow("\u51FA\u54C1\u30DC\u30BF\u30F3\u691C\u77E5", { pathname: window.location.pathname, mode: item.mode, ...details }, { force: true });
+      handOffManualConfirmation(details, "\u5165\u529B\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u51FA\u54C1\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
+      chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
     }
     async function waitForFinalListingSubmitButton() {
       const startedAt = Date.now();
@@ -607,11 +658,20 @@
         return;
       }
       sessionStorage.setItem(DRAFT_SAVE_DONE_KEY, "true");
-      clickButtonLike(button);
-      await clickDraftSaveConfirmationIfVisible();
+      const details = {
+        action: "draft",
+        itemId: item.itemId,
+        itemUrl: item.itemUrl,
+        taskId: item.taskId,
+        mode: item.mode,
+        reason: "draft-save-button-ready",
+        ...getButtonLogDetails(button)
+      };
+      logRelistFlow("\u4E0B\u66F8\u304D\u4FDD\u5B58\u30DC\u30BF\u30F3\u691C\u77E5", { pathname: window.location.pathname, mode: item.mode, ...details }, { force: true });
+      handOffManualConfirmation(details, "\u5165\u529B\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u4E0B\u66F8\u304D\u4FDD\u5B58\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
       chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
     }
-    async function clickVisibleFinalActionIfReady(item, options = {}) {
+    async function detectVisibleFinalActionIfReady(item, options = {}) {
       const readiness = getFinalActionReadiness(item, options);
       if (!readiness.ready) {
         logRelistFlow("\u4FDD\u967A\u30AF\u30EA\u30C3\u30AF\u5F85\u3061\u5931\u6557", {
@@ -626,31 +686,11 @@
         await saveDraftAfterFill(item);
         return true;
       }
-      if (item.mode === "relist") {
+      if (item.mode === "relist" || item.mode === "copy") {
         await submitListingAfterFill(item);
         return true;
       }
       return false;
-    }
-    async function clickDraftSaveConfirmationIfVisible() {
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        const button = findDraftSaveConfirmationButton();
-        if (button && isClickableButtonLike(button)) {
-          clickButtonLike(button);
-          return;
-        }
-        await sleep(SELECTION_POLL_MS);
-      }
-    }
-    function findDraftSaveConfirmationButton() {
-      const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-testid*="modal"], [class*="modal"], [class*="Modal"]')).filter((element) => element instanceof HTMLElement && isVisible(element));
-      for (const dialog of dialogs) {
-        const button = Array.from(dialog.querySelectorAll('button, [role="button"]')).filter((element) => element instanceof HTMLElement && isVisible(element)).find((element) => /保存する|下書きに保存する|決定|OK/.test(getElementSearchText(element)));
-        if (button) {
-          return button;
-        }
-      }
-      return null;
     }
     async function ensurePriceBeforeFinalAction(item) {
       if (typeof item.price !== "number") {
@@ -818,7 +858,7 @@
           }
         };
       }
-      const button = item.mode === "draft" ? findDraftSaveButton() : item.mode === "relist" ? findFinalListingSubmitButton() : null;
+      const button = item.mode === "draft" ? findDraftSaveButton() : findFinalListingSubmitButton();
       if (!button) {
         return { ready: false, reason: "button-not-found", details: getButtonLogDetails(button) };
       }
@@ -863,13 +903,13 @@
       const nonBlockingFields = item.mode === "relist" ? /* @__PURE__ */ new Set(["brand"]) : NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS;
       return !result.complete && result.filled && readiness.ready && result.missingFields.length > 0 && result.missingFields.every((field) => nonBlockingFields.has(field));
     }
-    function canHandOffCopyListingToUser(item, result) {
-      return item.mode === "copy" && result.filled && (result.complete || result.missingFields.length > 0 && result.missingFields.every((field) => NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS.has(field)));
+    function canHandOffCopyListingToUser(item, result, readiness) {
+      return item.mode === "copy" && result.filled && readiness.ready && (result.complete || result.missingFields.length > 0 && result.missingFields.every((field) => NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS.has(field)));
     }
     function getFlowStatus(result, readiness, canProceedWithPartialFields) {
       if (canProceedWithPartialFields) {
         return {
-          step: "click-final-action",
+          step: "manual-confirmation",
           waitingFor: "ready",
           reason: "non-blocking-fields-skipped"
         };
@@ -890,7 +930,7 @@
         };
       }
       return {
-        step: "click-final-action",
+        step: "manual-confirmation",
         waitingFor: "ready",
         reason: "ready"
       };
@@ -1184,6 +1224,24 @@
     }
     function clearPendingItem() {
       chromeApi?.storage?.local.remove(RELIST_PENDING_KEY);
+    }
+    function saveManualConfirmationRequired(details) {
+      const payload = {
+        status: "manual_confirmation_required",
+        savedAt: Date.now(),
+        pathname: window.location.pathname,
+        pageUrl: window.location.href,
+        ...details
+      };
+      chromeApi?.storage?.local.set({ [MANUAL_CONFIRMATION_REQUIRED_KEY]: payload }, () => {
+        if (chromeApi?.runtime?.lastError) {
+          console.warn("[furimanager] manual confirmation state save failed", chromeApi.runtime.lastError.message);
+        }
+      });
+    }
+    function handOffManualConfirmation(details, message) {
+      saveManualConfirmationRequired(details);
+      showToast(message);
     }
     async function fillMetadataFields(item) {
       if (ENABLE_DOM_DEBUG || !ENABLE_METADATA_AUTOFILL) {
@@ -2255,36 +2313,117 @@
       const style = document.createElement("style");
       style.id = "furimanager-relist-toast-style";
       style.textContent = `
-      .furimanager-toast {
-        position: fixed;
-        top: 16px;
-        right: 16px;
-        z-index: 2147483647;
-        max-width: min(360px, calc(100vw - 32px));
-        padding: 12px 14px;
-        border: 1px solid #5B5FE8;
-        border-radius: 12px;
-        background: #111827;
-        color: #FFFFFF;
-        font-size: 13px;
-        font-weight: 600;
-        line-height: 1.5;
-        box-shadow: 0 12px 28px rgba(17, 24, 39, 0.28);
-      }
+      ${TOAST_STYLE_RULES}
     `;
       document.documentElement.appendChild(style);
     }
+    function createSvgElement(tag, attributes) {
+      const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      Object.entries(attributes).forEach(([name, value]) => {
+        element.setAttribute(name, value);
+      });
+      return element;
+    }
+    function createToastIcon() {
+      const icon = document.createElement("span");
+      icon.className = "furimanager-toast__icon";
+      icon.setAttribute("aria-hidden", "true");
+      const mark = createSvgElement("svg", { viewBox: "0 0 24 24", width: "21", height: "21", focusable: "false" });
+      mark.appendChild(createSvgElement("circle", { cx: "12", cy: "12", r: "10.1", fill: "none", stroke: "#FFFFFF", "stroke-width": "1.8" }));
+      mark.appendChild(createSvgElement("circle", { cx: "12", cy: "7.7", r: "1.3", fill: "#FFFFFF" }));
+      mark.appendChild(createSvgElement("rect", { x: "10.9", y: "10.7", width: "2.2", height: "6.5", rx: "1.1", fill: "#FFFFFF" }));
+      icon.appendChild(mark);
+      return icon;
+    }
+    function createToastCloseButton(toast) {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "furimanager-toast__close";
+      close.setAttribute("aria-label", "\u9589\u3058\u308B");
+      const mark = createSvgElement("svg", { viewBox: "0 0 16 16", width: "14", height: "14", focusable: "false" });
+      mark.appendChild(createSvgElement("path", {
+        d: "M3.4 3.4 L12.6 12.6 M12.6 3.4 L3.4 12.6",
+        fill: "none",
+        stroke: "currentColor",
+        "stroke-width": "1.5",
+        "stroke-linecap": "round"
+      }));
+      close.appendChild(mark);
+      close.addEventListener("click", () => {
+        if (toast.classList.contains("furimanager-toast--preview")) {
+          sessionStorage.removeItem(TOAST_PREVIEW_KEY);
+          sessionStorage.removeItem(TOAST_PREVIEW_MESSAGE_KEY);
+        }
+        toast.remove();
+      });
+      return close;
+    }
+    function renderToastContent(toast, message) {
+      toast.textContent = "";
+      toast.setAttribute("role", "status");
+      toast.appendChild(createToastIcon());
+      const text = document.createElement("span");
+      text.className = "furimanager-toast__message";
+      text.textContent = message;
+      toast.appendChild(text);
+      const meta = document.createElement("span");
+      meta.className = "furimanager-toast__meta";
+      const now = /* @__PURE__ */ new Date();
+      const time = document.createElement("span");
+      time.className = "furimanager-toast__time";
+      time.textContent = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      meta.appendChild(time);
+      meta.appendChild(createToastCloseButton(toast));
+      toast.appendChild(meta);
+    }
     function showToast(message) {
       injectStyles();
-      const existing = document.querySelector(".furimanager-toast");
+      const existing = document.querySelector(".furimanager-toast:not(.furimanager-toast--preview)");
       existing?.remove();
       const toast = document.createElement("div");
       toast.className = "furimanager-toast";
-      toast.textContent = message;
+      renderToastContent(toast, message);
       document.body.appendChild(toast);
       window.setTimeout(() => {
         toast.remove();
       }, 5200);
+    }
+    function installToastPreviewControls() {
+      const previewWindow = window;
+      previewWindow.furimanagerToastPreview = (message) => {
+        sessionStorage.setItem(TOAST_PREVIEW_KEY, "true");
+        if (typeof message === "string" && message.trim()) {
+          sessionStorage.setItem(TOAST_PREVIEW_MESSAGE_KEY, message.trim());
+        }
+        ensurePersistentToastPreview();
+      };
+      previewWindow.furimanagerToastPreviewOff = () => {
+        sessionStorage.removeItem(TOAST_PREVIEW_KEY);
+        sessionStorage.removeItem(TOAST_PREVIEW_MESSAGE_KEY);
+        document.querySelector(".furimanager-toast--preview")?.remove();
+      };
+      window.setTimeout(ensurePersistentToastPreview, 0);
+    }
+    function ensurePersistentToastPreview() {
+      if (sessionStorage.getItem(TOAST_PREVIEW_KEY) !== "true") {
+        return;
+      }
+      injectStyles();
+      const existing = document.querySelector(".furimanager-toast--preview");
+      const message = sessionStorage.getItem(TOAST_PREVIEW_MESSAGE_KEY) || "\u4FA1\u683C\u3092\u53D6\u5F97\u3067\u304D\u306A\u304B\u3063\u305F\u305F\u3081\u3001\u65B0\u898F\u51FA\u54C1\u30DA\u30FC\u30B8\u3092\u958B\u304D\u307E\u305B\u3093\u3067\u3057\u305F";
+      if (existing) {
+        const existingMessage = existing.querySelector(".furimanager-toast__message");
+        if (existingMessage) {
+          existingMessage.textContent = message;
+        } else {
+          renderToastContent(existing, message);
+        }
+        return;
+      }
+      const toast = document.createElement("div");
+      toast.className = "furimanager-toast furimanager-toast--preview";
+      renderToastContent(toast, message);
+      document.body.appendChild(toast);
     }
     function debugMercariSellDom() {
       if (!isMercariSellDebugPath()) {
@@ -2329,131 +2468,30 @@
       if (!submitButton) {
         throw new Error("edit submit button not found");
       }
-      const from = window.location.pathname;
-      clickButtonLike(submitButton);
-      const completion = await waitForPriceAdjustCompletion(itemId, from, nextPrice);
-      logPriceAdjustCompletion(completion);
-      if (completion.result !== "success") {
-        throw new Error(`price update was not completed: ${completion.signal}`);
-      }
+      const details = {
+        action: message?.taskId ? "price_drop" : "price_adjust",
+        itemId,
+        taskId: typeof message?.taskId === "string" ? message.taskId : void 0,
+        reason: "edit-submit-button-ready",
+        currentPrice,
+        nextPrice,
+        amount,
+        delta,
+        minimumPrice,
+        ...getButtonLogDetails(submitButton)
+      };
+      console.info("[furimanager:price-adjust] \u4FDD\u5B58\u30DC\u30BF\u30F3\u691C\u77E5", details);
+      handOffManualConfirmation(details, "\u4FA1\u683C\u6B04\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u4FDD\u5B58\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
       return {
-        submitted: true,
-        verified: true,
-        verificationReason: completion.signal,
+        submitted: false,
+        manualConfirmationRequired: true,
+        verificationReason: "edit-submit-button-ready",
         currentPrice,
         nextPrice,
         amount,
         delta,
         minimumPrice
       };
-    }
-    async function waitForPriceAdjustCompletion(itemId, from, expectedPrice) {
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < PRICE_ADJUST_COMPLETION_WAIT_MS) {
-        const current2 = window.location.pathname;
-        if (isPriceAdjustCompletedItemPage(current2, itemId)) {
-          const displayedPrice = findDisplayedItemPrice();
-          if (displayedPrice === expectedPrice) {
-            return {
-              result: "success",
-              signal: "item-url-price-matched",
-              from,
-              to: current2,
-              itemId,
-              expectedPrice,
-              displayedPrice
-            };
-          }
-        }
-        await sleep(RETRY_INTERVAL_MS);
-      }
-      const current = window.location.pathname;
-      if (isPriceAdjustCompletedItemPage(current, itemId)) {
-        const displayedPrice = findDisplayedItemPrice();
-        if (displayedPrice === expectedPrice) {
-          return {
-            result: "success",
-            signal: "item-url-price-matched",
-            from,
-            to: current,
-            itemId,
-            expectedPrice,
-            displayedPrice
-          };
-        }
-        return {
-          result: "failed",
-          signal: "price-not-updated",
-          from,
-          current,
-          itemId,
-          expectedPrice,
-          displayedPrice
-        };
-      }
-      return {
-        result: "failed",
-        signal: current.startsWith("/sell/edit") ? "still-edit-url" : "not-item-url",
-        from,
-        current,
-        itemId,
-        expectedPrice
-      };
-    }
-    function isPriceAdjustCompletedItemPage(pathname, itemId) {
-      const matchedItemId = pathname.match(/^\/item\/(m\d{8,})/)?.[1] ?? null;
-      return matchedItemId !== null && matchedItemId === itemId;
-    }
-    function logPriceAdjustCompletion(completion) {
-      const suffix = [
-        `result=${completion.result}`,
-        `signal=${completion.signal}`,
-        `from=${completion.from}`,
-        completion.to ? `to=${completion.to}` : null,
-        completion.current ? `current=${completion.current}` : null,
-        completion.itemId ? `itemId=${completion.itemId}` : null,
-        typeof completion.expectedPrice === "number" ? `expected=${completion.expectedPrice}` : null,
-        typeof completion.displayedPrice === "number" ? `displayed=${completion.displayedPrice}` : null
-      ].filter(Boolean).join(" ");
-      console.info(`[furimanager:price-adjust] \u5B8C\u4E86\u691C\u77E5 | ${suffix}`, completion);
-    }
-    function findDisplayedItemPrice() {
-      const selectors = [
-        'meta[itemprop="price"]',
-        'meta[property="product:price:amount"]',
-        'meta[property="og:price:amount"]',
-        'main [itemprop="price"]',
-        'main [data-testid*="price"]',
-        'main [data-testid*="Price"]'
-      ];
-      for (const selector of selectors) {
-        const elements = Array.from(document.querySelectorAll(selector));
-        for (const element of elements) {
-          if (!(element instanceof HTMLMetaElement) && element instanceof HTMLElement && (!isVisible(element) || normalizeText(element.textContent ?? "").length > 80)) {
-            continue;
-          }
-          const value = element instanceof HTMLMetaElement ? element.content : `${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("content") ?? ""}`;
-          const price = parseDisplayedPrice(value);
-          if (price !== null) {
-            return price;
-          }
-        }
-      }
-      return null;
-    }
-    function parseDisplayedPrice(value) {
-      const text = normalizeText(value);
-      const numericOnly = text.match(/^\d{2,7}$/);
-      if (numericOnly) {
-        const price2 = parsePriceValue(text);
-        return Number.isFinite(price2) ? price2 : null;
-      }
-      const matched = text.match(/[¥￥]\s*([\d,]+)/) ?? text.match(/([\d,]+)\s*円/);
-      if (!matched) {
-        return null;
-      }
-      const price = parsePriceValue(matched[1]);
-      return Number.isFinite(price) ? price : null;
     }
     async function waitForPriceField() {
       const startedAt = Date.now();

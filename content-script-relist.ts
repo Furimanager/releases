@@ -19,6 +19,7 @@
     shippingDays: string | null;
     savedAt?: string;
     mode: RelistMode;
+    taskId?: string;
   };
 
   type PriceAdjustPendingItem = {
@@ -37,6 +38,7 @@
     storage?: {
       local: {
         get: (keys: string | string[], callback: (items: Record<string, unknown>) => void) => void;
+        set: (items: Record<string, unknown>, callback?: () => void) => void;
         remove: (keys: string | string[], callback?: () => void) => void;
       };
     };
@@ -72,31 +74,109 @@
     missingFields: string[];
   };
 
-  type ListingCompletionResult = {
-    result: "success" | "failed";
-    signal: string;
-    from: string;
-    to?: string;
-    current?: string;
-    message?: string;
-  };
-
-  type PriceAdjustCompletionResult = {
-    result: "success" | "failed";
-    signal: string;
-    from: string;
-    to?: string;
-    current?: string;
-    itemId: string | null;
-    expectedPrice?: number;
-    displayedPrice?: number | null;
-  };
-
   const mountedWindow = window as Window & {
     __furimanagerRelistAutofillMounted?: boolean;
   };
   const chromeApi = (globalThis as unknown as { chrome?: ChromeLike }).chrome;
   const RELIST_PENDING_KEY = "relist_pending";
+  const MANUAL_CONFIRMATION_REQUIRED_KEY = "furimanager_manual_confirmation_required";
+  const TOAST_PREVIEW_KEY = "furimanager_toast_preview";
+  const TOAST_PREVIEW_MESSAGE_KEY = "furimanager_toast_preview_message";
+  const TOAST_STYLE_RULES = `
+      .furimanager-toast {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 2147483647;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: min(440px, calc(100vw - 32px));
+        padding: 16px 12px 16px 18px;
+        border: 1.5px solid transparent;
+        border-radius: 14px;
+        background:
+          linear-gradient(180deg, #FDF6FC 0%, #FAEDF8 100%) padding-box,
+          linear-gradient(112deg, #FF7A2F 0%, #F5386B 13%, #E0329C 29%, #B03BC8 46%, #6F4FDE 70%, #3F6BEF 100%) border-box;
+        box-shadow: 0 10px 30px rgba(74, 32, 96, 0.12), 0 2px 6px rgba(74, 32, 96, 0.06);
+        color: #2A2735;
+        font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, system-ui, -apple-system, "Segoe UI", sans-serif;
+        text-align: left;
+      }
+
+      .furimanager-toast__icon {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-image: linear-gradient(135deg, #FF8A2B 0%, #F5356C 34%, #C13BB4 64%, #4F5BE0 100%);
+      }
+
+      .furimanager-toast__icon svg,
+      .furimanager-toast__close svg {
+        display: block;
+      }
+
+      .furimanager-toast__message {
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0;
+        color: #2A2735;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1.5;
+        letter-spacing: 0.01em;
+        overflow-wrap: anywhere;
+      }
+
+      .furimanager-toast__meta {
+        flex: none;
+        align-self: flex-start;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 21px;
+      }
+
+      .furimanager-toast__time {
+        color: #8B8797;
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .furimanager-toast__close {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #6F6B7D;
+        cursor: pointer;
+        -webkit-appearance: none;
+        appearance: none;
+      }
+
+      .furimanager-toast__close:hover {
+        background: rgba(110, 90, 140, 0.12);
+      }
+
+      .furimanager-toast--preview {
+        cursor: default;
+      }
+  `;
   const PRICE_ADJUST_PENDING_KEY = "furimanager_price_adjust_pending";
   const LISTING_MANAGEMENT_PENDING_KEY = "furimanager_listing_management_pending";
   const MAX_WAIT_MS = 12000;
@@ -106,8 +186,6 @@
   const METADATA_SELECT_WAIT_MS = 250;
   const SELECTION_POLL_MS = 75;
   const SAFE_CLICK_SETTLE_MS = 150;
-  const LISTING_COMPLETION_WAIT_MS = 25000;
-  const PRICE_ADJUST_COMPLETION_WAIT_MS = 25000;
   const FINAL_ACTION_AFTER_COMPLETE_WAIT_MS = 1000;
   const FINAL_ACTION_MIN_WAIT_MS = 10000;
   const FINAL_ACTION_DOM_STABLE_MS = 800;
@@ -141,6 +219,7 @@
   }
 
   mountedWindow.__furimanagerRelistAutofillMounted = true;
+  installToastPreviewControls();
 
   function getUserFacingRelistErrorMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -331,7 +410,14 @@
         throw new Error("「出品を一時停止する」ボタンが見つかりませんでした");
       }
 
-      clickButtonLike(suspendButton);
+      const details = {
+        action: "stop",
+        itemId: pending.itemId,
+        reason: "suspend-button-ready",
+        ...getButtonLogDetails(suspendButton),
+      };
+      logRelistFlow("停止ボタン検知", { pathname: window.location.pathname, ...details }, { force: true });
+      handOffManualConfirmation(details, "停止ボタンを検知しました。最後の停止操作は手動で確認してください");
       return;
     }
 
@@ -350,7 +436,14 @@
       throw new Error("削除確認ダイアログの「削除する」ボタンが見つかりませんでした");
     }
 
-    clickButtonLike(confirmButton);
+    const details = {
+      action: "delete",
+      itemId: pending.itemId,
+      reason: "delete-confirmation-button-ready",
+      ...getButtonLogDetails(confirmButton),
+    };
+    logRelistFlow("削除確認ボタン検知", { pathname: window.location.pathname, ...details }, { force: true });
+    handOffManualConfirmation(details, "削除確認ダイアログを表示しました。最後の削除操作は手動で確認してください");
   }
 
   async function waitForActionButton(finder: () => HTMLElement | null): Promise<HTMLElement | null> {
@@ -541,7 +634,7 @@
       hasFilledAnyField = result.filled || hasFilledAnyField;
       const readinessBeforeWait = getFinalActionReadiness(item);
       const canProceedWithPartialFields = canProceedWithNonBlockingMissingFields(item, result, readinessBeforeWait);
-      const canHandOffCopyListing = canHandOffCopyListingToUser(item, result);
+      const canHandOffCopyListing = canHandOffCopyListingToUser(item, result, readinessBeforeWait);
       const flowStatus = getFlowStatus(result, readinessBeforeWait, canProceedWithPartialFields);
       logRelistFlow("入力状況", {
         elapsedMs: Date.now() - startedAt,
@@ -563,16 +656,26 @@
       });
 
       if (canHandOffCopyListing) {
-        logRelistFlow("コピー出品は手動確認へ", {
+        logRelistFlow("コピー出品は手動確認待ち", {
           elapsedMs: Date.now() - startedAt,
           elapsedSec: getElapsedSec(startedAt),
           pathname: window.location.pathname,
           mode: item.mode,
           reason: result.complete ? "copy-ready" : "copy-ready-with-non-blocking-fields-skipped",
           skippedMissingFields: result.complete ? [] : result.missingFields,
+          ...readinessBeforeWait.details,
         }, { force: true });
+        handOffManualConfirmation({
+          action: "copy",
+          itemId: item.itemId,
+          itemUrl: item.itemUrl,
+          taskId: item.taskId,
+          mode: item.mode,
+          reason: result.complete ? "copy-ready" : "copy-ready-with-non-blocking-fields-skipped",
+          missingFields: result.missingFields,
+          ...readinessBeforeWait.details,
+        }, "コピー出品の入力が完了しました。最後の出品ボタンは手動で確認してください");
         clearPendingItem();
-        showToast("コピー出品の入力が完了しました。最後の出品ボタンは手動で確認してください");
         return;
       }
 
@@ -596,7 +699,7 @@
           continue;
         }
 
-        logRelistFlow("最終ボタン押下へ", {
+        logRelistFlow("最終ボタン検知", {
           elapsedMs: Date.now() - startedAt,
           elapsedSec: getElapsedSec(startedAt),
           pathname: window.location.pathname,
@@ -608,14 +711,14 @@
 
         if (item.mode === "draft") {
           await saveDraftAfterFill(item);
-        } else if (item.mode === "relist") {
+        } else if (item.mode === "relist" || item.mode === "copy") {
           await submitListingAfterFill(item);
         }
 
         return;
       }
 
-      if (hasFilledAnyField && Date.now() - startedAt > FINAL_ACTION_MIN_WAIT_MS && (result.complete || canProceedWithPartialFields) && await clickVisibleFinalActionIfReady(item, { requireStableDom: false })) {
+      if (hasFilledAnyField && Date.now() - startedAt > FINAL_ACTION_MIN_WAIT_MS && (result.complete || canProceedWithPartialFields) && await detectVisibleFinalActionIfReady(item, { requireStableDom: false })) {
         return;
       }
 
@@ -627,8 +730,8 @@
       const canClickAfterTimeout = latestResult !== null && (latestResult.complete || canProceedWithNonBlockingMissingFields(item, latestResult, readiness));
 
       if (canClickAfterTimeout) {
-        logRelistFlow("通常待機タイムアウト後の保険クリック", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
-        await clickVisibleFinalActionIfReady(item, { requireStableDom: false });
+        logRelistFlow("通常待機タイムアウト後の保険検知", { elapsedSec: getElapsedSec(startedAt), pathname: window.location.pathname, mode: item.mode }, { force: true });
+        await detectVisibleFinalActionIfReady(item, { requireStableDom: false });
         return;
       }
 
@@ -700,107 +803,18 @@
     }
 
     sessionStorage.setItem(LISTING_SUBMIT_DONE_KEY, "true");
-    const from = window.location.pathname;
-    logRelistFlow("出品ボタン押下", { pathname: from, mode: item.mode }, { force: true });
-    clickButtonLike(button);
-    const completion = await waitForListingCompletion(from);
-    logListingCompletion(completion);
-    chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
-
-    if (completion.result === "success") {
-      showToast("出品が完了しました");
-      return;
-    }
-
-    showToast("出品完了を確認できませんでした。画面を確認してください");
-  }
-
-  async function waitForListingCompletion(from: string): Promise<ListingCompletionResult> {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < LISTING_COMPLETION_WAIT_MS) {
-      const current = window.location.pathname;
-      const completionMessage = findListingCompletionMessage();
-
-      if (completionMessage) {
-        return {
-          result: "success",
-          signal: "completion-message",
-          from,
-          to: current,
-          message: completionMessage,
-        };
-      }
-
-      await sleep(RETRY_INTERVAL_MS);
-    }
-
-    const current = window.location.pathname;
-    const completionMessage = findListingCompletionMessage();
-
-    if (completionMessage) {
-      return {
-        result: "success",
-        signal: "completion-message",
-        from,
-        to: current,
-        message: completionMessage,
-      };
-    }
-
-    const message = findListingBlockingMessage();
-    return {
-      result: "failed",
-      signal: message ? "validation-or-blocking-message" : current === "/sell" ? "sell-url-without-completion-message" : "no-completion-message",
-      from,
-      current,
-      message,
+    const details = {
+      action: item.mode === "copy" ? "copy" : "relist",
+      itemId: item.itemId,
+      itemUrl: item.itemUrl,
+      taskId: item.taskId,
+      mode: item.mode,
+      reason: "listing-submit-button-ready",
+      ...getButtonLogDetails(button),
     };
-  }
-
-  function logListingCompletion(completion: ListingCompletionResult): void {
-    logRelistFlow("完了検知", completion, { force: true });
-  }
-
-  function findListingCompletionMessage(): string | undefined {
-    const selectors = [
-      '[data-testid="listing-complete-popup"]',
-      '#listing-complete-popup',
-      '[role="dialog"]',
-      '[aria-modal="true"]',
-      '.merModalBase',
-      '.popup',
-    ];
-
-    for (const selector of selectors) {
-      const element = document.querySelector(selector);
-      const text = normalizeText(element?.textContent ?? "");
-
-      if (text.includes("出品が完了しました")) {
-        return "出品が完了しました";
-      }
-    }
-
-    return undefined;
-  }
-
-  function findListingBlockingMessage(): string | undefined {
-    const patterns = [/選択してください/, /入力してください/, /必須項目/, /必須/, /エラー/];
-    const candidates = Array.from(document.querySelectorAll('[role="alert"], [aria-live], p, span, div'));
-
-    for (const candidate of candidates) {
-      if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) {
-        continue;
-      }
-
-      const text = normalizeText(candidate.textContent ?? "");
-
-      if (text && text.length <= 160 && patterns.some((pattern) => pattern.test(text))) {
-        return text;
-      }
-    }
-
-    return undefined;
+    logRelistFlow("出品ボタン検知", { pathname: window.location.pathname, mode: item.mode, ...details }, { force: true });
+    handOffManualConfirmation(details, "入力が完了しました。最後の出品ボタンは手動で確認してください");
+    chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
   }
 
   async function waitForFinalListingSubmitButton(): Promise<HTMLElement | null> {
@@ -871,14 +885,22 @@
       return;
     }
 
-    // 入力完了後、画像のDOMにある最後の下書き保存ボタンを1回だけ押す。
     sessionStorage.setItem(DRAFT_SAVE_DONE_KEY, "true");
-    clickButtonLike(button);
-    await clickDraftSaveConfirmationIfVisible();
+    const details = {
+      action: "draft",
+      itemId: item.itemId,
+      itemUrl: item.itemUrl,
+      taskId: item.taskId,
+      mode: item.mode,
+      reason: "draft-save-button-ready",
+      ...getButtonLogDetails(button),
+    };
+    logRelistFlow("下書き保存ボタン検知", { pathname: window.location.pathname, mode: item.mode, ...details }, { force: true });
+    handOffManualConfirmation(details, "入力が完了しました。最後の下書き保存ボタンは手動で確認してください");
     chromeApi?.storage?.local?.remove(RELIST_PENDING_KEY);
   }
 
-  async function clickVisibleFinalActionIfReady(item: RelistPendingItem, options: { requireStableDom?: boolean } = {}): Promise<boolean> {
+  async function detectVisibleFinalActionIfReady(item: RelistPendingItem, options: { requireStableDom?: boolean } = {}): Promise<boolean> {
     const readiness = getFinalActionReadiness(item, options);
 
     if (!readiness.ready) {
@@ -896,42 +918,12 @@
       return true;
     }
 
-    if (item.mode === "relist") {
+    if (item.mode === "relist" || item.mode === "copy") {
       await submitListingAfterFill(item);
       return true;
     }
 
     return false;
-  }
-
-  async function clickDraftSaveConfirmationIfVisible(): Promise<void> {
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const button = findDraftSaveConfirmationButton();
-
-      if (button && isClickableButtonLike(button)) {
-        clickButtonLike(button);
-        return;
-      }
-
-      await sleep(SELECTION_POLL_MS);
-    }
-  }
-
-  function findDraftSaveConfirmationButton(): HTMLElement | null {
-    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-testid*="modal"], [class*="modal"], [class*="Modal"]'))
-      .filter((element): element is HTMLElement => element instanceof HTMLElement && isVisible(element));
-
-    for (const dialog of dialogs) {
-      const button = Array.from(dialog.querySelectorAll('button, [role="button"]'))
-        .filter((element): element is HTMLElement => element instanceof HTMLElement && isVisible(element))
-        .find((element) => /保存する|下書きに保存する|決定|OK/.test(getElementSearchText(element)));
-
-      if (button) {
-        return button;
-      }
-    }
-
-    return null;
   }
 
   async function ensurePriceBeforeFinalAction(item: RelistPendingItem): Promise<boolean> {
@@ -1139,7 +1131,7 @@
       };
     }
 
-    const button = item.mode === "draft" ? findDraftSaveButton() : item.mode === "relist" ? findFinalListingSubmitButton() : null;
+    const button = item.mode === "draft" ? findDraftSaveButton() : findFinalListingSubmitButton();
 
     if (!button) {
       return { ready: false, reason: "button-not-found", details: getButtonLogDetails(button) };
@@ -1202,10 +1194,11 @@
     );
   }
 
-  function canHandOffCopyListingToUser(item: RelistPendingItem, result: FillAvailableFieldsResult): boolean {
+  function canHandOffCopyListingToUser(item: RelistPendingItem, result: FillAvailableFieldsResult, readiness: FinalActionReadiness): boolean {
     return (
       item.mode === "copy" &&
       result.filled &&
+      readiness.ready &&
       (result.complete || (
         result.missingFields.length > 0 &&
         result.missingFields.every((field) => NON_BLOCKING_FINAL_ACTION_MISSING_FIELDS.has(field))
@@ -1216,7 +1209,7 @@
   function getFlowStatus(result: FillAvailableFieldsResult, readiness: FinalActionReadiness, canProceedWithPartialFields: boolean): { step: string; waitingFor: string; reason: string } {
     if (canProceedWithPartialFields) {
       return {
-        step: "click-final-action",
+        step: "manual-confirmation",
         waitingFor: "ready",
         reason: "non-blocking-fields-skipped",
       };
@@ -1240,7 +1233,7 @@
     }
 
     return {
-      step: "click-final-action",
+      step: "manual-confirmation",
       waitingFor: "ready",
       reason: "ready",
     };
@@ -1620,6 +1613,27 @@
 
   function clearPendingItem(): void {
     chromeApi?.storage?.local.remove(RELIST_PENDING_KEY);
+  }
+
+  function saveManualConfirmationRequired(details: Record<string, unknown>): void {
+    const payload = {
+      status: "manual_confirmation_required",
+      savedAt: Date.now(),
+      pathname: window.location.pathname,
+      pageUrl: window.location.href,
+      ...details,
+    };
+
+    chromeApi?.storage?.local.set({ [MANUAL_CONFIRMATION_REQUIRED_KEY]: payload }, () => {
+      if (chromeApi?.runtime?.lastError) {
+        console.warn("[furimanager] manual confirmation state save failed", chromeApi.runtime.lastError.message);
+      }
+    });
+  }
+
+  function handOffManualConfirmation(details: Record<string, unknown>, message: string): void {
+    saveManualConfirmationRequired(details);
+    showToast(message);
   }
 
   async function fillMetadataFields(item: RelistPendingItem): Promise<{ targetCount: number; filledCount: number; missingFields: string[] }> {
@@ -3019,40 +3033,153 @@
     const style = document.createElement("style");
     style.id = "furimanager-relist-toast-style";
     style.textContent = `
-      .furimanager-toast {
-        position: fixed;
-        top: 16px;
-        right: 16px;
-        z-index: 2147483647;
-        max-width: min(360px, calc(100vw - 32px));
-        padding: 12px 14px;
-        border: 1px solid #5B5FE8;
-        border-radius: 12px;
-        background: #111827;
-        color: #FFFFFF;
-        font-size: 13px;
-        font-weight: 600;
-        line-height: 1.5;
-        box-shadow: 0 12px 28px rgba(17, 24, 39, 0.28);
-      }
+      ${TOAST_STYLE_RULES}
     `;
     document.documentElement.appendChild(style);
+  }
+
+  function createSvgElement(tag: string, attributes: Record<string, string>): SVGElement {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+
+    Object.entries(attributes).forEach(([name, value]) => {
+      element.setAttribute(name, value);
+    });
+
+    return element;
+  }
+
+  function createToastIcon(): HTMLElement {
+    const icon = document.createElement("span");
+    icon.className = "furimanager-toast__icon";
+    icon.setAttribute("aria-hidden", "true");
+
+    const mark = createSvgElement("svg", { viewBox: "0 0 24 24", width: "21", height: "21", focusable: "false" });
+    mark.appendChild(createSvgElement("circle", { cx: "12", cy: "12", r: "10.1", fill: "none", stroke: "#FFFFFF", "stroke-width": "1.8" }));
+    mark.appendChild(createSvgElement("circle", { cx: "12", cy: "7.7", r: "1.3", fill: "#FFFFFF" }));
+    mark.appendChild(createSvgElement("rect", { x: "10.9", y: "10.7", width: "2.2", height: "6.5", rx: "1.1", fill: "#FFFFFF" }));
+    icon.appendChild(mark);
+
+    return icon;
+  }
+
+  function createToastCloseButton(toast: HTMLElement): HTMLButtonElement {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "furimanager-toast__close";
+    close.setAttribute("aria-label", "閉じる");
+
+    const mark = createSvgElement("svg", { viewBox: "0 0 16 16", width: "14", height: "14", focusable: "false" });
+    mark.appendChild(createSvgElement("path", {
+      d: "M3.4 3.4 L12.6 12.6 M12.6 3.4 L3.4 12.6",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "1.5",
+      "stroke-linecap": "round"
+    }));
+    close.appendChild(mark);
+
+    close.addEventListener("click", () => {
+      if (toast.classList.contains("furimanager-toast--preview")) {
+        sessionStorage.removeItem(TOAST_PREVIEW_KEY);
+        sessionStorage.removeItem(TOAST_PREVIEW_MESSAGE_KEY);
+      }
+
+      toast.remove();
+    });
+
+    return close;
+  }
+
+  function renderToastContent(toast: HTMLElement, message: string): void {
+    toast.textContent = "";
+    toast.setAttribute("role", "status");
+    toast.appendChild(createToastIcon());
+
+    const text = document.createElement("span");
+    text.className = "furimanager-toast__message";
+    text.textContent = message;
+    toast.appendChild(text);
+
+    const meta = document.createElement("span");
+    meta.className = "furimanager-toast__meta";
+
+    const now = new Date();
+    const time = document.createElement("span");
+    time.className = "furimanager-toast__time";
+    time.textContent = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    meta.appendChild(time);
+    meta.appendChild(createToastCloseButton(toast));
+
+    toast.appendChild(meta);
   }
 
   function showToast(message: string): void {
     injectStyles();
 
-    const existing = document.querySelector(".furimanager-toast");
+    const existing = document.querySelector(".furimanager-toast:not(.furimanager-toast--preview)");
     existing?.remove();
 
     const toast = document.createElement("div");
     toast.className = "furimanager-toast";
-    toast.textContent = message;
+    renderToastContent(toast, message);
     document.body.appendChild(toast);
 
     window.setTimeout(() => {
       toast.remove();
     }, 5200);
+  }
+
+  function installToastPreviewControls(): void {
+    const previewWindow = window as Window & {
+      furimanagerToastPreview?: (message?: string) => void;
+      furimanagerToastPreviewOff?: () => void;
+    };
+
+    previewWindow.furimanagerToastPreview = (message?: string) => {
+      sessionStorage.setItem(TOAST_PREVIEW_KEY, "true");
+
+      if (typeof message === "string" && message.trim()) {
+        sessionStorage.setItem(TOAST_PREVIEW_MESSAGE_KEY, message.trim());
+      }
+
+      ensurePersistentToastPreview();
+    };
+
+    previewWindow.furimanagerToastPreviewOff = () => {
+      sessionStorage.removeItem(TOAST_PREVIEW_KEY);
+      sessionStorage.removeItem(TOAST_PREVIEW_MESSAGE_KEY);
+      document.querySelector(".furimanager-toast--preview")?.remove();
+    };
+
+    window.setTimeout(ensurePersistentToastPreview, 0);
+  }
+
+  function ensurePersistentToastPreview(): void {
+    if (sessionStorage.getItem(TOAST_PREVIEW_KEY) !== "true") {
+      return;
+    }
+
+    injectStyles();
+
+    const existing = document.querySelector<HTMLElement>(".furimanager-toast--preview");
+    const message = sessionStorage.getItem(TOAST_PREVIEW_MESSAGE_KEY) || "価格を取得できなかったため、新規出品ページを開きませんでした";
+
+    if (existing) {
+      const existingMessage = existing.querySelector(".furimanager-toast__message");
+
+      if (existingMessage) {
+        existingMessage.textContent = message;
+      } else {
+        renderToastContent(existing, message);
+      }
+
+      return;
+    }
+
+    const toast = document.createElement("div");
+    toast.className = "furimanager-toast furimanager-toast--preview";
+    renderToastContent(toast, message);
+    document.body.appendChild(toast);
   }
 
   type DomDebugCandidate = {
@@ -3141,159 +3268,31 @@
       throw new Error("edit submit button not found");
     }
 
-    const from = window.location.pathname;
-    clickButtonLike(submitButton);
-    const completion = await waitForPriceAdjustCompletion(itemId, from, nextPrice);
-    logPriceAdjustCompletion(completion);
-
-    if (completion.result !== "success") {
-      throw new Error(`price update was not completed: ${completion.signal}`);
-    }
+    const details = {
+      action: message?.taskId ? "price_drop" : "price_adjust",
+      itemId,
+      taskId: typeof message?.taskId === "string" ? message.taskId : undefined,
+      reason: "edit-submit-button-ready",
+      currentPrice,
+      nextPrice,
+      amount,
+      delta,
+      minimumPrice,
+      ...getButtonLogDetails(submitButton),
+    };
+    console.info("[furimanager:price-adjust] 保存ボタン検知", details);
+    handOffManualConfirmation(details, "価格欄を更新しました。最後の保存ボタンは手動で確認してください");
 
     return {
-      submitted: true,
-      verified: true,
-      verificationReason: completion.signal,
+      submitted: false,
+      manualConfirmationRequired: true,
+      verificationReason: "edit-submit-button-ready",
       currentPrice,
       nextPrice,
       amount,
       delta,
       minimumPrice,
     };
-  }
-
-  async function waitForPriceAdjustCompletion(itemId: string | null, from: string, expectedPrice: number): Promise<PriceAdjustCompletionResult> {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < PRICE_ADJUST_COMPLETION_WAIT_MS) {
-      const current = window.location.pathname;
-
-      if (isPriceAdjustCompletedItemPage(current, itemId)) {
-        const displayedPrice = findDisplayedItemPrice();
-
-        if (displayedPrice === expectedPrice) {
-          return {
-            result: "success",
-            signal: "item-url-price-matched",
-            from,
-            to: current,
-            itemId,
-            expectedPrice,
-            displayedPrice,
-          };
-        }
-      }
-
-      await sleep(RETRY_INTERVAL_MS);
-    }
-
-    const current = window.location.pathname;
-
-    if (isPriceAdjustCompletedItemPage(current, itemId)) {
-      const displayedPrice = findDisplayedItemPrice();
-
-      if (displayedPrice === expectedPrice) {
-        return {
-          result: "success",
-          signal: "item-url-price-matched",
-          from,
-          to: current,
-          itemId,
-          expectedPrice,
-          displayedPrice,
-        };
-      }
-
-      return {
-        result: "failed",
-        signal: "price-not-updated",
-        from,
-        current,
-        itemId,
-        expectedPrice,
-        displayedPrice,
-      };
-    }
-
-    return {
-      result: "failed",
-      signal: current.startsWith("/sell/edit") ? "still-edit-url" : "not-item-url",
-      from,
-      current,
-      itemId,
-      expectedPrice,
-    };
-  }
-
-  function isPriceAdjustCompletedItemPage(pathname: string, itemId: string | null): boolean {
-    const matchedItemId = pathname.match(/^\/item\/(m\d{8,})/)?.[1] ?? null;
-    return matchedItemId !== null && matchedItemId === itemId;
-  }
-
-  function logPriceAdjustCompletion(completion: PriceAdjustCompletionResult): void {
-    const suffix = [
-      `result=${completion.result}`,
-      `signal=${completion.signal}`,
-      `from=${completion.from}`,
-      completion.to ? `to=${completion.to}` : null,
-      completion.current ? `current=${completion.current}` : null,
-      completion.itemId ? `itemId=${completion.itemId}` : null,
-      typeof completion.expectedPrice === "number" ? `expected=${completion.expectedPrice}` : null,
-      typeof completion.displayedPrice === "number" ? `displayed=${completion.displayedPrice}` : null,
-    ].filter(Boolean).join(" ");
-
-    console.info(`[furimanager:price-adjust] 完了検知 | ${suffix}`, completion);
-  }
-
-  function findDisplayedItemPrice(): number | null {
-    const selectors = [
-      'meta[itemprop="price"]',
-      'meta[property="product:price:amount"]',
-      'meta[property="og:price:amount"]',
-      'main [itemprop="price"]',
-      'main [data-testid*="price"]',
-      'main [data-testid*="Price"]',
-    ];
-
-    for (const selector of selectors) {
-      const elements = Array.from(document.querySelectorAll(selector));
-
-      for (const element of elements) {
-        if (!(element instanceof HTMLMetaElement) && element instanceof HTMLElement && (!isVisible(element) || normalizeText(element.textContent ?? "").length > 80)) {
-          continue;
-        }
-
-        const value = element instanceof HTMLMetaElement
-          ? element.content
-          : `${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("content") ?? ""}`;
-        const price = parseDisplayedPrice(value);
-
-        if (price !== null) {
-          return price;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  function parseDisplayedPrice(value: string): number | null {
-    const text = normalizeText(value);
-    const numericOnly = text.match(/^\d{2,7}$/);
-
-    if (numericOnly) {
-      const price = parsePriceValue(text);
-      return Number.isFinite(price) ? price : null;
-    }
-
-    const matched = text.match(/[¥￥]\s*([\d,]+)/) ?? text.match(/([\d,]+)\s*円/);
-
-    if (!matched) {
-      return null;
-    }
-
-    const price = parsePriceValue(matched[1]);
-    return Number.isFinite(price) ? price : null;
   }
 
   async function waitForPriceField() {
