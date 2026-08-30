@@ -6,6 +6,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:minify": "npm run build && node scripts/minify.mjs",
+    "build:store": "node scripts/build-store-zip.mjs",
     "package:check": "npm run build && npm run lint",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{js,ts,json}\"",

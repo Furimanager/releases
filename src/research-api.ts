@@ -130,6 +130,12 @@ type ResearchUsageState = {
   remaining: number;
   resetAt?: string;
   unlimited?: boolean;
+  /** 紹介チケットの残り回数（月枠とは別枠）。 */
+  ticketRemaining?: number;
+  /** 残っているチケットのうち、最も早い失効日時（ISO文字列）。 */
+  ticketExpiresAt?: string | null;
+  /** 直前の1回をどちらから引いたか。 */
+  consumedFrom?: "monthly" | "ticket";
 };
 
 type ResearchCacheResponse = {
@@ -255,7 +261,17 @@ declare global {
   }
 }
 
-const DEFAULT_APP_URL = "https://furimanager.com";
+const DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
+const LEGACY_APP_URLS = new Set([
+  "https://furimanager.com",
+  "https://www.furimanager.com",
+  "https://furimanager.furimakaikei.com"
+]);
+// chrome.runtime.getManifest() が取れない環境向けのフォールバック。ここを "unknown" に
+// すると、サーバ側の最小バージョン検証 (compareVersions) が必ず負になり 426
+// extension_update_required で固定的に弾かれるため、実バージョンを埋めておく。
+// manifest.json の version と揃えて更新する。
+const EXTENSION_FALLBACK_VERSION = "0.2.5";
 const RESEARCH_API_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
@@ -298,7 +314,8 @@ function hasSavedPurchasePrice(price: ResearchPurchasePrice | undefined) {
 }
 
 function getAppUrl() {
-  return (window.FurimanagerConfig?.APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, "");
+  const configuredUrl = String(window.FurimanagerConfig?.APP_URL ?? "").trim().replace(/\/+$/, "");
+  return !configuredUrl || LEGACY_APP_URLS.has(configuredUrl) ? DEFAULT_APP_URL : configuredUrl;
 }
 
 function getChromeStorage(keys: string[]) {
@@ -510,7 +527,7 @@ function createResearchSessionId() {
 }
 
 function getExtensionVersion() {
-  return window.chrome?.runtime?.getManifest?.().version ?? "unknown";
+  return window.chrome?.runtime?.getManifest?.().version ?? EXTENSION_FALLBACK_VERSION;
 }
 
 function getExtensionId() {
@@ -803,6 +820,16 @@ function trimRawItemForAnalyze(rawItem: unknown, includeNested = true): Record<s
     }
 
     result[key] = source[key];
+  }
+
+  // 現在のメルカリ API (data[]) の確定キーを、フリマネ側の正規形にもそろえる。
+  // 元キーも残すため、旧形式と既存の解析処理はそのまま利用できる。
+  if (!Object.prototype.hasOwnProperty.call(result, "item_id") && Object.prototype.hasOwnProperty.call(source, "id")) {
+    result.item_id = source.id;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(result, "title") && Object.prototype.hasOwnProperty.call(source, "name")) {
+    result.title = source.name;
   }
 
   if (includeNested) {

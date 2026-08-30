@@ -5,6 +5,7 @@ const FURIMANE_OPEN_BUTTON_ID = "furimane-research-open-button";
 const FURIMANE_CLOSED_STORAGE_KEY = "furimane-research-closed";
 const FURIMANE_MAX_RETRY_COUNT = 3;
 const FURIMANE_DEFAULT_FETCH_STRATEGY: "api" | "dom" = "api";
+const FURIMANE_DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
 const FURIMANE_READY_DELAY_MS = 250;
 const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
 const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
@@ -81,6 +82,12 @@ type ResearchUsageState = {
   remaining: number;
   resetAt?: string;
   unlimited?: boolean;
+  /** 紹介チケットの残り回数（月枠とは別枠）。 */
+  ticketRemaining?: number;
+  /** 残っているチケットのうち、最も早い失効日時（ISO文字列）。 */
+  ticketExpiresAt?: string | null;
+  /** 直前の1回をどちらから引いたか。 */
+  consumedFrom?: "monthly" | "ticket";
 };
 
 type LocalResearchCacheEntry = {
@@ -174,6 +181,7 @@ type ResearchOverlayWindow = Window & {
         onSaveSeller?: (seller: ResearchResultData["seller"]) => Promise<void>;
       }
     ) => void | Promise<void>;
+    refreshUsageChip?: (usage: ResearchUsageState | null | undefined) => void;
   };
 };
 
@@ -215,9 +223,27 @@ function getChromeLocalStorage(keys: string[]) {
   });
 }
 
+function setChromeLocalStorage(values: Record<string, unknown>) {
+  return new Promise<void>((resolve) => {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) {
+      resolve();
+      return;
+    }
+
+    chrome.storage.local.set(values, () => resolve());
+  });
+}
+
 async function isResearchFeatureEnabled() {
   const storage = await getChromeLocalStorage([FURIMANE_RESEARCH_ENABLED_KEY]);
-  return storage[FURIMANE_RESEARCH_ENABLED_KEY] === true;
+  const savedValue = storage[FURIMANE_RESEARCH_ENABLED_KEY];
+
+  if (savedValue === true || savedValue === false) {
+    return savedValue;
+  }
+
+  await setChromeLocalStorage({ [FURIMANE_RESEARCH_ENABLED_KEY]: true });
+  return true;
 }
 
 function getResearchFetchStrategy() {
@@ -584,7 +610,7 @@ function renderAccessLocked(container: HTMLElement) {
 
   const link = document.createElement("a");
   link.className = "furimane-research-overlay__link-button";
-  link.href = `${getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000"}/dashboard/research`;
+  link.href = `${getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? FURIMANE_DEFAULT_APP_URL}/dashboard/research`;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
   link.textContent = "リサーチ追加プランを確認する";
@@ -734,11 +760,33 @@ function normalizeResearchAccess(access: { canUse?: boolean; canUseResearch?: bo
     usage: {
       allowed: true,
       used: 0,
-      limit: 30,
-      remaining: 30,
-      unlimited: true
+      limit: RESEARCH_FALLBACK_MONTHLY_LIMIT,
+      remaining: RESEARCH_FALLBACK_MONTHLY_LIMIT,
+      unlimited: true,
+      ticketRemaining: 0,
+      ticketExpiresAt: null
     }
   };
+}
+
+/** usage をまだ取得できていないときに出す月枠上限（web の FREE_RESEARCH_MONTHLY_LIMIT と揃える）。 */
+const RESEARCH_FALLBACK_MONTHLY_LIMIT = 20;
+
+/**
+ * まだリサーチを実行できるか。
+ * サーバーが allowed を返していればそれを最優先で信じ、無ければ月枠とチケットから決める。
+ * （research-quota-display.ts の source !== "exhausted" と同じ判定の複製）
+ */
+function canUseResearchFromUsage(usage: ResearchUsageState | null | undefined) {
+  if (!usage) {
+    return false;
+  }
+
+  if (typeof usage.allowed === "boolean") {
+    return usage.allowed;
+  }
+
+  return usage.unlimited === true || usage.used < usage.limit || (usage.ticketRemaining ?? 0) > 0;
 }
 
 function updateResearchUsageChip(usage: ResearchUsageState | null | undefined) {
@@ -747,7 +795,7 @@ function updateResearchUsageChip(usage: ResearchUsageState | null | undefined) {
   }
 
   currentResearchUsage = usage;
-  const canUseResearch = usage.unlimited === true || usage.used < usage.limit;
+  const canUseResearch = canUseResearchFromUsage(usage);
 
   if (cachedResearchAccess) {
     cachedResearchAccess.value = {
@@ -761,24 +809,8 @@ function updateResearchUsageChip(usage: ResearchUsageState | null | undefined) {
     };
   }
 
-  const usageChip = document.querySelector<HTMLElement>(".furimane-research-table__usage-count");
-
-  if (!usageChip) {
-    return;
-  }
-
-  usageChip.classList.toggle("furimane-research-table__usage-count--unlimited", usage.unlimited === true);
-  const usageText = usageChip.querySelector<HTMLElement>(".furimane-research-table__usage-count-text");
-  const label = usage.unlimited
-    ? "無制限"
-    : `今月のリサーチ ${usage.used} / ${usage.limit}`;
-
-  if (usageText) {
-    usageText.textContent = label;
-    return;
-  }
-
-  usageChip.textContent = label;
+  // チップとメーターの描画は research-table.ts が持っている（重複を作らない）。
+  getOverlayWindow().FurimanagerResearchTable?.refreshUsageChip?.(usage);
 }
 
 function createChildAbortController(parentSignal: AbortSignal) {
@@ -809,8 +841,8 @@ function getResearchErrorCopy(kind: ResearchErrorKind) {
       };
     case "limit":
       return {
-        title: "今月のリサーチ上限に達しました",
-        description: "今月の利用上限に達しました。来月1日にリセットされます。",
+        title: "今月の無料枠を使い切りました",
+        description: "来月1日にリセットされます。友達紹介でもらえるリサーチチケットでも続けて使えます。",
         actionLabel: "プランを確認する"
       };
     case "rate_limit":
@@ -892,7 +924,7 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
 
   const copy = getResearchErrorCopy(kind);
   const retryAfter = getResearchRetryAfter(error);
-  const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
+  const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? FURIMANE_DEFAULT_APP_URL;
   const wrapper = document.createElement("div");
   wrapper.className = "furimane-research-overlay__state furimane-research-overlay__state--error";
 

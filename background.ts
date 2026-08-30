@@ -14,7 +14,12 @@
   const RAKURAKU_AUTO_POLL_MIN_MINUTES = 10;
   const RAKURAKU_AUTO_POLL_JITTER_MINUTES = 3;
   let nextRakurakuPollDelayMinutesOverride: number | null = null;
-  const DEFAULT_APP_URL = "https://furimanager.com";
+  const DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
+  const LEGACY_APP_URLS = new Set([
+    "https://furimanager.com",
+    "https://www.furimanager.com",
+    "https://furimanager.furimakaikei.com"
+  ]);
   const MERCARI_SELL_URL = "https://jp.mercari.com/sell";
   const MERCARI_ITEM_URL_BASE = "https://jp.mercari.com/item/";
   const MERCARI_EDIT_URL_BASE = "https://jp.mercari.com/sell/edit/";
@@ -911,7 +916,8 @@
   }
 
   function getAppBaseUrl() {
-    const appUrl = String((globalThis as any).FurimanagerConfig?.APP_URL || DEFAULT_APP_URL).trim().replace(/\/+$/, "");
+    const configuredAppUrl = String((globalThis as any).FurimanagerConfig?.APP_URL || "").trim().replace(/\/+$/, "");
+    const appUrl = !configuredAppUrl || LEGACY_APP_URLS.has(configuredAppUrl) ? DEFAULT_APP_URL : configuredAppUrl;
     return appUrl;
   }
 

@@ -15,15 +15,15 @@
         box-sizing: border-box;
         display: flex;
         align-items: center;
-        gap: 14px;
-        width: min(440px, calc(100vw - 32px));
-        padding: 16px 12px 16px 18px;
-        border: 1.5px solid transparent;
-        border-radius: 14px;
+        gap: 9px;
+        width: min(300px, calc(100vw - 32px));
+        padding: 11px 6px 11px 13px;
+        border: 1px solid transparent;
+        border-radius: 10px;
         background:
           linear-gradient(180deg, #FDF6FC 0%, #FAEDF8 100%) padding-box,
           linear-gradient(112deg, #FF7A2F 0%, #F5386B 13%, #E0329C 29%, #B03BC8 46%, #6F4FDE 70%, #3F6BEF 100%) border-box;
-        box-shadow: 0 10px 30px rgba(74, 32, 96, 0.12), 0 2px 6px rgba(74, 32, 96, 0.06);
+        box-shadow: 0 7px 20px rgba(74, 32, 96, 0.12), 0 1px 4px rgba(74, 32, 96, 0.06);
         color: #2A2735;
         font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, system-ui, -apple-system, "Segoe UI", sans-serif;
         text-align: left;
@@ -34,8 +34,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 30px;
-        height: 30px;
+        width: 21px;
+        height: 21px;
         border-radius: 50%;
         background-image: linear-gradient(135deg, #FF8A2B 0%, #F5356C 34%, #C13BB4 64%, #4F5BE0 100%);
       }
@@ -50,7 +50,7 @@
         min-width: 0;
         margin: 0;
         color: #2A2735;
-        font-size: 14px;
+        font-size: 11px;
         font-weight: 700;
         line-height: 1.5;
         letter-spacing: 0.01em;
@@ -62,13 +62,13 @@
         align-self: flex-start;
         display: flex;
         align-items: center;
-        gap: 6px;
-        height: 21px;
+        gap: 3px;
+        height: 17px;
       }
 
       .furimanager-toast__time {
         color: #8B8797;
-        font-size: 12px;
+        font-size: 10px;
         font-weight: 400;
         line-height: 1;
         white-space: nowrap;
@@ -80,12 +80,12 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 20px;
-        height: 20px;
+        width: 15px;
+        height: 15px;
         margin: 0;
         padding: 0;
         border: 0;
-        border-radius: 6px;
+        border-radius: 5px;
         background: transparent;
         color: #6F6B7D;
         cursor: pointer;
@@ -131,6 +131,19 @@
     const ENABLE_DOM_DEBUG = false;
     const ENABLE_METADATA_AUTOFILL = true;
     const ENABLE_RELIST_FLOW_LOG = true;
+    const SENSITIVE_LOG_KEYS = /* @__PURE__ */ new Set([
+      "price",
+      "expectedPrice",
+      "priceFieldValue",
+      "currentPrice",
+      "nextPrice",
+      "minimumPrice",
+      "title",
+      "description",
+      "itemUrl",
+      "imageUrls",
+      "categoryPath"
+    ]);
     let imageFillAttempted = false;
     let sellFormMutationObserver = null;
     let observedSellFormMutationRoot = null;
@@ -878,7 +891,17 @@
       }
       lastRelistFlowLogAt = now;
       lastRelistFlowLogKey = key;
-      console.info(`[furimanager:relist] ${message}${getRelistFlowLogSuffix(details)}`, details);
+      console.info(`[furimanager:relist] ${message}${getRelistFlowLogSuffix(details)}`, sanitizeLogDetails(details));
+    }
+    function sanitizeLogDetails(details) {
+      const safe = {};
+      for (const [key, value] of Object.entries(details)) {
+        if (SENSITIVE_LOG_KEYS.has(key)) {
+          continue;
+        }
+        safe[key] = value;
+      }
+      return safe;
     }
     function getRelistFlowLogSuffix(details) {
       const parts = [
@@ -944,7 +967,7 @@
         mode: item.mode,
         itemId: item.itemId,
         hasTitle: !!item.title,
-        price: item.price,
+        hasPrice: typeof item.price === "number",
         imageCount: item.imageUrls?.length ?? 0,
         hasDescription: !!item.description,
         categoryCount: item.categoryPath?.length ?? 0,
@@ -2328,7 +2351,7 @@
       const icon = document.createElement("span");
       icon.className = "furimanager-toast__icon";
       icon.setAttribute("aria-hidden", "true");
-      const mark = createSvgElement("svg", { viewBox: "0 0 24 24", width: "21", height: "21", focusable: "false" });
+      const mark = createSvgElement("svg", { viewBox: "0 0 24 24", width: "15", height: "15", focusable: "false" });
       mark.appendChild(createSvgElement("circle", { cx: "12", cy: "12", r: "10.1", fill: "none", stroke: "#FFFFFF", "stroke-width": "1.8" }));
       mark.appendChild(createSvgElement("circle", { cx: "12", cy: "7.7", r: "1.3", fill: "#FFFFFF" }));
       mark.appendChild(createSvgElement("rect", { x: "10.9", y: "10.7", width: "2.2", height: "6.5", rx: "1.1", fill: "#FFFFFF" }));
@@ -2340,7 +2363,7 @@
       close.type = "button";
       close.className = "furimanager-toast__close";
       close.setAttribute("aria-label", "\u9589\u3058\u308B");
-      const mark = createSvgElement("svg", { viewBox: "0 0 16 16", width: "14", height: "14", focusable: "false" });
+      const mark = createSvgElement("svg", { viewBox: "0 0 16 16", width: "11", height: "11", focusable: "false" });
       mark.appendChild(createSvgElement("path", {
         d: "M3.4 3.4 L12.6 12.6 M12.6 3.4 L3.4 12.6",
         fill: "none",
@@ -2435,7 +2458,10 @@
         collectedAt: (/* @__PURE__ */ new Date()).toISOString(),
         candidates: collectMercariSellDomCandidates()
       };
-      console.log("[furimanager dom debug]", result);
+      console.log("[furimanager dom debug]", {
+        pathname: result.pathname,
+        candidateCount: result.candidates.length
+      });
       renderDomDebugPanel(result);
     }
     function isMercariSellDebugPath() {
@@ -2480,7 +2506,7 @@
         minimumPrice,
         ...getButtonLogDetails(submitButton)
       };
-      console.info("[furimanager:price-adjust] \u4FDD\u5B58\u30DC\u30BF\u30F3\u691C\u77E5", details);
+      console.info("[furimanager:price-adjust] \u4FDD\u5B58\u30DC\u30BF\u30F3\u691C\u77E5", sanitizeLogDetails(details));
       handOffManualConfirmation(details, "\u4FA1\u683C\u6B04\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u4FDD\u5B58\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
       return {
         submitted: false,

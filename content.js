@@ -428,8 +428,8 @@ async function scrapeDeltaPages(anchorInput = {}) {
 
   console.log("[furimanager-extension] scrape delta pages result", {
     count: result.count,
-    newLastItemId: result.newLastItemId,
-    anchorExternalIds: result.anchorExternalIds,
+    hasNewLastItemId: Boolean(result.newLastItemId),
+    anchorExternalIdCount: Array.isArray(result.anchorExternalIds) ? result.anchorExternalIds.length : 0,
     pageCount,
     reachedPageLimit: result.reachedPageLimit,
     gapSuspected: result.gapSuspected

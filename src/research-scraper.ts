@@ -724,7 +724,9 @@ async function waitForSellerContextFromCurrentPage(signal?: AbortSignal) {
 }
 
 function logDomCollectDiagnostics(step: string, diagnostics: DomCollectDiagnostics) {
-  console.log(`${DOM_FETCH_LOG_PREFIX} ${step}`, diagnostics);
+  // 商品カードの本文サンプルや商品URLは出さず、件数などのメタ情報のみを記録する。
+  const { firstContainerTextSample: _sample, firstLinkHref: _href, ...safeDiagnostics } = diagnostics;
+  console.log(`${DOM_FETCH_LOG_PREFIX} ${step}`, safeDiagnostics);
 }
 
 function collectDomCandidates(platform: ResearchPlatform, siteConfig: ResearchSiteConfig, diagnostics?: DomCollectDiagnostics) {

@@ -1,5 +1,11 @@
 (() => {
-  const DEFAULT_APP_URL = "https://furimanager.com";
+  const DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
+  const LEGACY_APP_URLS = /* @__PURE__ */ new Set([
+    "https://furimanager.com",
+    "https://www.furimanager.com",
+    "https://furimanager.furimakaikei.com"
+  ]);
+  const EXTENSION_FALLBACK_VERSION = "0.2.5";
   const RESEARCH_API_TIMEOUT_MS = 3e4;
   const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1e3;
   const LOCAL_PURCHASE_PRICE_STORAGE_KEY = "furimaneResearchPurchasePrices";
@@ -74,7 +80,8 @@
     return price?.purchasePrice != null || price?.shippingFee != null;
   }
   function getAppUrl() {
-    return (window.FurimanagerConfig?.APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, "");
+    const configuredUrl = String(window.FurimanagerConfig?.APP_URL ?? "").trim().replace(/\/+$/, "");
+    return !configuredUrl || LEGACY_APP_URLS.has(configuredUrl) ? DEFAULT_APP_URL : configuredUrl;
   }
   function getChromeStorage(keys) {
     return new Promise((resolve, reject) => {
@@ -231,7 +238,7 @@
     return globalThis.crypto?.randomUUID?.() ?? `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
   function getExtensionVersion() {
-    return window.chrome?.runtime?.getManifest?.().version ?? "unknown";
+    return window.chrome?.runtime?.getManifest?.().version ?? EXTENSION_FALLBACK_VERSION;
   }
   function getExtensionId() {
     return window.chrome?.runtime?.id ?? "unknown";
@@ -436,6 +443,12 @@
         continue;
       }
       result[key] = source[key];
+    }
+    if (!Object.prototype.hasOwnProperty.call(result, "item_id") && Object.prototype.hasOwnProperty.call(source, "id")) {
+      result.item_id = source.id;
+    }
+    if (!Object.prototype.hasOwnProperty.call(result, "title") && Object.prototype.hasOwnProperty.call(source, "name")) {
+      result.title = source.name;
     }
     if (includeNested) {
       for (const key of ANALYZE_NESTED_KEYS) {

@@ -33,23 +33,260 @@
       minute: "2-digit"
     });
   }
-  function getResearchUsageLabel(usage) {
+  const RESEARCH_FALLBACK_MONTHLY_LIMIT = 20;
+  const RESEARCH_TICKET_EXPIRING_SOON_DAYS = 7;
+  const RESEARCH_DAY_IN_MS = 24 * 60 * 60 * 1e3;
+  function toSafeUsageCount(value) {
+    return typeof value === "number" && Number.isFinite(value) ? Math.max(Math.floor(value), 0) : 0;
+  }
+  function toUsageDate(value) {
+    if (typeof value !== "string" || value.length === 0) {
+      return null;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  function getResearchUsageMeter(usage, now = /* @__PURE__ */ new Date()) {
+    const empty = {
+      source: "unknown",
+      monthlyUsed: 0,
+      monthlyLimit: RESEARCH_FALLBACK_MONTHLY_LIMIT,
+      monthlyRemaining: 0,
+      ticketRemaining: 0,
+      totalRemaining: 0,
+      monthlyRatio: 0,
+      ticketRatio: 0,
+      ticketExpiresAt: null,
+      daysUntilExpiry: null,
+      expiringSoon: false,
+      resetAt: null
+    };
     if (!usage) {
-      return "\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1 -- / 30";
+      return empty;
     }
+    const monthlyLimit = toSafeUsageCount(usage.limit) || RESEARCH_FALLBACK_MONTHLY_LIMIT;
+    const monthlyUsed = Math.min(toSafeUsageCount(usage.used), monthlyLimit);
+    const resetAt = toUsageDate(usage.resetAt) ?? new Date(now.getFullYear(), now.getMonth() + 1, 1);
     if (usage.unlimited) {
-      return "\u7121\u5236\u9650";
+      return { ...empty, source: "unlimited", monthlyLimit, monthlyUsed, resetAt };
     }
-    return `\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1 ${usage.used} / ${usage.limit}`;
+    const monthlyRemaining = Math.max(monthlyLimit - monthlyUsed, 0);
+    const ticketRemaining = toSafeUsageCount(usage.ticketRemaining);
+    const ticketExpiresAt = ticketRemaining > 0 ? toUsageDate(usage.ticketExpiresAt) : null;
+    const barTotal = Math.max(monthlyLimit + ticketRemaining, 1);
+    const daysUntilExpiry = ticketExpiresAt ? Math.max(Math.ceil((ticketExpiresAt.getTime() - now.getTime()) / RESEARCH_DAY_IN_MS), 0) : null;
+    return {
+      source: monthlyRemaining > 0 ? "monthly" : ticketRemaining > 0 ? "ticket" : "exhausted",
+      monthlyUsed,
+      monthlyLimit,
+      monthlyRemaining,
+      ticketRemaining,
+      totalRemaining: monthlyRemaining + ticketRemaining,
+      monthlyRatio: monthlyRemaining / barTotal,
+      ticketRatio: ticketRemaining / barTotal,
+      ticketExpiresAt,
+      daysUntilExpiry,
+      expiringSoon: daysUntilExpiry !== null && daysUntilExpiry <= RESEARCH_TICKET_EXPIRING_SOON_DAYS,
+      resetAt
+    };
+  }
+  function formatUsageShortDate(value) {
+    return value ? `${value.getMonth() + 1}/${value.getDate()}` : "--";
+  }
+  function createTicketIcon(className) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", className);
+    const definitions = [
+      "M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z",
+      "M13 5v2",
+      "M13 11v2",
+      "M13 17v2"
+    ];
+    for (const definition of definitions) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", definition);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+  function applyResearchUsageChip(usageCount, usage) {
+    const meter = getResearchUsageMeter(usage);
+    const hasTicket = meter.ticketRemaining > 0;
+    usageCount.classList.toggle("furimane-research-table__usage-count--unlimited", meter.source === "unlimited");
+    usageCount.classList.toggle("furimane-research-table__usage-count--ticket", meter.source === "ticket");
+    usageCount.classList.toggle("furimane-research-table__usage-count--has-ticket", hasTicket);
+    usageCount.textContent = "";
+    if (meter.source === "unlimited") {
+      usageCount.appendChild(createElement("span", "furimane-research-table__usage-count-text", "\u7121\u5236\u9650"));
+      return meter;
+    }
+    const label = meter.source === "unknown" ? `\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1 -- / ${RESEARCH_FALLBACK_MONTHLY_LIMIT}` : `\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1 ${meter.monthlyUsed} / ${meter.monthlyLimit}`;
+    usageCount.appendChild(createElement("span", "furimane-research-table__usage-count-text", label));
+    if (hasTicket) {
+      const ticket = createElement("span", "furimane-research-table__usage-count-ticket");
+      ticket.title = `\u7D39\u4ECB\u30C1\u30B1\u30C3\u30C8 \u6B8B\u308A${meter.ticketRemaining}\u56DE`;
+      ticket.appendChild(createTicketIcon("furimane-research-table__usage-count-ticket-icon"));
+      ticket.appendChild(
+        createElement("span", "furimane-research-table__usage-count-ticket-badge", String(meter.ticketRemaining))
+      );
+      usageCount.appendChild(ticket);
+    }
+    return meter;
+  }
+  function createUsageMeterRow(options) {
+    const rowClassName = options.dimmed ? "furimane-research-table__usage-row furimane-research-table__usage-row--dimmed" : "furimane-research-table__usage-row";
+    const row = createElement("div", rowClassName);
+    const head = createElement("span", "furimane-research-table__usage-row-head");
+    if (options.icon === "ticket") {
+      head.appendChild(createTicketIcon(`furimane-research-table__usage-row-ticket ${options.toneClass}`));
+    } else {
+      head.appendChild(createElement("span", `furimane-research-table__usage-row-swatch ${options.toneClass}`));
+    }
+    head.appendChild(createElement("span", "furimane-research-table__usage-row-label", options.label));
+    row.appendChild(head);
+    const tail = createElement("span", "furimane-research-table__usage-row-tail");
+    tail.appendChild(createElement("span", "furimane-research-table__usage-row-value", options.value));
+    tail.appendChild(createElement("span", "furimane-research-table__usage-row-note", options.note));
+    row.appendChild(tail);
+    return row;
+  }
+  function renderResearchUsagePanel(panel, usage) {
+    const meter = getResearchUsageMeter(usage);
+    panel.textContent = "";
+    if (meter.source === "unlimited") {
+      panel.appendChild(createElement("p", "furimane-research-table__usage-panel-title", "\u30EA\u30B5\u30FC\u30C1\u306F\u7121\u5236\u9650\u306B\u4F7F\u3048\u307E\u3059"));
+      return;
+    }
+    const total = createElement("div", "furimane-research-table__usage-total");
+    total.appendChild(createElement("span", "furimane-research-table__usage-total-label", "\u30EA\u30B5\u30FC\u30C1\u6B8B\u308A"));
+    total.appendChild(
+      createElement(
+        "span",
+        "furimane-research-table__usage-total-value",
+        meter.source === "unknown" ? "--" : String(meter.totalRemaining)
+      )
+    );
+    total.appendChild(createElement("span", "furimane-research-table__usage-total-unit", "\u56DE"));
+    panel.appendChild(total);
+    const bar = createElement("div", "furimane-research-table__usage-bar");
+    const monthlyFill = createElement(
+      "span",
+      "furimane-research-table__usage-bar-fill furimane-research-table__usage-bar-fill--monthly"
+    );
+    monthlyFill.style.width = `${Math.round(meter.monthlyRatio * 100)}%`;
+    const ticketFill = createElement(
+      "span",
+      "furimane-research-table__usage-bar-fill furimane-research-table__usage-bar-fill--ticket"
+    );
+    ticketFill.style.width = `${Math.round(meter.ticketRatio * 100)}%`;
+    bar.append(monthlyFill, ticketFill);
+    panel.appendChild(bar);
+    const rows = createElement("div", "furimane-research-table__usage-rows");
+    rows.appendChild(
+      createUsageMeterRow({
+        toneClass: "furimane-research-table__usage-tone--monthly",
+        icon: "swatch",
+        label: "\u4ECA\u6708\u306E\u7121\u6599\u67A0",
+        value: meter.monthlyRemaining <= 0 ? "\u4F7F\u3044\u5207\u308A" : `${meter.monthlyUsed} / ${meter.monthlyLimit}\u56DE`,
+        note: `${formatUsageShortDate(meter.resetAt)}\u306B\u30EA\u30BB\u30C3\u30C8`,
+        dimmed: meter.monthlyRemaining <= 0
+      })
+    );
+    if (meter.ticketRemaining > 0) {
+      rows.appendChild(
+        createUsageMeterRow({
+          toneClass: "furimane-research-table__usage-tone--ticket",
+          icon: "ticket",
+          label: "\u7D39\u4ECB\u30C1\u30B1\u30C3\u30C8",
+          value: `${meter.ticketRemaining}\u56DE`,
+          note: meter.ticketExpiresAt ? `${formatUsageShortDate(meter.ticketExpiresAt)}\u306B\u5931\u52B9` : "30\u65E5\u9593\u6709\u52B9"
+        })
+      );
+    }
+    panel.appendChild(rows);
+    if (meter.expiringSoon && meter.ticketExpiresAt) {
+      panel.appendChild(
+        createElement(
+          "p",
+          "furimane-research-table__usage-alert",
+          `${formatUsageShortDate(meter.ticketExpiresAt)}\u306B${meter.ticketRemaining}\u56DE\u304C\u5931\u52B9\u3057\u307E\u3059`
+        )
+      );
+    }
+    if (meter.source === "ticket") {
+      panel.appendChild(createElement("p", "furimane-research-table__usage-note", "\u4ECA\u306F\u7D39\u4ECB\u30C1\u30B1\u30C3\u30C8\u304B\u3089\u4F7F\u3063\u3066\u3044\u307E\u3059"));
+    }
+    if (meter.source === "exhausted") {
+      panel.appendChild(
+        createElement(
+          "p",
+          "furimane-research-table__usage-note",
+          `\u4ECA\u6708\u306E\u7121\u6599\u67A0\u3092\u4F7F\u3044\u5207\u308A\u307E\u3057\u305F\u3002${formatUsageShortDate(meter.resetAt)}\u306B\u30EA\u30BB\u30C3\u30C8\u3055\u308C\u307E\u3059\u3002\u53CB\u9054\u7D39\u4ECB\u3067\u3082\u3089\u3048\u308B\u30C1\u30B1\u30C3\u30C8\u3067\u3082\u7D9A\u3051\u3066\u4F7F\u3048\u307E\u3059\u3002`
+        )
+      );
+    }
+    if (meter.ticketRemaining <= 0 && meter.source !== "exhausted" && meter.source !== "unknown") {
+      panel.appendChild(
+        createElement("p", "furimane-research-table__usage-note", "\u53CB\u9054\u3092\u7D39\u4ECB\u3059\u308B\u3068\u3001\u30EA\u30B5\u30FC\u30C1\u56DE\u6570\u306E\u30C1\u30B1\u30C3\u30C8\u304C\u3082\u3089\u3048\u307E\u3059\u3002")
+      );
+    }
   }
   function createResearchUsageCount(usage) {
-    const usageCount = createElement(
-      "span",
-      usage?.unlimited ? "furimane-research-table__usage-count furimane-research-table__usage-count--unlimited" : "furimane-research-table__usage-count"
-    );
-    const usageText = createElement("span", "furimane-research-table__usage-count-text", getResearchUsageLabel(usage));
-    usageCount.appendChild(usageText);
-    return usageCount;
+    const wrapper = createElement("span", "furimane-research-table__usage");
+    const usageCount = document.createElement("button");
+    usageCount.type = "button";
+    usageCount.className = "furimane-research-table__usage-count";
+    usageCount.setAttribute("aria-expanded", "false");
+    usageCount.title = "\u30EA\u30B5\u30FC\u30C1\u6B8B\u308A\u306E\u5185\u8A33\u3092\u898B\u308B";
+    const panel = createElement("div", "furimane-research-table__usage-panel");
+    panel.hidden = true;
+    applyResearchUsageChip(usageCount, usage);
+    renderResearchUsagePanel(panel, usage);
+    const closeOnOutside = (event) => {
+      if (!wrapper.contains(event.target)) {
+        setUsagePanelOpen(false);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setUsagePanelOpen(false);
+      }
+    };
+    function setUsagePanelOpen(open) {
+      panel.hidden = !open;
+      usageCount.setAttribute("aria-expanded", open ? "true" : "false");
+      usageCount.classList.toggle("furimane-research-table__usage-count--open", open);
+      if (open) {
+        document.addEventListener("pointerdown", closeOnOutside, true);
+        document.addEventListener("keydown", closeOnEscape, true);
+      } else {
+        document.removeEventListener("pointerdown", closeOnOutside, true);
+        document.removeEventListener("keydown", closeOnEscape, true);
+      }
+    }
+    usageCount.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setUsagePanelOpen(panel.hidden);
+    });
+    wrapper.append(usageCount, panel);
+    return wrapper;
+  }
+  function refreshResearchUsageChip(usage) {
+    const usageCount = document.querySelector(".furimane-research-table__usage-count");
+    if (usageCount) {
+      applyResearchUsageChip(usageCount, usage);
+    }
+    const panel = document.querySelector(".furimane-research-table__usage-panel");
+    if (panel) {
+      renderResearchUsagePanel(panel, usage);
+    }
   }
   function createElement(tagName, className, textContent) {
     const element = document.createElement(tagName);
@@ -312,11 +549,10 @@
       }
     };
   }
-  function logBookmarkSalesPayload(row, periodSales) {
+  function logBookmarkSalesPayload(_row, periodSales) {
     console.info("[furimane-research] bookmark sales payload", {
-      item_id: row.listing.item_id,
-      title: row.title,
-      period_sales: periodSales
+      hasPeriodSales: Boolean(periodSales),
+      periodCount: periodSales ? Object.keys(periodSales).length : 0
     });
   }
   function createPendingBookmark(row, rowElement) {
@@ -897,6 +1133,7 @@
     });
   }
   window.FurimanagerResearchTable = {
-    renderTable: renderResearchTable
+    renderTable: renderResearchTable,
+    refreshUsageChip: refreshResearchUsageChip
   };
 })();

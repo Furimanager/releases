@@ -71,6 +71,12 @@ type ResearchUsageState = {
   remaining: number;
   resetAt?: string;
   unlimited?: boolean;
+  /** 紹介チケットの残り回数（月枠とは別枠）。 */
+  ticketRemaining?: number;
+  /** 残っているチケットのうち、最も早い失効日時（ISO文字列）。 */
+  ticketExpiresAt?: string | null;
+  /** 直前の1回をどちらから引いたか。 */
+  consumedFrom?: "monthly" | "ticket";
 };
 
 type ResearchPurchasePrice = {
@@ -190,6 +196,7 @@ interface Window {
       listings: ResearchTableListing[],
       options?: ResearchTableOptions
     ) => Promise<void>;
+    refreshUsageChip?: (usage: ResearchUsageState | null | undefined) => void;
   };
 }
 
@@ -239,28 +246,357 @@ function formatResearchDate(value: string | null | undefined) {
   });
 }
 
-function getResearchUsageLabel(usage: ResearchUsageState | null | undefined) {
-  if (!usage) {
-    return "今月のリサーチ -- / 30";
-  }
+/**
+ * 残数チップとメーターの表示内容。
+ *
+ * web/src/lib/usage/research-quota-display.ts の考え方を拡張側に**複製**したもの。
+ * 拡張は web と別ビルドで web のモジュールを import できないため、意図的な重複。
+ * web 側の判定（月枠が残っていれば月枠、尽きていてチケットがあればチケット）を変えたら、
+ * ここも一緒に直すこと。
+ */
+type ResearchUsageMeter = {
+  /** 次の1回がどこから引かれるか。usage 未取得なら unknown。 */
+  source: "monthly" | "ticket" | "exhausted" | "unlimited" | "unknown";
+  monthlyUsed: number;
+  monthlyLimit: number;
+  monthlyRemaining: number;
+  ticketRemaining: number;
+  totalRemaining: number;
+  /** バー全体（月枠上限 + チケット残）に対する比率。0〜1。 */
+  monthlyRatio: number;
+  ticketRatio: number;
+  ticketExpiresAt: Date | null;
+  daysUntilExpiry: number | null;
+  expiringSoon: boolean;
+  resetAt: Date | null;
+};
 
-  if (usage.unlimited) {
-    return "無制限";
-  }
+/** usage をまだ取得できていないときに出す月枠上限（web の FREE_RESEARCH_MONTHLY_LIMIT と揃える）。 */
+const RESEARCH_FALLBACK_MONTHLY_LIMIT = 20;
+/** 失効警告を出す日数のしきい値。 */
+const RESEARCH_TICKET_EXPIRING_SOON_DAYS = 7;
+const RESEARCH_DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-  return `今月のリサーチ ${usage.used} / ${usage.limit}`;
+function toSafeUsageCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(Math.floor(value), 0) : 0;
 }
 
-function createResearchUsageCount(usage: ResearchUsageState | null | undefined) {
-  const usageCount = createElement(
-    "span",
-    usage?.unlimited
-      ? "furimane-research-table__usage-count furimane-research-table__usage-count--unlimited"
-      : "furimane-research-table__usage-count"
+function toUsageDate(value: string | null | undefined) {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getResearchUsageMeter(usage: ResearchUsageState | null | undefined, now = new Date()): ResearchUsageMeter {
+  const empty: ResearchUsageMeter = {
+    source: "unknown",
+    monthlyUsed: 0,
+    monthlyLimit: RESEARCH_FALLBACK_MONTHLY_LIMIT,
+    monthlyRemaining: 0,
+    ticketRemaining: 0,
+    totalRemaining: 0,
+    monthlyRatio: 0,
+    ticketRatio: 0,
+    ticketExpiresAt: null,
+    daysUntilExpiry: null,
+    expiringSoon: false,
+    resetAt: null
+  };
+
+  if (!usage) {
+    return empty;
+  }
+
+  const monthlyLimit = toSafeUsageCount(usage.limit) || RESEARCH_FALLBACK_MONTHLY_LIMIT;
+  const monthlyUsed = Math.min(toSafeUsageCount(usage.used), monthlyLimit);
+  const resetAt = toUsageDate(usage.resetAt) ?? new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+  if (usage.unlimited) {
+    return { ...empty, source: "unlimited", monthlyLimit, monthlyUsed, resetAt };
+  }
+
+  const monthlyRemaining = Math.max(monthlyLimit - monthlyUsed, 0);
+  const ticketRemaining = toSafeUsageCount(usage.ticketRemaining);
+  const ticketExpiresAt = ticketRemaining > 0 ? toUsageDate(usage.ticketExpiresAt) : null;
+  const barTotal = Math.max(monthlyLimit + ticketRemaining, 1);
+  const daysUntilExpiry = ticketExpiresAt
+    ? Math.max(Math.ceil((ticketExpiresAt.getTime() - now.getTime()) / RESEARCH_DAY_IN_MS), 0)
+    : null;
+
+  return {
+    source: monthlyRemaining > 0 ? "monthly" : ticketRemaining > 0 ? "ticket" : "exhausted",
+    monthlyUsed,
+    monthlyLimit,
+    monthlyRemaining,
+    ticketRemaining,
+    totalRemaining: monthlyRemaining + ticketRemaining,
+    monthlyRatio: monthlyRemaining / barTotal,
+    ticketRatio: ticketRemaining / barTotal,
+    ticketExpiresAt,
+    daysUntilExpiry,
+    expiringSoon: daysUntilExpiry !== null && daysUntilExpiry <= RESEARCH_TICKET_EXPIRING_SOON_DAYS,
+    resetAt
+  };
+}
+
+function formatUsageShortDate(value: Date | null) {
+  return value ? `${value.getMonth() + 1}/${value.getDate()}` : "--";
+}
+
+/** lucide の ticket アイコンを作る。 */
+function createTicketIcon(className: string) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", className);
+
+  const definitions = [
+    "M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z",
+    "M13 5v2",
+    "M13 11v2",
+    "M13 17v2"
+  ];
+
+  for (const definition of definitions) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", definition);
+    svg.appendChild(path);
+  }
+
+  return svg;
+}
+
+/** チップ本体（ボタン）の中身を作り直す。 */
+function applyResearchUsageChip(usageCount: HTMLElement, usage: ResearchUsageState | null | undefined) {
+  const meter = getResearchUsageMeter(usage);
+  const hasTicket = meter.ticketRemaining > 0;
+
+  usageCount.classList.toggle("furimane-research-table__usage-count--unlimited", meter.source === "unlimited");
+  usageCount.classList.toggle("furimane-research-table__usage-count--ticket", meter.source === "ticket");
+  usageCount.classList.toggle("furimane-research-table__usage-count--has-ticket", hasTicket);
+  usageCount.textContent = "";
+
+  if (meter.source === "unlimited") {
+    usageCount.appendChild(createElement("span", "furimane-research-table__usage-count-text", "無制限"));
+    return meter;
+  }
+
+  const label =
+    meter.source === "unknown"
+      ? `今月のリサーチ -- / ${RESEARCH_FALLBACK_MONTHLY_LIMIT}`
+      : `今月のリサーチ ${meter.monthlyUsed} / ${meter.monthlyLimit}`;
+
+  usageCount.appendChild(createElement("span", "furimane-research-table__usage-count-text", label));
+
+  // チケットがあるときだけ、右側に空きを作ってチケットアイコンを置く。回数はアイコンの右上。
+  if (hasTicket) {
+    const ticket = createElement("span", "furimane-research-table__usage-count-ticket");
+    ticket.title = `紹介チケット 残り${meter.ticketRemaining}回`;
+    ticket.appendChild(createTicketIcon("furimane-research-table__usage-count-ticket-icon"));
+    ticket.appendChild(
+      createElement("span", "furimane-research-table__usage-count-ticket-badge", String(meter.ticketRemaining))
+    );
+    usageCount.appendChild(ticket);
+  }
+
+  return meter;
+}
+
+function createUsageMeterRow(options: {
+  toneClass: string;
+  icon: "swatch" | "ticket";
+  label: string;
+  value: string;
+  note: string;
+  dimmed?: boolean;
+}) {
+  const rowClassName = options.dimmed
+    ? "furimane-research-table__usage-row furimane-research-table__usage-row--dimmed"
+    : "furimane-research-table__usage-row";
+  const row = createElement("div", rowClassName);
+  const head = createElement("span", "furimane-research-table__usage-row-head");
+
+  if (options.icon === "ticket") {
+    head.appendChild(createTicketIcon(`furimane-research-table__usage-row-ticket ${options.toneClass}`));
+  } else {
+    head.appendChild(createElement("span", `furimane-research-table__usage-row-swatch ${options.toneClass}`));
+  }
+
+  head.appendChild(createElement("span", "furimane-research-table__usage-row-label", options.label));
+  row.appendChild(head);
+
+  const tail = createElement("span", "furimane-research-table__usage-row-tail");
+  tail.appendChild(createElement("span", "furimane-research-table__usage-row-value", options.value));
+  tail.appendChild(createElement("span", "furimane-research-table__usage-row-note", options.note));
+  row.appendChild(tail);
+
+  return row;
+}
+
+/** チップを押したときに開くメーター。 */
+function renderResearchUsagePanel(panel: HTMLElement, usage: ResearchUsageState | null | undefined) {
+  const meter = getResearchUsageMeter(usage);
+  panel.textContent = "";
+
+  if (meter.source === "unlimited") {
+    panel.appendChild(createElement("p", "furimane-research-table__usage-panel-title", "リサーチは無制限に使えます"));
+    return;
+  }
+
+  const total = createElement("div", "furimane-research-table__usage-total");
+  total.appendChild(createElement("span", "furimane-research-table__usage-total-label", "リサーチ残り"));
+  total.appendChild(
+    createElement(
+      "span",
+      "furimane-research-table__usage-total-value",
+      meter.source === "unknown" ? "--" : String(meter.totalRemaining)
+    )
   );
-  const usageText = createElement("span", "furimane-research-table__usage-count-text", getResearchUsageLabel(usage));
-  usageCount.appendChild(usageText);
-  return usageCount;
+  total.appendChild(createElement("span", "furimane-research-table__usage-total-unit", "回"));
+  panel.appendChild(total);
+
+  const bar = createElement("div", "furimane-research-table__usage-bar");
+  const monthlyFill = createElement(
+    "span",
+    "furimane-research-table__usage-bar-fill furimane-research-table__usage-bar-fill--monthly"
+  );
+  monthlyFill.style.width = `${Math.round(meter.monthlyRatio * 100)}%`;
+  const ticketFill = createElement(
+    "span",
+    "furimane-research-table__usage-bar-fill furimane-research-table__usage-bar-fill--ticket"
+  );
+  ticketFill.style.width = `${Math.round(meter.ticketRatio * 100)}%`;
+  bar.append(monthlyFill, ticketFill);
+  panel.appendChild(bar);
+
+  const rows = createElement("div", "furimane-research-table__usage-rows");
+  rows.appendChild(
+    createUsageMeterRow({
+      toneClass: "furimane-research-table__usage-tone--monthly",
+      icon: "swatch",
+      label: "今月の無料枠",
+      value: meter.monthlyRemaining <= 0 ? "使い切り" : `${meter.monthlyUsed} / ${meter.monthlyLimit}回`,
+      note: `${formatUsageShortDate(meter.resetAt)}にリセット`,
+      dimmed: meter.monthlyRemaining <= 0
+    })
+  );
+
+  if (meter.ticketRemaining > 0) {
+    rows.appendChild(
+      createUsageMeterRow({
+        toneClass: "furimane-research-table__usage-tone--ticket",
+        icon: "ticket",
+        label: "紹介チケット",
+        value: `${meter.ticketRemaining}回`,
+        note: meter.ticketExpiresAt ? `${formatUsageShortDate(meter.ticketExpiresAt)}に失効` : "30日間有効"
+      })
+    );
+  }
+
+  panel.appendChild(rows);
+
+  if (meter.expiringSoon && meter.ticketExpiresAt) {
+    panel.appendChild(
+      createElement(
+        "p",
+        "furimane-research-table__usage-alert",
+        `${formatUsageShortDate(meter.ticketExpiresAt)}に${meter.ticketRemaining}回が失効します`
+      )
+    );
+  }
+
+  if (meter.source === "ticket") {
+    panel.appendChild(createElement("p", "furimane-research-table__usage-note", "今は紹介チケットから使っています"));
+  }
+
+  if (meter.source === "exhausted") {
+    panel.appendChild(
+      createElement(
+        "p",
+        "furimane-research-table__usage-note",
+        `今月の無料枠を使い切りました。${formatUsageShortDate(meter.resetAt)}にリセットされます。友達紹介でもらえるチケットでも続けて使えます。`
+      )
+    );
+  }
+
+  if (meter.ticketRemaining <= 0 && meter.source !== "exhausted" && meter.source !== "unknown") {
+    panel.appendChild(
+      createElement("p", "furimane-research-table__usage-note", "友達を紹介すると、リサーチ回数のチケットがもらえます。")
+    );
+  }
+}
+
+/** チップとメーターをまとめて作る。チップを押すとメーターが開く。 */
+function createResearchUsageCount(usage: ResearchUsageState | null | undefined) {
+  const wrapper = createElement("span", "furimane-research-table__usage");
+  const usageCount = document.createElement("button");
+  usageCount.type = "button";
+  usageCount.className = "furimane-research-table__usage-count";
+  usageCount.setAttribute("aria-expanded", "false");
+  usageCount.title = "リサーチ残りの内訳を見る";
+
+  const panel = createElement("div", "furimane-research-table__usage-panel");
+  panel.hidden = true;
+
+  applyResearchUsageChip(usageCount, usage);
+  renderResearchUsagePanel(panel, usage);
+
+  const closeOnOutside = (event: Event) => {
+    if (!wrapper.contains(event.target as Node)) {
+      setUsagePanelOpen(false);
+    }
+  };
+
+  const closeOnEscape = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      setUsagePanelOpen(false);
+    }
+  };
+
+  function setUsagePanelOpen(open: boolean) {
+    panel.hidden = !open;
+    usageCount.setAttribute("aria-expanded", open ? "true" : "false");
+    usageCount.classList.toggle("furimane-research-table__usage-count--open", open);
+
+    if (open) {
+      document.addEventListener("pointerdown", closeOnOutside, true);
+      document.addEventListener("keydown", closeOnEscape, true);
+    } else {
+      document.removeEventListener("pointerdown", closeOnOutside, true);
+      document.removeEventListener("keydown", closeOnEscape, true);
+    }
+  }
+
+  usageCount.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setUsagePanelOpen(panel.hidden);
+  });
+
+  wrapper.append(usageCount, panel);
+  return wrapper;
+}
+
+/** 画面に出ているチップとメーターを、新しい usage で描き直す（research-overlay.ts から呼ぶ）。 */
+function refreshResearchUsageChip(usage: ResearchUsageState | null | undefined) {
+  const usageCount = document.querySelector<HTMLElement>(".furimane-research-table__usage-count");
+
+  if (usageCount) {
+    applyResearchUsageChip(usageCount, usage);
+  }
+
+  const panel = document.querySelector<HTMLElement>(".furimane-research-table__usage-panel");
+
+  if (panel) {
+    renderResearchUsagePanel(panel, usage);
+  }
 }
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
@@ -660,11 +996,11 @@ function createBookmarkPeriodSales(row: ResearchDisplayRow, rowElement?: HTMLTab
   };
 }
 
-function logBookmarkSalesPayload(row: ResearchDisplayRow, periodSales: ResearchBookmarkPeriodSales) {
+function logBookmarkSalesPayload(_row: ResearchDisplayRow, periodSales: ResearchBookmarkPeriodSales) {
+  // 商品名・売上金額などのデータ本体はログに出さず、件数のメタ情報のみを記録する。
   console.info("[furimane-research] bookmark sales payload", {
-    item_id: row.listing.item_id,
-    title: row.title,
-    period_sales: periodSales
+    hasPeriodSales: Boolean(periodSales),
+    periodCount: periodSales ? Object.keys(periodSales).length : 0
   });
 }
 
@@ -1426,5 +1762,6 @@ async function renderResearchTable(
 }
 
 window.FurimanagerResearchTable = {
-  renderTable: renderResearchTable
+  renderTable: renderResearchTable,
+  refreshUsageChip: refreshResearchUsageChip
 };

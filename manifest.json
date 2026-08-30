@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
   "name": "フリマネージャー",
-  "description": "メルカリ販売履歴を取得するための拡張の土台",
-  "version": "0.2.0",
+  "description": "メルカリの販売履歴をユーザーの操作で取得し、売上管理ツール「フリマネ」に記録する拡張機能です。販売履歴の同期や出品作業の補助ができます。",
+  "version": "0.2.5",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7nZC0bCXq142JrzUMlqYbQx1ENnoJkXW9azOGoWbTi3cSfA65nUGnLFIap64T5cxz0YDkTrpliX8CT5kl8DdYO/EdAlMLgxhc9mSSNt9DE0nNOWxcUPwn+n3gFDqCjRvxZ492fU+J4yvLo1ENXvJBUV0/vNDGRMhthhBpOKe3otDPia+5Q2Il1AyUUxIL4pJsx3qQl0L4k5tCgZonn+CoPRENgq85luwvnMO7clzxcPOaJW/ZWj1zWeiszh+qvYDZkDPwjqI3gWr395/Q5fm7gcc8dvFwtpddskNIKGWycYtPXGPm9CXw3V5Rykq+eFAauEzpnd/v1y2XCmDfyPXyQIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["activeTab", "alarms", "storage", "tabs"],
+  "permissions": ["activeTab", "alarms", "storage"],
   "background": {
     "service_worker": "background.js"
   },
@@ -17,8 +18,7 @@
     "https://jp.mercari.com/*",
     "https://api.mercari.jp/*",
     "https://*.mercdn.net/*",
-    "https://furimanager.com/*",
-    "https://www.furimanager.com/*",
+    "https://furimanager.app.furimakaikei.com/*",
     "https://vmygmkrfhsmgxymfbmgj.supabase.co/*"
   ],
   "content_scripts": [

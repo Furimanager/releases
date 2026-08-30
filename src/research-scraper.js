@@ -448,7 +448,8 @@
     return null;
   }
   function logDomCollectDiagnostics(step, diagnostics) {
-    console.log(`${DOM_FETCH_LOG_PREFIX} ${step}`, diagnostics);
+    const { firstContainerTextSample: _sample, firstLinkHref: _href, ...safeDiagnostics } = diagnostics;
+    console.log(`${DOM_FETCH_LOG_PREFIX} ${step}`, safeDiagnostics);
   }
   function collectDomCandidates(platform, siteConfig, diagnostics) {
     const selector = siteConfig.config?.listingLinkSelectors?.[platform] ?? getListingLinkSelector(platform);

@@ -390,6 +390,12 @@
   gap: 10px;
 }
 
+/* 残数チップとメーター。チップを押すとメーターが開く。 */
+.furimane-research-table__usage {
+  position: relative;
+  display: inline-flex;
+}
+
 .furimane-research-table__usage-count,
 .furimane-research-table__bookmark-count {
   display: inline-flex;
@@ -410,6 +416,31 @@
   background: linear-gradient(90deg, rgba(124, 58, 237, 0.08), rgba(236, 72, 153, 0.08)), #ffffff;
   color: #4c1d95;
   font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.furimane-research-table__usage-count:hover {
+  border-color: rgba(124, 58, 237, 0.45);
+}
+
+.furimane-research-table__usage-count:focus-visible {
+  outline: 2px solid rgba(124, 58, 237, 0.5);
+  outline-offset: 2px;
+}
+
+.furimane-research-table__usage-count--open {
+  border-color: rgba(124, 58, 237, 0.55);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
+}
+
+/* チケットがあるときは横に伸ばし、文字を左へ寄せて右にチケットを置く。 */
+.furimane-research-table__usage-count--has-ticket {
+  min-width: 208px;
+  justify-content: space-between;
+  gap: 14px;
+  padding-right: 14px;
 }
 
 .furimane-research-table__usage-count--unlimited {
@@ -417,11 +448,219 @@
   background: linear-gradient(90deg, rgba(124, 58, 237, 0.08), rgba(236, 72, 153, 0.08)), #ffffff;
 }
 
+/* 月枠が尽きて紹介チケットから引いている状態はコーラル系にする。 */
+.furimane-research-table__usage-count--ticket {
+  border-color: rgba(249, 115, 22, 0.32);
+  background: linear-gradient(90deg, rgba(249, 115, 22, 0.1), rgba(249, 115, 22, 0.04)), #ffffff;
+  color: #9a3412;
+}
+
+/* チップ右側のチケット。回数はアイコンの右上に重ねる。 */
+.furimane-research-table__usage-count-ticket {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: #ea580c;
+}
+
+.furimane-research-table__usage-count-ticket-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.furimane-research-table__usage-count-ticket-badge {
+  position: absolute;
+  top: -8px;
+  right: -10px;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ea580c;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
 .furimane-research-table__usage-count--unlimited .furimane-research-table__usage-count-text {
   background: linear-gradient(90deg, #8b5dff 0%, #f04fa8 100%);
   color: transparent;
   -webkit-background-clip: text;
   background-clip: text;
+}
+
+/* --- メーター本体 --- */
+.furimane-research-table__usage-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 12;
+  width: 288px;
+  padding: 14px 16px 15px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+  color: #111827;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: normal;
+  text-align: left;
+  cursor: default;
+}
+
+.furimane-research-table__usage-panel[hidden] {
+  display: none;
+}
+
+.furimane-research-table__usage-panel-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #4c1d95;
+}
+
+.furimane-research-table__usage-total {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.furimane-research-table__usage-total-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.furimane-research-table__usage-total-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+  font-variant-numeric: tabular-nums;
+}
+
+.furimane-research-table__usage-total-unit {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.furimane-research-table__usage-bar {
+  display: flex;
+  height: 6px;
+  margin: 10px 0 12px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.furimane-research-table__usage-bar-fill {
+  height: 100%;
+}
+
+.furimane-research-table__usage-bar-fill--monthly {
+  background: #7c3aed;
+}
+
+.furimane-research-table__usage-bar-fill--ticket {
+  background: #f97316;
+}
+
+.furimane-research-table__usage-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.furimane-research-table__usage-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.furimane-research-table__usage-row--dimmed {
+  opacity: 0.55;
+}
+
+.furimane-research-table__usage-row-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.furimane-research-table__usage-row-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.furimane-research-table__usage-row-ticket {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.furimane-research-table__usage-tone--monthly {
+  background: #7c3aed;
+  color: #7c3aed;
+}
+
+.furimane-research-table__usage-row-ticket.furimane-research-table__usage-tone--ticket {
+  background: none;
+  color: #ea580c;
+}
+
+.furimane-research-table__usage-tone--ticket {
+  background: #f97316;
+  color: #ea580c;
+}
+
+.furimane-research-table__usage-row-label {
+  color: #475569;
+  font-weight: 600;
+}
+
+.furimane-research-table__usage-row-tail {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.furimane-research-table__usage-row-value {
+  color: #111827;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.furimane-research-table__usage-row-note {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.furimane-research-table__usage-alert {
+  margin: 11px 0 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(249, 115, 22, 0.12);
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+.furimane-research-table__usage-note {
+  margin: 11px 0 0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.7;
 }
 
 .furimane-research-table__action-button,

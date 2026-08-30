@@ -6,6 +6,7 @@
   const FURIMANE_CLOSED_STORAGE_KEY = "furimane-research-closed";
   const FURIMANE_MAX_RETRY_COUNT = 3;
   const FURIMANE_DEFAULT_FETCH_STRATEGY = "api";
+  const FURIMANE_DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
   const FURIMANE_READY_DELAY_MS = 250;
   const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
   const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
@@ -44,9 +45,23 @@
       });
     });
   }
+  function setChromeLocalStorage(values) {
+    return new Promise((resolve) => {
+      if (typeof chrome === "undefined" || !chrome.storage?.local) {
+        resolve();
+        return;
+      }
+      chrome.storage.local.set(values, () => resolve());
+    });
+  }
   async function isResearchFeatureEnabled() {
     const storage = await getChromeLocalStorage([FURIMANE_RESEARCH_ENABLED_KEY]);
-    return storage[FURIMANE_RESEARCH_ENABLED_KEY] === true;
+    const savedValue = storage[FURIMANE_RESEARCH_ENABLED_KEY];
+    if (savedValue === true || savedValue === false) {
+      return savedValue;
+    }
+    await setChromeLocalStorage({ [FURIMANE_RESEARCH_ENABLED_KEY]: true });
+    return true;
   }
   function getResearchFetchStrategy() {
     return FURIMANE_DEFAULT_FETCH_STRATEGY;
@@ -363,18 +378,30 @@
       usage: {
         allowed: true,
         used: 0,
-        limit: 30,
-        remaining: 30,
-        unlimited: true
+        limit: RESEARCH_FALLBACK_MONTHLY_LIMIT,
+        remaining: RESEARCH_FALLBACK_MONTHLY_LIMIT,
+        unlimited: true,
+        ticketRemaining: 0,
+        ticketExpiresAt: null
       }
     };
+  }
+  const RESEARCH_FALLBACK_MONTHLY_LIMIT = 20;
+  function canUseResearchFromUsage(usage) {
+    if (!usage) {
+      return false;
+    }
+    if (typeof usage.allowed === "boolean") {
+      return usage.allowed;
+    }
+    return usage.unlimited === true || usage.used < usage.limit || (usage.ticketRemaining ?? 0) > 0;
   }
   function updateResearchUsageChip(usage) {
     if (!usage) {
       return;
     }
     currentResearchUsage = usage;
-    const canUseResearch = usage.unlimited === true || usage.used < usage.limit;
+    const canUseResearch = canUseResearchFromUsage(usage);
     if (cachedResearchAccess) {
       cachedResearchAccess.value = {
         ...cachedResearchAccess.value,
@@ -386,18 +413,7 @@
         }
       };
     }
-    const usageChip = document.querySelector(".furimane-research-table__usage-count");
-    if (!usageChip) {
-      return;
-    }
-    usageChip.classList.toggle("furimane-research-table__usage-count--unlimited", usage.unlimited === true);
-    const usageText = usageChip.querySelector(".furimane-research-table__usage-count-text");
-    const label = usage.unlimited ? "\u7121\u5236\u9650" : `\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1 ${usage.used} / ${usage.limit}`;
-    if (usageText) {
-      usageText.textContent = label;
-      return;
-    }
-    usageChip.textContent = label;
+    getOverlayWindow().FurimanagerResearchTable?.refreshUsageChip?.(usage);
   }
   function createChildAbortController(parentSignal) {
     const controller = new AbortController();
@@ -424,8 +440,8 @@
         };
       case "limit":
         return {
-          title: "\u4ECA\u6708\u306E\u30EA\u30B5\u30FC\u30C1\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F",
-          description: "\u4ECA\u6708\u306E\u5229\u7528\u4E0A\u9650\u306B\u9054\u3057\u307E\u3057\u305F\u3002\u6765\u67081\u65E5\u306B\u30EA\u30BB\u30C3\u30C8\u3055\u308C\u307E\u3059\u3002",
+          title: "\u4ECA\u6708\u306E\u7121\u6599\u67A0\u3092\u4F7F\u3044\u5207\u308A\u307E\u3057\u305F",
+          description: "\u6765\u67081\u65E5\u306B\u30EA\u30BB\u30C3\u30C8\u3055\u308C\u307E\u3059\u3002\u53CB\u9054\u7D39\u4ECB\u3067\u3082\u3089\u3048\u308B\u30EA\u30B5\u30FC\u30C1\u30C1\u30B1\u30C3\u30C8\u3067\u3082\u7D9A\u3051\u3066\u4F7F\u3048\u307E\u3059\u3002",
           actionLabel: "\u30D7\u30E9\u30F3\u3092\u78BA\u8A8D\u3059\u308B"
         };
       case "rate_limit":
@@ -502,7 +518,7 @@
     }
     const copy = getResearchErrorCopy(kind);
     const retryAfter = getResearchRetryAfter(error);
-    const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? "http://localhost:3000";
+    const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? FURIMANE_DEFAULT_APP_URL;
     const wrapper = document.createElement("div");
     wrapper.className = "furimane-research-overlay__state furimane-research-overlay__state--error";
     const title = document.createElement("h3");

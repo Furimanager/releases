@@ -12,7 +12,12 @@ const AUTH_STORAGE_KEYS = [
   "supabaseTokenExpiresAt"
 ];
 const TOKEN_REFRESH_MARGIN_MS = 30 * 60 * 1000;
-const DEFAULT_APP_URL = "https://furimanager.com";
+const DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
+const LEGACY_APP_URLS = new Set([
+  "https://furimanager.com",
+  "https://www.furimanager.com",
+  "https://furimanager.furimakaikei.com"
+]);
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
 const SALES_RECIPE_STORAGE_KEY = "mercariSalesRecipeCache";
 const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
@@ -80,7 +85,7 @@ const USER_FACING_SYSTEM_CODE_MESSAGES = {
   invalid_credentials: "メールアドレスまたはパスワードが正しくありません。",
   no_pending_task: "待機中のタスクはありません。",
   plan_required: "この機能を使うにはプランの確認が必要です。",
-  research_monthly_limit_exceeded: "今月のリサーチ上限に達しました。",
+  research_monthly_limit_exceeded: "今月の無料枠（20回）を使い切りました。友達紹介で+30回もらえます。",
   started: "処理を開始しました。",
   task_already_running: "別のタスクを実行中です。完了してからもう一度お試しください。"
 };
@@ -361,8 +366,8 @@ function getConfig() {
 }
 
 function getAppBaseUrl() {
-  const appUrl = String(window.FurimanagerConfig?.APP_URL || DEFAULT_APP_URL).trim().replace(/\/+$/, "");
-  return appUrl;
+  const configuredAppUrl = String(window.FurimanagerConfig?.APP_URL || "").trim().replace(/\/+$/, "");
+  return !configuredAppUrl || LEGACY_APP_URLS.has(configuredAppUrl) ? DEFAULT_APP_URL : configuredAppUrl;
 }
 
 function isMercariSoldPageUrl(url) {
@@ -491,7 +496,13 @@ function renderResearchFeatureSetting() {
 
 async function loadResearchFeatureSetting() {
   const storage = await getLocalStorage([RESEARCH_FEATURE_ENABLED_KEY]);
-  researchFeatureEnabled = storage[RESEARCH_FEATURE_ENABLED_KEY] === true;
+  const savedValue = storage[RESEARCH_FEATURE_ENABLED_KEY];
+  researchFeatureEnabled = savedValue === false ? false : true;
+
+  if (savedValue !== true && savedValue !== false) {
+    await setLocalStorage({ [RESEARCH_FEATURE_ENABLED_KEY]: true });
+  }
+
   renderResearchFeatureSetting();
 }
 
