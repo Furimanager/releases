@@ -544,6 +544,12 @@
         transform: translateY(-50%);
       }
 
+      /* メルカリ上部の操作メニューだけは、商品行の拡張ボタンより前面に表示する */
+      [data-testid="bulk-edit-flyout"],
+      [data-testid="sorting-flyout"] {
+        z-index: 20 !important;
+      }
+
       .furimanager-action-button {
         height: 34px;
         padding: 0 10px;

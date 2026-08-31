@@ -370,6 +370,12 @@
         transform: translateY(-50%);
       }
 
+      /* \u30E1\u30EB\u30AB\u30EA\u4E0A\u90E8\u306E\u64CD\u4F5C\u30E1\u30CB\u30E5\u30FC\u3060\u3051\u306F\u3001\u5546\u54C1\u884C\u306E\u62E1\u5F35\u30DC\u30BF\u30F3\u3088\u308A\u524D\u9762\u306B\u8868\u793A\u3059\u308B */
+      [data-testid="bulk-edit-flyout"],
+      [data-testid="sorting-flyout"] {
+        z-index: 20 !important;
+      }
+
       .furimanager-action-button {
         height: 34px;
         padding: 0 10px;
