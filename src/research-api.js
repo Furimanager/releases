@@ -349,6 +349,18 @@
     apiError.retryAfter = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null;
     return apiError;
   }
+  async function sendExtensionHeartbeat(options = {}) {
+    try {
+      await requestJsonSafe("/api/extension/heartbeat", {
+        method: "POST",
+        signal: options.signal
+      });
+      return true;
+    } catch (error) {
+      console.warn("[furimane-research] extension heartbeat skipped", error);
+      return false;
+    }
+  }
   async function checkAccess(options = {}) {
     return requestJsonSafe("/api/research/check-access", {
       method: "GET",
@@ -547,6 +559,7 @@
   }
   window.FurimanagerResearchApi = {
     getAppUrl,
+    sendExtensionHeartbeat,
     checkAccess,
     checkCache,
     saveResearchData,

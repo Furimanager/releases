@@ -14,6 +14,13 @@
   "background": {
     "service_worker": "background.js"
   },
+  "externally_connectable": {
+    "matches": [
+      "https://furimanager.app.furimakaikei.com/*",
+      "http://localhost/*",
+      "http://127.0.0.1/*"
+    ]
+  },
   "host_permissions": [
     "https://jp.mercari.com/*",
     "https://api.mercari.jp/*",

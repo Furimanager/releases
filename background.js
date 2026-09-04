@@ -35,6 +35,11 @@
       "supabaseTokenExpiresAt"
     ];
     const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1e3;
+    const EXTENSION_CONNECT_MESSAGE_TYPE = "FURIMANE_EXTENSION_CONNECT";
+    const EXTENSION_CONNECT_TOKEN_MAX_LENGTH = 512;
+    const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
+    const EXTENSION_FALLBACK_VERSION = "0.2.5";
+    const EXTENSION_API_SCHEMA = "research-v1";
     const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
     const authState = {
       accessToken: null,
@@ -104,6 +109,29 @@
       }
       return false;
     });
+    if (chromeApi.runtime.onMessageExternal) {
+      chromeApi.runtime.onMessageExternal.addListener(
+        (message, sender, sendResponse) => {
+          if (message?.type !== EXTENSION_CONNECT_MESSAGE_TYPE) {
+            return false;
+          }
+          const respondExternal = (response) => {
+            try {
+              sendResponse(response);
+            } catch {
+              console.error("[furimanager-extension] external sendResponse failed");
+            }
+          };
+          if (!isAllowedConnectPageSender(sender)) {
+            respondExternal({ ok: false, error: "\u3053\u306E\u30DA\u30FC\u30B8\u304B\u3089\u306F\u62E1\u5F35\u6A5F\u80FD\u3068\u9023\u643A\u3067\u304D\u307E\u305B\u3093\u3002" });
+            return false;
+          }
+          const senderTabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+          void handleExtensionConnect(message, respondExternal, senderTabId);
+          return true;
+        }
+      );
+    }
     void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
     async function handleFetchImage(url, respond) {
       try {
@@ -291,6 +319,91 @@
         });
       }
     }
+    async function exchangeExtensionConnectToken(token) {
+      const { url, anonKey } = getConfig();
+      const response = await fetch(`${url}/auth/v1/verify`, {
+        method: "POST",
+        headers: {
+          apikey: anonKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ type: "magiclink", token_hash: token })
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.access_token || !data?.user) {
+        throw new Error(
+          "\u9023\u643A\u7528\u30C8\u30FC\u30AF\u30F3\u304C\u7121\u52B9\u304B\u3001\u6709\u52B9\u671F\u9650\u304C\u5207\u308C\u3066\u3044\u307E\u3059\u3002\u9023\u643A\u30DA\u30FC\u30B8\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002"
+        );
+      }
+      return data;
+    }
+    async function handleExtensionConnect(message, respond, senderTabId = null) {
+      try {
+        const token = typeof message?.token === "string" ? message.token.trim() : "";
+        if (!token || token.length > EXTENSION_CONNECT_TOKEN_MAX_LENGTH) {
+          respond({ ok: false, error: "\u9023\u643A\u7528\u306E\u30C8\u30FC\u30AF\u30F3\u3092\u53D7\u3051\u53D6\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002" });
+          return;
+        }
+        const session = await exchangeExtensionConnectToken(token);
+        await persistAuthSession(session);
+        const verifiedEmail = typeof session?.user?.email === "string" && session.user.email ? session.user.email : typeof message?.email === "string" && message.email ? message.email : null;
+        void sendExtensionHeartbeat();
+        respond({ ok: true, email: verifiedEmail });
+        if (message?.autoClose === true && senderTabId !== null) {
+          setTimeout(() => {
+            try {
+              chromeApi.tabs?.remove?.(senderTabId, () => {
+                void chromeApi.runtime?.lastError;
+              });
+            } catch {
+            }
+          }, EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS);
+        }
+      } catch (error) {
+        console.warn("[furimanager-extension] extension connect failed");
+        respond({
+          ok: false,
+          error: error instanceof Error && error.message ? error.message : "\u62E1\u5F35\u6A5F\u80FD\u3078\u306E\u30ED\u30B0\u30A4\u30F3\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002"
+        });
+      }
+    }
+    function isDevConnectBuild() {
+      const matches = chromeApi?.runtime?.getManifest?.()?.externally_connectable?.matches;
+      if (!Array.isArray(matches)) {
+        return false;
+      }
+      return matches.some(
+        (pattern) => typeof pattern === "string" && (pattern.startsWith("http://localhost/") || pattern.startsWith("http://127.0.0.1/"))
+      );
+    }
+    function isAllowedConnectPageSender(sender) {
+      const rawOrigin = typeof sender?.origin === "string" && sender.origin ? sender.origin : typeof sender?.url === "string" && sender.url ? sender.url : "";
+      if (!rawOrigin) {
+        return false;
+      }
+      let origin;
+      let hostname;
+      let protocol;
+      try {
+        const parsed = new URL(rawOrigin);
+        origin = parsed.origin;
+        hostname = parsed.hostname;
+        protocol = parsed.protocol;
+      } catch {
+        return false;
+      }
+      const allowedOrigins = /* @__PURE__ */ new Set();
+      for (const candidate of [DEFAULT_APP_URL, getAppBaseUrl()]) {
+        try {
+          allowedOrigins.add(new URL(candidate).origin);
+        } catch {
+        }
+      }
+      if (allowedOrigins.has(origin)) {
+        return true;
+      }
+      return isDevConnectBuild() && protocol === "http:" && (hostname === "localhost" || hostname === "127.0.0.1");
+    }
     async function handleGetRakurakuAutoPollState(respond) {
       const enabled = await isRakurakuAutoPollEnabled();
       respond({ success: true, enabled, isRunningTask: isRunningRakurakuTask });
@@ -323,9 +436,11 @@
     }
     chromeApi.runtime.onInstalled?.addListener(() => {
       void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
+      void sendExtensionHeartbeat();
     });
     chromeApi.runtime.onStartup?.addListener(() => {
       void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
+      void sendExtensionHeartbeat();
     });
     chromeApi.alarms?.onAlarm?.addListener((alarm) => {
       if (alarm.name === RAKURAKU_ALARM_NAME) {
@@ -664,6 +779,28 @@
         throw new Error(`API failed: ${response.status} ${errorReason}`);
       }
       return data;
+    }
+    function getExtensionVersion() {
+      return chromeApi?.runtime?.getManifest?.().version || EXTENSION_FALLBACK_VERSION;
+    }
+    async function sendExtensionHeartbeat() {
+      try {
+        const hasSession = await restoreAuthState();
+        if (!hasSession) {
+          return;
+        }
+        await fetchAppApi("/api/extension/heartbeat", {
+          method: "POST",
+          headers: {
+            "X-Furimane-Client": "chrome-extension",
+            "X-Furimane-Extension-Version": getExtensionVersion(),
+            "X-Furimane-Extension-Id": chromeApi?.runtime?.id || "unknown",
+            "X-Furimane-Api-Schema": EXTENSION_API_SCHEMA
+          }
+        });
+      } catch {
+        console.warn("[furimane] extension heartbeat skipped");
+      }
     }
     function getSafeApiLogPath(path) {
       return path.replace(/\/api\/automation\/tasks\/[^/]+/g, "/api/automation/tasks/[id]").replace(/\/api\/rakuraku\/relist-candidates\/[^/]+/g, "/api/rakuraku/relist-candidates/[id]");

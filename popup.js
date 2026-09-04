@@ -12,6 +12,8 @@ const AUTH_STORAGE_KEYS = [
   "supabaseTokenExpiresAt"
 ];
 const TOKEN_REFRESH_MARGIN_MS = 30 * 60 * 1000;
+// Web 側の拡張連携ページ。Googleでログインした人はここ経由で拡張にログインする。
+const EXTENSION_CONNECT_PATH = "/extension/connect";
 const DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
 const LEGACY_APP_URLS = new Set([
   "https://furimanager.com",
@@ -19,6 +21,10 @@ const LEGACY_APP_URLS = new Set([
   "https://furimanager.furimakaikei.com"
 ]);
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
+// 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
+// manifest.json の version と揃えて更新する。
+const EXTENSION_FALLBACK_VERSION = "0.2.5";
+const EXTENSION_API_SCHEMA = "research-v1";
 const SALES_RECIPE_STORAGE_KEY = "mercariSalesRecipeCache";
 const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
 const isLoginView = new URLSearchParams(window.location.search).get("view") === "login";
@@ -37,6 +43,8 @@ const loginForm = document.getElementById("loginForm");
 const emailInput = document.getElementById("emailInput");
 const passwordInput = document.getElementById("passwordInput");
 const loginButton = document.getElementById("loginButton");
+const googleLoginBlock = document.getElementById("googleLoginBlock");
+const googleLoginButton = document.getElementById("googleLoginButton");
 const logoutButton = document.getElementById("logoutButton");
 const sessionPanel = document.getElementById("sessionPanel");
 const sessionText = document.getElementById("sessionText");
@@ -211,6 +219,11 @@ function updateAuthUi() {
   const hasRakurakuAction = Boolean(currentRakurakuTask || currentRakurakuApprovalCandidate);
 
   loginForm.hidden = loggedIn;
+
+  if (googleLoginBlock) {
+    googleLoginBlock.hidden = loggedIn;
+  }
+
   sessionPanel.hidden = !loggedIn;
   scrapeAndSendButton.disabled = !loggedIn;
   if (rakurakuTaskCheckButton) {
@@ -268,6 +281,10 @@ function setAuthControlsDisabled(disabled) {
   passwordInput.disabled = disabled;
   loginButton.disabled = disabled;
   logoutButton.disabled = disabled;
+
+  if (googleLoginButton) {
+    googleLoginButton.disabled = disabled;
+  }
 }
 
 function queryActiveTab() {
@@ -752,6 +769,28 @@ async function fetchAppApi(path, options = {}) {
   return data;
 }
 
+function getExtensionVersion() {
+  return chrome.runtime?.getManifest?.().version || EXTENSION_FALLBACK_VERSION;
+}
+
+// 「拡張をセットアップ済み」であることをサーバー側に記録する。
+// 失敗してもログインUXは止めないので、ここでは握りつぶす。
+async function sendExtensionHeartbeat() {
+  try {
+    await fetchAppApi("/api/extension/heartbeat", {
+      method: "POST",
+      headers: {
+        "X-Furimane-Client": "chrome-extension",
+        "X-Furimane-Extension-Version": getExtensionVersion(),
+        "X-Furimane-Extension-Id": chrome.runtime?.id || "unknown",
+        "X-Furimane-Api-Schema": EXTENSION_API_SCHEMA
+      }
+    });
+  } catch (error) {
+    console.warn("[furimane] extension heartbeat skipped", error);
+  }
+}
+
 function normalizeSalesRecipe(value) {
   const recipe = value?.recipe && typeof value.recipe === "object" ? value.recipe : value;
   if (!recipe || typeof recipe !== "object" || Array.isArray(recipe)) {
@@ -1167,11 +1206,67 @@ async function handleLoginSubmit(event) {
     passwordInput.value = "";
     updateAuthUi();
     setAuthMessage("success", "ログインしました");
+    // 拡張セットアップ済みの記録。await せずに投げっぱなしにする。
+    void sendExtensionHeartbeat();
   } catch (error) {
     updateAuthUi();
     setAuthMessage("error", getUserFacingErrorMessage(error, "ログインに失敗しました"));
   } finally {
     setAuthControlsDisabled(false);
+  }
+}
+
+/**
+ * Googleでログインするための連携ページ URL。
+ *
+ * 拡張の入力欄で Google の資格情報を扱うことは技術的にできないうえ、
+ * フィッシング扱いになるためストアから削除される。
+ * そこで Web の連携ページを新しいタブで開き、そちらでログインしてもらう。
+ * 拡張IDはページ側の許可リストと突き合わせて検証される。
+ */
+function getExtensionConnectUrl() {
+  const connectUrl = new URL(`${getAppBaseUrl()}${EXTENSION_CONNECT_PATH}`);
+  const extensionId = chrome.runtime?.id;
+
+  if (typeof extensionId === "string" && extensionId) {
+    connectUrl.searchParams.set("ext_id", extensionId);
+  }
+
+  return connectUrl.toString();
+}
+
+function handleGoogleLoginClick() {
+  try {
+    chrome.tabs.create({ url: getExtensionConnectUrl(), active: true });
+    setAuthMessage(
+      "idle",
+      "連携ページを開きました。ログイン済みなら自動で連携され、タブは自動で閉じます。"
+    );
+  } catch (error) {
+    setAuthMessage("error", getUserFacingErrorMessage(error, "連携ページを開けませんでした"));
+  }
+}
+
+/**
+ * 連携ページ経由でログインが完了すると background 側が chrome.storage.local を更新する。
+ * ポップアップを開いたままでも、その変化を拾ってログイン済み表示に切り替える。
+ */
+async function handleAuthStorageChanged() {
+  try {
+    const wasLoggedIn = isLoggedIn();
+    const storageState = await getLocalStorage(AUTH_STORAGE_KEYS);
+    const nowLoggedIn = applyAuthStateFromStorage(storageState);
+
+    isAuthStateReady = true;
+    updateAuthUi();
+
+    // ログアウト時のメッセージを上書きしないよう、未ログイン→ログインのときだけ知らせる。
+    if (!wasLoggedIn && nowLoggedIn) {
+      setAuthControlsDisabled(false);
+      setAuthMessage("success", "連携が完了しました。ログイン状態になりました");
+    }
+  } catch (error) {
+    setAuthMessage("error", getUserFacingErrorMessage(error, "ログイン状態の更新に失敗しました"));
   }
 }
 
@@ -1643,6 +1738,27 @@ async function initializePopup() {
     updateAuthUi();
     setAuthMessage("error", getUserFacingErrorMessage(error, "ログイン状態の復元に失敗しました"));
   }
+}
+
+googleLoginButton?.addEventListener("click", () => {
+  handleGoogleLoginClick();
+});
+if (chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") {
+      return;
+    }
+
+    const hasAuthChange = AUTH_STORAGE_KEYS.some((key) =>
+      Object.prototype.hasOwnProperty.call(changes, key)
+    );
+
+    if (!hasAuthChange) {
+      return;
+    }
+
+    void handleAuthStorageChanged();
+  });
 }
 
 loginForm.addEventListener("submit", (event) => {

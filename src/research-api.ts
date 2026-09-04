@@ -219,6 +219,7 @@ declare global {
     FurimanagerConfig?: FurimanagerConfig;
     FurimanagerResearchApi?: {
       getAppUrl: () => string;
+      sendExtensionHeartbeat: (options?: ResearchRequestOptions) => Promise<boolean>;
       checkAccess: (options?: ResearchRequestOptions) => Promise<ResearchAccessResponse>;
       checkCache: (
         sellerId: string,
@@ -697,6 +698,23 @@ function createResearchApiError(response: Response, data: unknown, fallback: str
   return apiError;
 }
 
+/**
+ * 「Chrome拡張を使っている」ことをサーバー側に記録する。
+ * 失敗しても呼び出し元の処理は止めないので、戻り値は成否だけを返す。
+ */
+async function sendExtensionHeartbeat(options: ResearchRequestOptions = {}) {
+  try {
+    await requestJsonSafe<{ ok?: boolean }>("/api/extension/heartbeat", {
+      method: "POST",
+      signal: options.signal
+    });
+    return true;
+  } catch (error) {
+    console.warn("[furimane-research] extension heartbeat skipped", error);
+    return false;
+  }
+}
+
 async function checkAccess(options: ResearchRequestOptions = {}) {
   return requestJsonSafe<ResearchAccessResponse>("/api/research/check-access", {
     method: "GET",
@@ -953,6 +971,7 @@ async function getPurchasePricesBatch(
 
 window.FurimanagerResearchApi = {
   getAppUrl,
+  sendExtensionHeartbeat,
   checkAccess,
   checkCache,
   saveResearchData,

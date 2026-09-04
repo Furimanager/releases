@@ -1,6 +1,13 @@
-// Chrome ウェブストア提出用のパッケージを dist/store/ に作成する。
+// 拡張機能の配布パッケージを2種類つくる。
 // 許可リスト方式でファイルを集めるため、mock/ や *.ts、開発用設定は出力に含まれない。
 // zip 化はこのスクリプトでは行わず、最後に Windows 用のコマンドを表示する。
+//
+// なぜ2種類あるのか（重要）:
+//   store    … manifest の "key" を除く。ストアは自前の鍵でIDを割り当てるため。
+//   selfhost … "key" を残す。これが無いと拡張機能IDが展開先フォルダのパスから
+//              作られてしまい、人ごと・PCごとに変わる。IDが変わると
+//              NEXT_PUBLIC_EXTENSION_IDS の許可リストに載らず、
+//              /extension/connect からのトークン連携が通らなくなる。
 import { access, copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -8,8 +15,22 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(rootDir, "dist");
-const outDir = path.join(distDir, "store");
-const zipRelativePath = "dist/furimanager-extension-store.zip";
+const VARIANTS = [
+  {
+    name: "store",
+    outDir: path.join(distDir, "store"),
+    zipRelativePath: "dist/furimanager-extension-store.zip",
+    keepKey: false,
+    description: "Chrome ウェブストア提出用"
+  },
+  {
+    name: "selfhost",
+    outDir: path.join(distDir, "selfhost"),
+    zipRelativePath: "dist/furimanager-extension.zip",
+    keepKey: true,
+    description: "GitHub リリース配布用（拡張機能IDを固定）"
+  }
+];
 
 // ルート直下でコピーするファイル（manifest.json は変換して別途書き出す）。
 const ALLOWED_ROOT_FILES = [
@@ -52,7 +73,7 @@ function toPosix(relativePath) {
   return relativePath.split(path.sep).join("/");
 }
 
-async function copyAllowedDirectory(dirName, extensions) {
+async function copyAllowedDirectory(outDir, dirName, extensions) {
   const sourceDir = path.join(rootDir, dirName);
 
   if (!(await pathExists(sourceDir))) {
@@ -101,7 +122,7 @@ async function copyAllowedDirectory(dirName, extensions) {
   return copied;
 }
 
-async function writeStoreManifest() {
+async function writeVariantManifest(outDir, keepKey) {
   const manifestPath = path.join(rootDir, "manifest.json");
 
   if (!(await pathExists(manifestPath))) {
@@ -117,14 +138,19 @@ async function writeStoreManifest() {
     failWith(`manifest.json を JSON として読み込めませんでした: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  // "key" は開発中に拡張機能IDを固定するための項目。ストア提出版には含めない。
+  // "key" は拡張機能IDを固定するための項目。ストア提出版だけ取り除く。
   const hadKey = Object.prototype.hasOwnProperty.call(manifest, "key");
-  delete manifest.key;
+
+  if (!keepKey) {
+    delete manifest.key;
+  }
 
   await writeFile(path.join(outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-  if (hadKey) {
+  if (hadKey && !keepKey) {
     logInfo('manifest.json の "key" を除去しました（ソース側の manifest.json は変更していません）。');
+  } else if (hadKey) {
+    logInfo('manifest.json の "key" は残しました（拡張機能IDを固定するため）。');
   }
 
   return manifest;
@@ -179,7 +205,7 @@ function collectManifestReferences(manifest) {
   return [...references].sort();
 }
 
-async function verifyManifestReferences(manifest) {
+async function verifyManifestReferences(outDir, manifest) {
   const references = collectManifestReferences(manifest);
   const missing = [];
 
@@ -227,7 +253,7 @@ async function loadEsbuildTransform() {
   }
 }
 
-async function minifyJavaScriptFiles(transform, relativePaths) {
+async function minifyJavaScriptFiles(outDir, transform, relativePaths) {
   let minifiedCount = 0;
 
   for (const relativePath of relativePaths) {
@@ -257,16 +283,14 @@ async function minifyJavaScriptFiles(transform, relativePaths) {
   return minifiedCount;
 }
 
-async function main() {
-  // config.js は本番値を含むため、テンプレートのままだと提出できない。
-  if (!(await pathExists(path.join(rootDir, "config.js")))) {
-    failWith("config.js がありません。config.template.js を config.js にコピーして本番値を設定してください。");
-  }
+async function buildVariant({ name, outDir, keepKey, description }) {
+  console.log("");
+  logInfo(`[${name}] ${description} を作成します。`);
 
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  const manifest = await writeStoreManifest();
+  const manifest = await writeVariantManifest(outDir, keepKey);
   const copiedFiles = [];
 
   for (const fileName of ALLOWED_ROOT_FILES) {
@@ -281,7 +305,7 @@ async function main() {
   }
 
   for (const { dir, extensions } of ALLOWED_DIRECTORIES) {
-    copiedFiles.push(...await copyAllowedDirectory(dir, extensions));
+    copiedFiles.push(...await copyAllowedDirectory(outDir, dir, extensions));
   }
 
   copiedFiles.sort();
@@ -289,22 +313,35 @@ async function main() {
   const transform = await loadEsbuildTransform();
 
   if (transform) {
-    const minifiedCount = await minifyJavaScriptFiles(transform, copiedFiles);
+    const minifiedCount = await minifyJavaScriptFiles(outDir, transform, copiedFiles);
     logInfo(`esbuild で ${minifiedCount} 件の .js を minify しました。`);
   } else {
     logInfo("minifyスキップ");
   }
 
-  await verifyManifestReferences(manifest);
+  await verifyManifestReferences(outDir, manifest);
 
-  logInfo(`manifest.json を含む ${copiedFiles.length + 1} 件を dist/store/ に出力しました。`);
-  for (const relativePath of copiedFiles) {
-    console.log(`  - ${relativePath}`);
+  logInfo(`manifest.json を含む ${copiedFiles.length + 1} 件を dist/${name}/ に出力しました。`);
+
+  return copiedFiles;
+}
+
+async function main() {
+  // config.js は本番値を含むため、テンプレートのままだと提出できない。
+  if (!(await pathExists(path.join(rootDir, "config.js")))) {
+    failWith("config.js がありません。config.template.js を config.js にコピーして本番値を設定してください。");
+  }
+
+  for (const variant of VARIANTS) {
+    await buildVariant(variant);
   }
 
   console.log("");
-  console.log("次のコマンドで提出用 zip を作成してください（PowerShell / 拡張ルートで実行）:");
-  console.log(`  powershell Compress-Archive -Path dist/store/* -DestinationPath ${zipRelativePath} -Force`);
+  console.log("次のコマンドで zip を作成してください（PowerShell / 拡張ルートで実行）:");
+  for (const { name, zipRelativePath, description } of VARIANTS) {
+    console.log(`  # ${description}`);
+    console.log(`  powershell Compress-Archive -Path dist/${name}/* -DestinationPath ${zipRelativePath} -Force`);
+  }
 }
 
 await main();

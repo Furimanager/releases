@@ -35,6 +35,15 @@
     "supabaseTokenExpiresAt"
   ];
   const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+  // Web の連携ページ（/extension/connect）から externally_connectable 経由で届くメッセージ。
+  const EXTENSION_CONNECT_MESSAGE_TYPE = "FURIMANE_EXTENSION_CONNECT";
+  const EXTENSION_CONNECT_TOKEN_MAX_LENGTH = 512;
+  // 連携成功後、ページに「完了」を見せてからタブを閉じるまでの猶予。
+  const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
+  // 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
+  // manifest.json の version と揃えて更新する。
+  const EXTENSION_FALLBACK_VERSION = "0.2.5";
+  const EXTENSION_API_SCHEMA = "research-v1";
   const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
   const authState: {
     accessToken: string | null;
@@ -123,6 +132,39 @@
 
     return false;
   });
+
+  // Web の連携ページからの「Googleでログイン」連携を受け取る。
+  // 送信元は manifest の externally_connectable で既に絞られているが、
+  // ここでも sender のオリジンを許可リストと突き合わせて二重に確認する。
+  if (chromeApi.runtime.onMessageExternal) {
+    chromeApi.runtime.onMessageExternal.addListener(
+      (message: any, sender: any, sendResponse: (response: any) => void) => {
+        // 想定外のメッセージ型は無視する。
+        if (message?.type !== EXTENSION_CONNECT_MESSAGE_TYPE) {
+          return false;
+        }
+
+        const respondExternal = (response: any) => {
+          try {
+            sendResponse(response);
+          } catch {
+            console.error("[furimanager-extension] external sendResponse failed");
+          }
+        };
+
+        if (!isAllowedConnectPageSender(sender)) {
+          respondExternal({ ok: false, error: "このページからは拡張機能と連携できません。" });
+          return false;
+        }
+
+        // 連携ページが開いているタブ。ページ側が autoClose を立てたときだけ、成功後に閉じる。
+        const senderTabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+
+        void handleExtensionConnect(message, respondExternal, senderTabId);
+        return true;
+      }
+    );
+  }
 
   void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
 
@@ -351,6 +393,159 @@
     }
   }
 
+  /**
+   * 連携ページから受け取った使い捨てトークンを、拡張専用の独立したセッションに交換する。
+   *
+   * Web 側のリフレッシュトークンをコピーしないのは、Supabase がリフレッシュトークンを
+   * ローテーションするため。共有すると片方の更新でもう片方が無効化され、
+   * 「拡張を使うと Web が勝手にログアウトされる」再現性の低い事故になる。
+   *
+   * サーバーが auth.admin.generateLink({ type: "magiclink" }) で発行した hashed_token を
+   * POST /auth/v1/verify に { type: "magiclink", token_hash } で渡すと、
+   * grant_type=password と同じ形のセッション JSON（access_token / refresh_token / user）が返る。
+   */
+  async function exchangeExtensionConnectToken(token: string) {
+    const { url, anonKey } = getConfig();
+    const response = await fetch(`${url}/auth/v1/verify`, {
+      method: "POST",
+      headers: {
+        apikey: anonKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ type: "magiclink", token_hash: token })
+    });
+    const data = await response.json().catch(() => null);
+
+    // Supabase 側の英語メッセージはそのまま返さない。トークンもログに出さない。
+    if (!response.ok || !data?.access_token || !data?.user) {
+      throw new Error(
+        "連携用トークンが無効か、有効期限が切れています。連携ページからもう一度お試しください。"
+      );
+    }
+
+    return data;
+  }
+
+  async function handleExtensionConnect(
+    message: any,
+    respond: (response: any) => void,
+    senderTabId: number | null = null
+  ) {
+    try {
+      const token = typeof message?.token === "string" ? message.token.trim() : "";
+
+      if (!token || token.length > EXTENSION_CONNECT_TOKEN_MAX_LENGTH) {
+        respond({ ok: false, error: "連携用のトークンを受け取れませんでした。" });
+        return;
+      }
+
+      const session = await exchangeExtensionConnectToken(token);
+
+      // 保存は既存のパスワードログインとまったく同じ経路（同じ chrome.storage.local のキー）を使う。
+      await persistAuthSession(session);
+
+      // メールは表示用にしか使わない。認証の判断はトークン交換の結果だけで行う。
+      const verifiedEmail =
+        typeof session?.user?.email === "string" && session.user.email
+          ? session.user.email
+          : typeof message?.email === "string" && message.email
+            ? message.email
+            : null;
+
+      // 拡張セットアップ済みの記録。失敗しても連携そのものは成功扱いにする。
+      void sendExtensionHeartbeat();
+
+      respond({ ok: true, email: verifiedEmail });
+
+      // ポップアップから開いた連携タブは、完了表示を見せてから自動で閉じる。
+      // chrome.tabs.remove は "tabs" 権限なしで使える。閉じられなくても連携は成功している。
+      if (message?.autoClose === true && senderTabId !== null) {
+        setTimeout(() => {
+          try {
+            chromeApi.tabs?.remove?.(senderTabId, () => {
+              // 既にユーザーが閉じていた場合などの lastError は握りつぶす。
+              void chromeApi.runtime?.lastError;
+            });
+          } catch {
+            // タブ操作に失敗しても何もしない。
+          }
+        }, EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS);
+      }
+    } catch (error) {
+      // トークンやハッシュはログに残さない。
+      console.warn("[furimanager-extension] extension connect failed");
+      respond({
+        ok: false,
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : "拡張機能へのログインに失敗しました。"
+      });
+    }
+  }
+
+  /** manifest の externally_connectable に localhost が入っている開発用ビルドかどうか。 */
+  function isDevConnectBuild() {
+    const matches = chromeApi?.runtime?.getManifest?.()?.externally_connectable?.matches;
+
+    if (!Array.isArray(matches)) {
+      return false;
+    }
+
+    return matches.some(
+      (pattern: unknown) =>
+        typeof pattern === "string" &&
+        (pattern.startsWith("http://localhost/") || pattern.startsWith("http://127.0.0.1/"))
+    );
+  }
+
+  function isAllowedConnectPageSender(sender: any) {
+    const rawOrigin =
+      typeof sender?.origin === "string" && sender.origin
+        ? sender.origin
+        : typeof sender?.url === "string" && sender.url
+          ? sender.url
+          : "";
+
+    if (!rawOrigin) {
+      return false;
+    }
+
+    let origin: string;
+    let hostname: string;
+    let protocol: string;
+
+    try {
+      const parsed = new URL(rawOrigin);
+      origin = parsed.origin;
+      hostname = parsed.hostname;
+      protocol = parsed.protocol;
+    } catch {
+      return false;
+    }
+
+    const allowedOrigins = new Set<string>();
+
+    for (const candidate of [DEFAULT_APP_URL, getAppBaseUrl()]) {
+      try {
+        allowedOrigins.add(new URL(candidate).origin);
+      } catch {
+        // 設定値が URL として壊れている場合は無視する。
+      }
+    }
+
+    if (allowedOrigins.has(origin)) {
+      return true;
+    }
+
+    // 開発用 manifest のときだけ、ローカル開発サーバーからの連携を許可する。
+    return (
+      isDevConnectBuild() &&
+      protocol === "http:" &&
+      (hostname === "localhost" || hostname === "127.0.0.1")
+    );
+  }
+
   async function handleGetRakurakuAutoPollState(respond: (response: any) => void) {
     const enabled = await isRakurakuAutoPollEnabled();
     respond({ success: true, enabled, isRunningTask: isRunningRakurakuTask });
@@ -388,10 +583,12 @@
 
   chromeApi.runtime.onInstalled?.addListener(() => {
     void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
+    void sendExtensionHeartbeat();
   });
 
   chromeApi.runtime.onStartup?.addListener(() => {
     void setupRakurakuAlarm().catch(() => console.warn("[rakuraku] alarm setup skipped"));
+    void sendExtensionHeartbeat();
   });
 
   chromeApi.alarms?.onAlarm?.addListener((alarm: { name: string }) => {
@@ -790,6 +987,34 @@
     }
 
     return data;
+  }
+
+  function getExtensionVersion() {
+    return chromeApi?.runtime?.getManifest?.().version || EXTENSION_FALLBACK_VERSION;
+  }
+
+  // ログイン済みのまま拡張を使っていない人も拾うため、起動時に1回だけ記録する。
+  // 未ログインや通信失敗のときは何もしない（バックグラウンド処理を止めない）。
+  async function sendExtensionHeartbeat() {
+    try {
+      const hasSession = await restoreAuthState();
+
+      if (!hasSession) {
+        return;
+      }
+
+      await fetchAppApi("/api/extension/heartbeat", {
+        method: "POST",
+        headers: {
+          "X-Furimane-Client": "chrome-extension",
+          "X-Furimane-Extension-Version": getExtensionVersion(),
+          "X-Furimane-Extension-Id": chromeApi?.runtime?.id || "unknown",
+          "X-Furimane-Api-Schema": EXTENSION_API_SCHEMA
+        }
+      });
+    } catch {
+      console.warn("[furimane] extension heartbeat skipped");
+    }
   }
 
   function getSafeApiLogPath(path: string) {
