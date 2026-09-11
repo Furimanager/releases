@@ -856,8 +856,13 @@ body.login-view .auth-card__signup:not([hidden]) {
   display: flex;
 }
 
+body.login-view .auth-card__signup {
+  flex-wrap: wrap;
+}
+
 body.login-view .auth-card__signup p {
   display: block;
+  flex: 1 1 100%;
   margin: 0;
   color: #cbd5e1;
   font-size: 14px;
@@ -895,61 +900,63 @@ body.login-view .auth-card__signup a:hover {
   }
 }
 
-/* --- Googleでログイン（Web の連携ページを開くボタン）と「または」の区切り線 --- */
+/* --- Googleでログイン（Web の連携ページを開く、サブ導線の小ボタン） ---
+   フッター行で「アカウントを新規作成」の左に並べる。主導線はメール+パスワードのフォーム。 */
+
+.auth-card__signup {
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
 
 .google-login-block {
   position: relative;
   z-index: 1;
-  margin-top: 14px;
+  flex: 0 0 auto;
 }
 
-/* Google ボタンを足したぶん、フォーム側の余白は区切り線に任せる。 */
-.auth-card .auth-form {
-  margin-top: 0;
-}
-
-/* Google のブランドガイドラインに合わせた寸法・配色。ロゴは外部読み込みせずインライン SVG。 */
-.google-button {
-  width: 100%;
-  height: 40px;
-  min-height: 40px;
-  padding: 0 12px;
-  display: flex;
+/* Google のブランド配色（白地 / #1f1f1f 文字 / #747775 枠）は維持しつつ、通常の 6 割程度のサイズ。 */
+.google-button--compact {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 10px;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 6px;
   border: 1px solid #747775;
-  border-radius: 8px;
+  border-radius: 6px;
   background: #ffffff;
   color: #1f1f1f;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     background-color 0.18s ease,
     box-shadow 0.18s ease;
 }
 
-.google-button:hover {
+.google-button--compact:hover {
   background: #f8f9fa;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
-.google-button:focus-visible {
+.google-button--compact:focus-visible {
   outline: 2px solid rgba(167, 139, 250, 0.9);
   outline-offset: 2px;
 }
 
-.google-button:disabled {
+.google-button--compact:disabled {
   background: #ffffff;
   opacity: 0.6;
   cursor: not-allowed;
 }
 
 .google-button__logo {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
 }
 
@@ -957,31 +964,9 @@ body.login-view .auth-card__signup a:hover {
   line-height: 1;
 }
 
-.auth-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 24px 0;
-}
-
-.auth-divider::before,
-.auth-divider::after {
-  content: "";
-  height: 1px;
-  flex: 1 1 auto;
-  background: #334155;
-}
-
-.auth-divider__label {
-  color: #94a3b8;
+body.login-view .google-button--compact {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
   font-size: 12px;
-  line-height: 1;
-}
-
-body.login-view .google-login-block {
-  margin-top: 32px;
-}
-
-body.login-view .auth-card .auth-form {
-  margin-top: 0;
 }
