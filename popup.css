@@ -448,6 +448,49 @@ body {
   word-break: break-word;
 }
 
+/* 失敗・要確認のときだけ、マニュアルの該当FAQへの入口を出す */
+.status-card__help {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  margin-top: 14px;
+  color: #d8b4fe;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 0.18s ease;
+}
+
+.status-card__help[hidden] {
+  display: none;
+}
+
+.status-card__help:hover {
+  color: white;
+}
+
+.panel__link {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 7px 12px;
+  border: 1px solid rgba(199, 210, 254, 0.16);
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.1);
+  color: #ddd6fe;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  transition:
+    color 0.18s ease,
+    background 0.18s ease;
+}
+
+.panel__link:hover {
+  background: rgba(124, 58, 237, 0.22);
+  color: white;
+}
+
 .research-card__state {
   margin: 0;
   padding: 7px 10px;
@@ -900,12 +943,12 @@ body.login-view .auth-card__signup a:hover {
   }
 }
 
-/* --- Googleでログイン（Web の連携ページを開く、サブ導線の小ボタン） ---
-   フッター行で「アカウントを新規作成」の左に並べる。主導線はメール+パスワードのフォーム。 */
+/* Google はログイン・新規登録共通の補助ボタンとして並べる。 */
 
 .auth-card__signup {
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -913,9 +956,10 @@ body.login-view .auth-card__signup a:hover {
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
+  min-width: 0;
 }
 
-/* Google のブランド配色（白地 / #1f1f1f 文字 / #747775 枠）は維持しつつ、通常の 6 割程度のサイズ。 */
+/* Google 公式のダーク配色で、主ボタンより控えめにする。 */
 .google-button--compact {
   height: 26px;
   min-height: 26px;
@@ -923,10 +967,10 @@ body.login-view .auth-card__signup a:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid #747775;
+  border: 1px solid #8e918f;
   border-radius: 6px;
-  background: #ffffff;
-  color: #1f1f1f;
+  background: #131314;
+  color: #e3e3e3;
   font-family: inherit;
   font-size: 11px;
   font-weight: 600;
@@ -939,7 +983,7 @@ body.login-view .auth-card__signup a:hover {
 }
 
 .google-button--compact:hover {
-  background: #f8f9fa;
+  background: #252526;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
@@ -949,7 +993,7 @@ body.login-view .auth-card__signup a:hover {
 }
 
 .google-button--compact:disabled {
-  background: #ffffff;
+  background: #131314;
   opacity: 0.6;
   cursor: not-allowed;
 }

@@ -34,6 +34,8 @@ document.title = isLoginView ? "フリマネにログイン" : "フリマネー�
 
 const statusText = document.getElementById("statusText");
 const statusDetails = document.getElementById("statusDetails");
+const statusHelpLink = document.getElementById("statusHelpLink");
+const usageGuideLink = document.getElementById("usageGuideLink");
 const pingButton = document.getElementById("pingButton");
 const scrapeAllButton = document.getElementById("scrapeAllButton");
 const resetDeltaStateButton = document.getElementById("resetDeltaStateButton");
@@ -107,9 +109,32 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function setStatus(type, text, details = []) {
+// 困ったときの案内先。マニュアル（/manual）はログインなしで読める公開ページ。
+const MANUAL_SYNC_GUIDE_PATH = "/manual#setup/step-3";
+const MANUAL_IMPORT_HELP = { label: "取り込めないときの確認方法", path: "/manual#faq/import" };
+const MANUAL_LOGIN_HELP = { label: "ログインできないときは", path: "/manual#faq/login" };
+
+function setStatusHelp(help) {
+  if (!statusHelpLink) {
+    return;
+  }
+
+  if (!help) {
+    statusHelpLink.hidden = true;
+    statusHelpLink.removeAttribute("href");
+    statusHelpLink.textContent = "";
+    return;
+  }
+
+  statusHelpLink.href = `${getAppBaseUrl()}${help.path}`;
+  statusHelpLink.textContent = `${help.label} →`;
+  statusHelpLink.hidden = false;
+}
+
+function setStatus(type, text, details = [], help = null) {
   statusText.textContent = text;
   statusText.className = `status-card__value status-card__value--${type}`;
+  setStatusHelp(help);
 
   if (details.length === 0) {
     statusDetails.innerHTML = "";
@@ -865,13 +890,18 @@ async function runTabAction(action, extraMessage = {}) {
   return sendMessageToTab(tab.id, { action, ...extraMessage, ...(recipe ? { recipe } : {}) });
 }
 
-function showActionError(title, response, fallbackMessage) {
-  setStatus("error", title, [
-    {
-      label: "原因",
-      value: getUserFacingErrorMessage(response?.message || fallbackMessage, fallbackMessage)
-    }
-  ]);
+function showActionError(title, response, fallbackMessage, help = null) {
+  setStatus(
+    "error",
+    title,
+    [
+      {
+        label: "原因",
+        value: getUserFacingErrorMessage(response?.message || fallbackMessage, fallbackMessage)
+      }
+    ],
+    help
+  );
 }
 
 function parseSupabaseError(data, fallbackMessage) {
@@ -1294,7 +1324,7 @@ async function handlePing() {
     const response = await runTabAction("ping");
 
     if (!response || response.success !== true) {
-      showActionError("接続失敗", response, "メルカリ販売履歴ページと通信できませんでした");
+      showActionError("接続失敗", response, "メルカリ販売履歴ページと通信できませんでした", MANUAL_IMPORT_HELP);
       return;
     }
 
@@ -1303,19 +1333,25 @@ async function handlePing() {
       response.isMercariSoldPage ? "接続OK" : "接続OK（対象外ページ）",
       response.isMercariSoldPage
         ? [{ label: "次の操作", value: "「販売履歴を同期」を押してください" }]
-        : [{ label: "対応方法", value: "メルカリ販売履歴ページを開いてください" }]
+        : [{ label: "対応方法", value: "メルカリ販売履歴ページを開いてください" }],
+      response.isMercariSoldPage ? null : MANUAL_IMPORT_HELP
     );
   } catch (error) {
-    setStatus("error", "接続失敗", [
-      {
-        label: "原因",
-        value: getUserFacingErrorMessage(error)
-      },
-      {
-        label: "対応方法",
-        value: "メルカリ販売履歴ページを開いた状態でお試しください"
-      }
-    ]);
+    setStatus(
+      "error",
+      "接続失敗",
+      [
+        {
+          label: "原因",
+          value: getUserFacingErrorMessage(error)
+        },
+        {
+          label: "対応方法",
+          value: "メルカリ販売履歴ページを開いた状態でお試しください"
+        }
+      ],
+      MANUAL_IMPORT_HELP
+    );
   } finally {
     setActionButtonsDisabled(false);
   }
@@ -1471,9 +1507,7 @@ async function handleResetDeltaState() {
 
 async function handleScrapeAndSend() {
   if (!isLoggedIn()) {
-    setStatus("error", "送信不可", [
-      { label: "対応方法", value: "ログインしてから送信してください" }
-    ]);
+    setStatus("error", "送信不可", [{ label: "対応方法", value: "ログインしてから送信してください" }], MANUAL_LOGIN_HELP);
     return;
   }
 
@@ -1501,7 +1535,7 @@ async function handleScrapeAndSend() {
     });
 
     if (!response || response.success !== true) {
-      showActionError("送信失敗", response, "差分取得に失敗しました");
+      showActionError("送信失敗", response, "差分取得に失敗しました", MANUAL_IMPORT_HELP);
       return;
     }
 
@@ -1539,16 +1573,23 @@ async function handleScrapeAndSend() {
             { label: "上限到達", value: importResult?.reachedPageLimit ? "はい" : "いいえ" },
             { label: "保存アンカー数", value: nextAnchorExternalIds.length }
           ]
-        : []
+        : [],
+      // 「未確認あり」「送信対象なし」は、どちらもFAQの「取り込まれないとき」に説明がある
+      gapSuspected || savedCount === 0 ? MANUAL_IMPORT_HELP : null
     );
   } catch (error) {
     // TODO: 送信失敗時の pendingItems 保持は今後の改善候補
-    setStatus("error", "送信失敗", [
-      {
-        label: "原因",
-        value: getUserFacingSyncErrorMessage(error)
-      }
-    ]);
+    setStatus(
+      "error",
+      "送信失敗",
+      [
+        {
+          label: "原因",
+          value: getUserFacingSyncErrorMessage(error)
+        }
+      ],
+      MANUAL_IMPORT_HELP
+    );
   } finally {
     setActionButtonsDisabled(false);
   }
@@ -1716,6 +1757,10 @@ async function initializePopup() {
 
   if (signupLink) {
     signupLink.href = `${getAppBaseUrl()}/signup`;
+  }
+
+  if (usageGuideLink) {
+    usageGuideLink.href = `${getAppBaseUrl()}${MANUAL_SYNC_GUIDE_PATH}`;
   }
 
   try {

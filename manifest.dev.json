@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Furimanager (Dev)",
   "description": "Development manifest for local Furimanager testing",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7nZC0bCXq142JrzUMlqYbQx1ENnoJkXW9azOGoWbTi3cSfA65nUGnLFIap64T5cxz0YDkTrpliX8CT5kl8DdYO/EdAlMLgxhc9mSSNt9DE0nNOWxcUPwn+n3gFDqCjRvxZ492fU+J4yvLo1ENXvJBUV0/vNDGRMhthhBpOKe3otDPia+5Q2Il1AyUUxIL4pJsx3qQl0L4k5tCgZonn+CoPRENgq85luwvnMO7clzxcPOaJW/ZWj1zWeiszh+qvYDZkDPwjqI3gWr395/Q5fm7gcc8dvFwtpddskNIKGWycYtPXGPm9CXw3V5Rykq+eFAauEzpnd/v1y2XCmDfyPXyQIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",
@@ -22,6 +22,9 @@
     ]
   },
   "host_permissions": [
+    "https://paypayfleamarket.yahoo.co.jp/*",
+    "https://paypayfleamarket-sec.yahoo.co.jp/*",
+    "https://auctions.c.yimg.jp/*",
     "https://jp.mercari.com/*",
     "https://api.mercari.jp/*",
     "https://*.mercdn.net/*",
@@ -36,6 +39,11 @@
   ],
   "content_scripts": [
     {
+      "matches": ["https://paypayfleamarket.yahoo.co.jp/*", "https://paypayfleamarket-sec.yahoo.co.jp/item/add*"],
+      "js": ["src/yahoo-fleamarket-dom.js", "src/yahoo-fleamarket.js"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["https://jp.mercari.com/mypage/listings/sold*"],
       "js": ["parser.js", "content.js"],
       "run_at": "document_idle"
@@ -44,6 +52,12 @@
       "matches": ["https://jp.mercari.com/*"],
       "js": ["content-script.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://jp.mercari.com/*"],
+      "js": ["src/mercari-bulk-policy.js", "src/mercari-bulk-price.js"],
+      "css": ["src/mercari-bulk-price.css"],
+      "run_at": "document_start"
     },
     {
       "matches": ["https://jp.mercari.com/sell*"],

@@ -402,45 +402,54 @@
       }
 
       .furimanager-listing-date-panel {
-        margin-top: 14px;
-        padding: 12px 14px;
-        border: 1px solid rgba(236, 72, 153, 0.24);
-        border-left: 4px solid #ec4899;
-        border-radius: 12px;
-        background: linear-gradient(135deg, rgba(236, 72, 153, 0.10), rgba(225, 29, 72, 0.06));
-        color: #111111;
-        font-size: 13px;
-        line-height: 1.45;
+        box-sizing: border-box;
+        container-type: inline-size;
+        width: 100%;
+        min-width: 0;
+        margin-top: 16px;
+        overflow: hidden;
+        border: 1px solid #f6b6d5;
+        border-radius: 10px;
+        background: #ffffff;
+        color: #27272a;
+        font-size: 16px;
+        line-height: 1.5;
       }
 
       .furimanager-listing-date-panel__title {
-        margin-bottom: 8px;
-        color: #111111;
-        font-size: 12px;
+        padding: 13px 18px;
+        background: #fdf2f8;
+        color: #27272a;
+        font-size: 16px;
         font-weight: 700;
       }
 
       .furimanager-listing-date-panel__row {
         display: grid;
-        grid-template-columns: minmax(86px, max-content) minmax(0, 1fr) max-content;
-        gap: 12px;
+        grid-template-columns: max-content minmax(0, 1fr) max-content;
+        gap: 16px;
         align-items: center;
-        padding: 4px 0;
+        padding: 14px 18px;
+      }
+
+      .furimanager-listing-date-panel__row + .furimanager-listing-date-panel__row {
+        border-top: 1px solid #fce7f3;
       }
 
       .furimanager-listing-date-panel__label {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        color: #111111;
-        font-weight: 700;
+        gap: 8px;
+        color: #52525b;
+        font-weight: 600;
         white-space: nowrap;
       }
 
       .furimanager-listing-date-panel__icon {
-        width: 16px;
-        height: 16px;
-        color: #111111;
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        color: #52525b;
         fill: none;
         stroke: currentColor;
         stroke-linecap: round;
@@ -454,22 +463,49 @@
 
       .furimanager-listing-date-panel__absolute {
         display: block;
-        color: #111111;
-        font-weight: 700;
+        color: #27272a;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
         white-space: nowrap;
       }
 
       .furimanager-listing-date-panel__relative {
+        box-sizing: border-box;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 4px 8px;
+        min-width: 70px;
+        padding: 7px 12px;
         border-radius: 8px;
-        background: rgba(236, 72, 153, 0.12);
-        color: #ec4899;
-        font-size: 11px;
+        background: #fce7f3;
+        color: #be185d;
+        font-size: 18px;
         font-weight: 700;
+        line-height: 1.25;
         white-space: nowrap;
+      }
+
+      /* \u753B\u9762\u5E45\u3067\u306F\u306A\u304F\u30AB\u30FC\u30C9\u5E45\u306B\u5408\u308F\u305B\u3001\u72ED\u3044PC\u30AB\u30E9\u30E0\u3067\u3082\u65E5\u6642\u3092\u5207\u3089\u306A\u3044\u3002 */
+      @container (max-width: 440px) {
+        .furimanager-listing-date-panel__row {
+          grid-template-columns: minmax(0, 1fr) max-content;
+          gap: 8px 12px;
+          padding: 12px 16px;
+        }
+
+        .furimanager-listing-date-panel__title {
+          padding: 12px 16px;
+        }
+
+        .furimanager-listing-date-panel__value {
+          grid-column: 1 / -1;
+          grid-row: 2;
+        }
+
+        .furimanager-listing-date-panel__relative {
+          grid-column: 2;
+          grid-row: 1;
+        }
       }
 
       .furimanager-listing-seller-panel {
@@ -779,11 +815,6 @@
           transform: none;
           margin-top: 8px;
           grid-template-columns: repeat(3, max-content);
-        }
-
-        .furimanager-listing-date-panel__row {
-          grid-template-columns: minmax(76px, max-content) minmax(0, 1fr) max-content;
-          gap: 8px;
         }
 
         .furimanager-listing-seller-panel {
@@ -1440,7 +1471,8 @@
     }
     function renderListingDatePanel(dateInfo, itemId) {
       const existingPanel = document.querySelector(`[${LISTING_DATE_PANEL_ATTRIBUTE}="true"]`);
-      const mount = findListingDatePanelMount();
+      const anchor = findListingDatePanelAnchor();
+      const mount = anchor?.element.parentElement ?? findListingDatePanelMount();
       if (!mount) {
         return;
       }
@@ -1459,9 +1491,11 @@
       if (dateInfo.updatedAt) {
         panel.appendChild(createListingDateRow("\u66F4\u65B0\u65E5\u6642", dateInfo.updatedAt));
       }
-      const policyCard = findListingDatePanelAnchor();
-      if (policyCard?.parentElement) {
-        policyCard.parentElement.insertBefore(panel, policyCard);
+      if (anchor) {
+        const neighbor = anchor.position === "afterend" ? anchor.element.nextElementSibling : anchor.element.previousElementSibling;
+        if (neighbor !== panel) {
+          anchor.element.insertAdjacentElement(anchor.position, panel);
+        }
         return;
       }
       if (panel.parentElement !== mount) {
@@ -1964,7 +1998,15 @@
       return headingMount instanceof HTMLElement ? headingMount : null;
     }
     function findListingDatePanelAnchor() {
-      return toHTMLElement(document.querySelector('[data-testid="user-protection-policy"]'));
+      const shippingDays = document.querySelector('[data-testid="\u767A\u9001\u307E\u3067\u306E\u65E5\u6570"]') ?? findMercariDetailBody(document, "\u767A\u9001\u307E\u3067\u306E\u65E5\u6570");
+      const shippingRow = shippingDays?.closest("mer-display-row, .merDisplayRow, dl, tr");
+      const shippingAnchor = shippingRow?.tagName === "TR" ? shippingRow.closest("table") : shippingRow;
+      if (shippingAnchor instanceof HTMLElement) {
+        return { element: shippingAnchor, position: "afterend" };
+      }
+      const policyCard = document.querySelector('[data-testid="user-protection-policy"], [data-testid="marketplace-trust-bubble-link"]');
+      const policyAnchor = policyCard?.closest("section") ?? policyCard;
+      return policyAnchor instanceof HTMLElement ? { element: policyAnchor, position: "beforebegin" } : null;
     }
     function createListingDateRow(labelText, date) {
       const row = document.createElement("div");

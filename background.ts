@@ -1,4 +1,6 @@
 (() => {
+  // 手動の一括値下げは既存の個別操作・定期処理から分離する。
+  importScripts("src/mercari-bulk-policy.js", "src/mercari-bulk-background.js");
   try {
     importScripts("config.js");
   } catch {
@@ -71,6 +73,20 @@
         console.error("[furimanager-extension] sendResponse failed");
       }
     };
+
+    if (message?.type === "OPEN_YAHOO_RELIST") {
+      void openYahooRelist(message.token, sender).then(respond).catch(() => respond({ success: false }));
+      return true;
+    }
+
+    if (message?.type === "FETCH_YAHOO_IMAGE_AS_DATA_URL") {
+      if (!isAllowedYahooSender(sender, true)) {
+        respond({ success: false });
+        return false;
+      }
+      void fetchImageAsDataUrl(message.url, "yahoo").then(respond);
+      return true;
+    }
 
     if (message?.type === "FETCH_IMAGE_AS_DATA_URL") {
       if (!isAllowedMercariPageSender(sender)) {
@@ -1311,8 +1327,47 @@
     });
   }
 
-  async function fetchImageAsDataUrl(url: string | undefined) {
-    const parsedUrl = getAllowedImageUrl(url);
+  async function openYahooRelist(token: unknown, sender: any) {
+    if (!isAllowedYahooSender(sender) || (sender.frameId != null && sender.frameId !== 0) || !Number.isInteger(sender.tab?.id) || typeof token !== "string" || !/^[0-9a-f-]{36}$/.test(token)) return { success: false };
+    const key = `furimanager_yahoo_relist_${token}`;
+    const state = await getLocalStorage([key]);
+    const job = state[key];
+    // SPAで編集→商品へ戻るとsender.urlが編集画面のままの場合がある。
+    // メッセージの自己申告ではなく、Chromeが持つ現在のタブURLで商品を照合する。
+    const tab = await new Promise<{ url?: string }>((resolve, reject) => {
+      chromeApi.tabs.get(sender.tab.id, (current: { url?: string }) => {
+        if (chromeApi.runtime.lastError || !current) reject(new Error("元の商品ページを確認できませんでした"));
+        else resolve(current);
+      });
+    });
+    const source = new URL(tab.url || "");
+    if (source.origin !== "https://paypayfleamarket.yahoo.co.jp") return { success: false };
+    const sourceId = source.pathname.match(/^\/item\/(z\d+)$/)?.[1];
+    if (!sourceId || job?.item?.itemId !== sourceId || !["relist", "draft"].includes(job?.mode) ||
+      typeof job.savedAt !== "number" || Date.now() < job.savedAt || Date.now() - job.savedAt > 120000) return { success: false };
+    await createTab({ url: `https://paypayfleamarket-sec.yahoo.co.jp/item/add#furimanager-yahoo=${token}`, active: true });
+    return { success: true };
+  }
+
+  function isAllowedYahooSender(sender: any, sellOnly = false): boolean {
+    try {
+      const url = new URL(sender?.url ?? sender?.tab?.url);
+      return sellOnly
+        ? url.origin === "https://paypayfleamarket-sec.yahoo.co.jp" && url.pathname === "/item/add"
+        : url.origin === "https://paypayfleamarket.yahoo.co.jp";
+    } catch { return false; }
+  }
+
+  function getAllowedYahooImageUrl(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    try {
+      const url = new URL(value);
+      return url.origin === "https://auctions.c.yimg.jp" && url.pathname.startsWith("/images.auctions.yahoo.co.jp/") && !url.username && !url.password ? url.href : null;
+    } catch { return null; }
+  }
+
+  async function fetchImageAsDataUrl(url: string | undefined, platform: "mercari" | "yahoo" = "mercari") {
+    const parsedUrl = platform === "yahoo" ? getAllowedYahooImageUrl(url) : getAllowedImageUrl(url);
     if (!parsedUrl) {
       return { success: false, message: "画像URLが見つかりませんでした" };
     }
@@ -1335,7 +1390,9 @@
         return { success: false, message: "画像の取得に失敗しました" };
       }
 
-      const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "";
+      const declaredType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "";
+      // Yahooの実商品画像はimage/jpgを返すことがある。Fileには標準のJPEG名で渡す。
+      const type = platform === "yahoo" && declaredType === "image/jpg" ? "image/jpeg" : declaredType;
       if (!["image/jpeg", "image/png", "image/webp"].includes(type)) {
         return { success: false, message: "画像の取得に失敗しました" };
       }

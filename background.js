@@ -1,5 +1,6 @@
 (() => {
   (() => {
+    importScripts("src/mercari-bulk-policy.js", "src/mercari-bulk-background.js");
     try {
       importScripts("config.js");
     } catch {
@@ -60,6 +61,18 @@
           console.error("[furimanager-extension] sendResponse failed");
         }
       };
+      if (message?.type === "OPEN_YAHOO_RELIST") {
+        void openYahooRelist(message.token, sender).then(respond).catch(() => respond({ success: false }));
+        return true;
+      }
+      if (message?.type === "FETCH_YAHOO_IMAGE_AS_DATA_URL") {
+        if (!isAllowedYahooSender(sender, true)) {
+          respond({ success: false });
+          return false;
+        }
+        void fetchImageAsDataUrl(message.url, "yahoo").then(respond);
+        return true;
+      }
       if (message?.type === "FETCH_IMAGE_AS_DATA_URL") {
         if (!isAllowedMercariPageSender(sender)) {
           respond({ success: false, message: "Image fetch is not allowed from this page." });
@@ -1042,8 +1055,43 @@
         }
       });
     }
-    async function fetchImageAsDataUrl(url) {
-      const parsedUrl = getAllowedImageUrl(url);
+    async function openYahooRelist(token, sender) {
+      if (!isAllowedYahooSender(sender) || sender.frameId != null && sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) || typeof token !== "string" || !/^[0-9a-f-]{36}$/.test(token)) return { success: false };
+      const key = `furimanager_yahoo_relist_${token}`;
+      const state = await getLocalStorage([key]);
+      const job = state[key];
+      const tab = await new Promise((resolve, reject) => {
+        chromeApi.tabs.get(sender.tab.id, (current) => {
+          if (chromeApi.runtime.lastError || !current) reject(new Error("\u5143\u306E\u5546\u54C1\u30DA\u30FC\u30B8\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F"));
+          else resolve(current);
+        });
+      });
+      const source = new URL(tab.url || "");
+      if (source.origin !== "https://paypayfleamarket.yahoo.co.jp") return { success: false };
+      const sourceId = source.pathname.match(/^\/item\/(z\d+)$/)?.[1];
+      if (!sourceId || job?.item?.itemId !== sourceId || !["relist", "draft"].includes(job?.mode) || typeof job.savedAt !== "number" || Date.now() < job.savedAt || Date.now() - job.savedAt > 12e4) return { success: false };
+      await createTab({ url: `https://paypayfleamarket-sec.yahoo.co.jp/item/add#furimanager-yahoo=${token}`, active: true });
+      return { success: true };
+    }
+    function isAllowedYahooSender(sender, sellOnly = false) {
+      try {
+        const url = new URL(sender?.url ?? sender?.tab?.url);
+        return sellOnly ? url.origin === "https://paypayfleamarket-sec.yahoo.co.jp" && url.pathname === "/item/add" : url.origin === "https://paypayfleamarket.yahoo.co.jp";
+      } catch {
+        return false;
+      }
+    }
+    function getAllowedYahooImageUrl(value) {
+      if (typeof value !== "string") return null;
+      try {
+        const url = new URL(value);
+        return url.origin === "https://auctions.c.yimg.jp" && url.pathname.startsWith("/images.auctions.yahoo.co.jp/") && !url.username && !url.password ? url.href : null;
+      } catch {
+        return null;
+      }
+    }
+    async function fetchImageAsDataUrl(url, platform = "mercari") {
+      const parsedUrl = platform === "yahoo" ? getAllowedYahooImageUrl(url) : getAllowedImageUrl(url);
       if (!parsedUrl) {
         return { success: false, message: "\u753B\u50CFURL\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F" };
       }
@@ -1061,7 +1109,8 @@
         if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
           return { success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" };
         }
-        const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "";
+        const declaredType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "";
+        const type = platform === "yahoo" && declaredType === "image/jpg" ? "image/jpeg" : declaredType;
         if (!["image/jpeg", "image/png", "image/webp"].includes(type)) {
           return { success: false, message: "\u753B\u50CF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" };
         }

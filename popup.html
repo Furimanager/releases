@@ -80,16 +80,15 @@
         <p id="authMessage" class="auth-message auth-message--idle">設定待ち</p>
 
         <div id="signupPrompt" class="auth-card__signup" hidden>
-          <p>アカウントがない場合はこちら</p>
           <div id="googleLoginBlock" class="google-login-block">
-            <button id="googleLoginButton" class="google-button google-button--compact" type="button" title="Webでログインして拡張機能と連携します">
+            <button id="googleLoginButton" class="google-button google-button--compact" type="button">
               <svg class="google-button__logo" viewBox="0 0 48 48" width="14" height="14" aria-hidden="true">
                 <path fill="#4285F4" d="M47.53 24.55c0-1.63-.15-3.2-.42-4.7H24.5v8.89h12.93c-.56 3-2.25 5.54-4.79 7.24v6.02h7.75c4.54-4.18 7.14-10.34 7.14-17.45Z" />
                 <path fill="#34A853" d="M24.5 48c6.48 0 11.92-2.15 15.89-5.82l-7.75-6.02c-2.15 1.44-4.9 2.29-8.14 2.29-6.26 0-11.56-4.22-13.45-9.9H3.04v6.22C6.99 42.62 15.11 48 24.5 48Z" />
                 <path fill="#FBBC05" d="M11.05 28.55a14.4 14.4 0 0 1 0-9.1v-6.22H3.04a24 24 0 0 0 0 21.54l8.01-6.22Z" />
                 <path fill="#EA4335" d="M24.5 9.55c3.53 0 6.7 1.21 9.19 3.59l6.88-6.88C36.41 2.39 30.98 0 24.5 0 15.11 0 6.99 5.38 3.04 13.23l8.01 6.22c1.89-5.68 7.19-9.9 13.45-9.9Z" />
               </svg>
-              <span class="google-button__label">Googleでログイン</span>
+              <span class="google-button__label">Googleで続ける</span>
             </button>
           </div>
           <a id="signupLink" href="https://furimanager.app.furimakaikei.com/signup" target="_blank" rel="noopener noreferrer">アカウントを新規作成</a>
@@ -126,6 +125,7 @@
         </div>
         <p id="statusText" class="status-card__value status-card__value--idle">待機中</p>
         <dl id="statusDetails" class="status-details"></dl>
+        <a id="statusHelpLink" class="status-card__help" target="_blank" rel="noopener noreferrer" hidden></a>
       </section>
 
       <section class="panel actions-card">
@@ -134,6 +134,7 @@
             <p class="panel__eyebrow">Actions</p>
             <h2 class="panel__title">取得と同期</h2>
           </div>
+          <a id="usageGuideLink" class="panel__link" href="https://furimanager.app.furimakaikei.com/manual#setup/step-3" target="_blank" rel="noopener noreferrer">使い方</a>
         </div>
 
         <div class="action-grid">
