@@ -40,11 +40,14 @@
   // Web の連携ページ（/extension/connect）から externally_connectable 経由で届くメッセージ。
   const EXTENSION_CONNECT_MESSAGE_TYPE = "FURIMANE_EXTENSION_CONNECT";
   const EXTENSION_CONNECT_TOKEN_MAX_LENGTH = 512;
+  const EXTENSION_CONNECT_NETWORK_ERROR = "ログインサービスに接続できませんでした。少し時間をおいて、もう一度お試しください。";
+  const EXTENSION_CONNECT_RATE_ERROR = "連携の操作が続いています。少し時間をおいて、もう一度お試しください。";
+  const EXTENSION_CONNECT_EXPIRED_ERROR = "ログイン情報の有効期限が切れました。拡張機能からもう一度ログインしてください。";
   // 連携成功後、ページに「完了」を見せてからタブを閉じるまでの猶予。
   const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
   // 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
   // manifest.json の version と揃えて更新する。
-  const EXTENSION_FALLBACK_VERSION = "0.2.5";
+  const EXTENSION_FALLBACK_VERSION = "0.2.7";
   const EXTENSION_API_SCHEMA = "research-v1";
   const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
   const authState: {
@@ -422,24 +425,39 @@
    */
   async function exchangeExtensionConnectToken(token: string) {
     const { url, anonKey } = getConfig();
-    const response = await fetch(`${url}/auth/v1/verify`, {
-      method: "POST",
-      headers: {
-        apikey: anonKey,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ type: "magiclink", token_hash: token })
-    });
-    const data = await response.json().catch(() => null);
-
-    // Supabase 側の英語メッセージはそのまま返さない。トークンもログに出さない。
-    if (!response.ok || !data?.access_token || !data?.user) {
-      throw new Error(
-        "連携用トークンが無効か、有効期限が切れています。連携ページからもう一度お試しください。"
-      );
+    const controller = new AbortController();
+    // Web側の応答待ち20秒より先に終了し、遅れてログインするのを防ぐ。
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(`${url}/auth/v1/verify`, {
+        method: "POST",
+        headers: { apikey: anonKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "magiclink", token_hash: token }),
+        signal: controller.signal
+      });
+      const data = await response.json().catch(() => null);
+      if (response.status === 429) throw new Error(EXTENSION_CONNECT_RATE_ERROR);
+      if (response.status >= 500) throw new Error(EXTENSION_CONNECT_NETWORK_ERROR);
+      if (!response.ok) {
+        if (data?.code === "otp_expired" || data?.error_code === "otp_expired") {
+          throw new Error(EXTENSION_CONNECT_EXPIRED_ERROR);
+        }
+        throw new Error("ログイン情報を確認できませんでした。拡張機能からもう一度ログインしてください。");
+      }
+      if (!data?.access_token || !data?.refresh_token || !data?.user?.id) {
+        throw new Error(EXTENSION_CONNECT_NETWORK_ERROR);
+      }
+      return data;
+    } catch (error) {
+      // 内部の英語エラー・認証情報は表示しない。
+      if (error instanceof Error && [
+        EXTENSION_CONNECT_RATE_ERROR, EXTENSION_CONNECT_EXPIRED_ERROR,
+        "ログイン情報を確認できませんでした。拡張機能からもう一度ログインしてください。"
+      ].includes(error.message)) throw error;
+      throw new Error(EXTENSION_CONNECT_NETWORK_ERROR);
+    } finally {
+      clearTimeout(timer);
     }
-
-    return data;
   }
 
   async function handleExtensionConnect(
@@ -493,9 +511,12 @@
       respond({
         ok: false,
         error:
-          error instanceof Error && error.message
+          error instanceof Error && [
+            EXTENSION_CONNECT_NETWORK_ERROR, EXTENSION_CONNECT_RATE_ERROR, EXTENSION_CONNECT_EXPIRED_ERROR,
+            "ログイン情報を確認できませんでした。拡張機能からもう一度ログインしてください。"
+          ].includes(error.message)
             ? error.message
-            : "拡張機能へのログインに失敗しました。"
+            : "拡張機能へのログインに失敗しました。もう一度お試しください。"
       });
     }
   }

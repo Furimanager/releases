@@ -1270,7 +1270,7 @@ function handleGoogleLoginClick() {
     chrome.tabs.create({ url: getExtensionConnectUrl(), active: true });
     setAuthMessage(
       "idle",
-      "連携ページを開きました。ログイン済みなら自動で連携され、タブは自動で閉じます。"
+      "開いたページで、使用するアカウントを確認してください。"
     );
   } catch (error) {
     setAuthMessage("error", getUserFacingErrorMessage(error, "連携ページを開けませんでした"));

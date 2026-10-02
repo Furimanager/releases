@@ -38,8 +38,11 @@
     const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1e3;
     const EXTENSION_CONNECT_MESSAGE_TYPE = "FURIMANE_EXTENSION_CONNECT";
     const EXTENSION_CONNECT_TOKEN_MAX_LENGTH = 512;
+    const EXTENSION_CONNECT_NETWORK_ERROR = "\u30ED\u30B0\u30A4\u30F3\u30B5\u30FC\u30D3\u30B9\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u5C11\u3057\u6642\u9593\u3092\u304A\u3044\u3066\u3001\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
+    const EXTENSION_CONNECT_RATE_ERROR = "\u9023\u643A\u306E\u64CD\u4F5C\u304C\u7D9A\u3044\u3066\u3044\u307E\u3059\u3002\u5C11\u3057\u6642\u9593\u3092\u304A\u3044\u3066\u3001\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
+    const EXTENSION_CONNECT_EXPIRED_ERROR = "\u30ED\u30B0\u30A4\u30F3\u60C5\u5831\u306E\u6709\u52B9\u671F\u9650\u304C\u5207\u308C\u307E\u3057\u305F\u3002\u62E1\u5F35\u6A5F\u80FD\u304B\u3089\u3082\u3046\u4E00\u5EA6\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
     const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
-    const EXTENSION_FALLBACK_VERSION = "0.2.5";
+    const EXTENSION_FALLBACK_VERSION = "0.2.7";
     const EXTENSION_API_SCHEMA = "research-v1";
     const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
     const authState = {
@@ -334,21 +337,38 @@
     }
     async function exchangeExtensionConnectToken(token) {
       const { url, anonKey } = getConfig();
-      const response = await fetch(`${url}/auth/v1/verify`, {
-        method: "POST",
-        headers: {
-          apikey: anonKey,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ type: "magiclink", token_hash: token })
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok || !data?.access_token || !data?.user) {
-        throw new Error(
-          "\u9023\u643A\u7528\u30C8\u30FC\u30AF\u30F3\u304C\u7121\u52B9\u304B\u3001\u6709\u52B9\u671F\u9650\u304C\u5207\u308C\u3066\u3044\u307E\u3059\u3002\u9023\u643A\u30DA\u30FC\u30B8\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002"
-        );
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15e3);
+      try {
+        const response = await fetch(`${url}/auth/v1/verify`, {
+          method: "POST",
+          headers: { apikey: anonKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "magiclink", token_hash: token }),
+          signal: controller.signal
+        });
+        const data = await response.json().catch(() => null);
+        if (response.status === 429) throw new Error(EXTENSION_CONNECT_RATE_ERROR);
+        if (response.status >= 500) throw new Error(EXTENSION_CONNECT_NETWORK_ERROR);
+        if (!response.ok) {
+          if (data?.code === "otp_expired" || data?.error_code === "otp_expired") {
+            throw new Error(EXTENSION_CONNECT_EXPIRED_ERROR);
+          }
+          throw new Error("\u30ED\u30B0\u30A4\u30F3\u60C5\u5831\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u62E1\u5F35\u6A5F\u80FD\u304B\u3089\u3082\u3046\u4E00\u5EA6\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+        }
+        if (!data?.access_token || !data?.refresh_token || !data?.user?.id) {
+          throw new Error(EXTENSION_CONNECT_NETWORK_ERROR);
+        }
+        return data;
+      } catch (error) {
+        if (error instanceof Error && [
+          EXTENSION_CONNECT_RATE_ERROR,
+          EXTENSION_CONNECT_EXPIRED_ERROR,
+          "\u30ED\u30B0\u30A4\u30F3\u60C5\u5831\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u62E1\u5F35\u6A5F\u80FD\u304B\u3089\u3082\u3046\u4E00\u5EA6\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002"
+        ].includes(error.message)) throw error;
+        throw new Error(EXTENSION_CONNECT_NETWORK_ERROR);
+      } finally {
+        clearTimeout(timer);
       }
-      return data;
     }
     async function handleExtensionConnect(message, respond, senderTabId = null) {
       try {
@@ -376,7 +396,12 @@
         console.warn("[furimanager-extension] extension connect failed");
         respond({
           ok: false,
-          error: error instanceof Error && error.message ? error.message : "\u62E1\u5F35\u6A5F\u80FD\u3078\u306E\u30ED\u30B0\u30A4\u30F3\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002"
+          error: error instanceof Error && [
+            EXTENSION_CONNECT_NETWORK_ERROR,
+            EXTENSION_CONNECT_RATE_ERROR,
+            EXTENSION_CONNECT_EXPIRED_ERROR,
+            "\u30ED\u30B0\u30A4\u30F3\u60C5\u5831\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u62E1\u5F35\u6A5F\u80FD\u304B\u3089\u3082\u3046\u4E00\u5EA6\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002"
+          ].includes(error.message) ? error.message : "\u62E1\u5F35\u6A5F\u80FD\u3078\u306E\u30ED\u30B0\u30A4\u30F3\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002"
         });
       }
     }
