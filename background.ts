@@ -1095,6 +1095,9 @@
     const latestStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
     const latestRefreshToken =
       typeof latestStorage.supabaseRefreshToken === "string" ? latestStorage.supabaseRefreshToken : null;
+    if (!latestRefreshToken) {
+      return applyAuthStateFromStorage(latestStorage);
+    }
     if (
       latestRefreshToken &&
       latestRefreshToken !== authState.refreshToken &&
@@ -1107,6 +1110,8 @@
       applyAuthStateFromStorage(latestStorage);
     }
 
+    const requestedRefreshToken = authState.refreshToken;
+    const requestedUser = authState.user;
     const { url, anonKey } = getConfig();
     const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
       method: "POST",
@@ -1114,9 +1119,18 @@
         apikey: anonKey,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ refresh_token: authState.refreshToken })
+      body: JSON.stringify({ refresh_token: requestedRefreshToken })
     });
     const data = await response.json().catch(() => null);
+    const currentStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
+    // Web連携・ポップアップのログアウトを、遅れた旧セッションの応答で巻き戻さない。
+    if (
+      currentStorage.supabaseAccessToken !== latestStorage.supabaseAccessToken ||
+      currentStorage.supabaseRefreshToken !== latestStorage.supabaseRefreshToken ||
+      currentStorage.supabaseUser?.id !== latestStorage.supabaseUser?.id
+    ) {
+      return applyAuthStateFromStorage(currentStorage);
+    }
 
     if (!response.ok || !data?.access_token) {
       const fallbackStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
@@ -1135,7 +1149,7 @@
       return false;
     }
 
-    await persistAuthSession(data, authState.refreshToken, authState.user);
+    await persistAuthSession(data, requestedRefreshToken, requestedUser);
 
     return Boolean(authState.accessToken && authState.user);
   }

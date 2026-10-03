@@ -12,6 +12,8 @@ const AUTH_STORAGE_KEYS = [
   "supabaseTokenExpiresAt"
 ];
 const TOKEN_REFRESH_MARGIN_MS = 30 * 60 * 1000;
+const AUTH_REQUEST_TIMEOUT_MS = 15000;
+const AUTH_NETWORK_ERROR = "ログインサービスに接続できませんでした。少し時間をおいて、もう一度お試しください。";
 // Web 側の拡張連携ページ。Googleでログインした人はここ経由で拡張にログインする。
 const EXTENSION_CONNECT_PATH = "/extension/connect";
 const DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
@@ -23,7 +25,7 @@ const LEGACY_APP_URLS = new Set([
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
 // 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
 // manifest.json の version と揃えて更新する。
-const EXTENSION_FALLBACK_VERSION = "0.2.5";
+const EXTENSION_FALLBACK_VERSION = "0.2.8";
 const EXTENSION_API_SCHEMA = "research-v1";
 const SALES_RECIPE_STORAGE_KEY = "mercariSalesRecipeCache";
 const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
@@ -87,7 +89,7 @@ let currentRakurakuApprovalCandidate = null;
 let rakurakuAutoPollEnabled = false;
 let currentRakurakuMode = null;
 let researchFeatureEnabled = false;
-let isAuthStateReady = false;
+let authRequestVersion = 0;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 const USER_FACING_SYSTEM_CODE_MESSAGES = {
   auth_required: "ログインが必要です。拡張機能にログインしてからもう一度お試しください。",
@@ -235,7 +237,9 @@ function getUserFacingErrorMessage(error, fallbackMessage = "不明なエラー�
 }
 
 function isLoggedIn() {
-  return Boolean(authState.accessToken && authState.user);
+  // 更新失敗時も保存情報は残すが、期限切れのトークンではログイン済み表示にしない。
+  const expired = typeof authState.tokenExpiresAt === "number" && authState.tokenExpiresAt <= Date.now();
+  return Boolean(authState.accessToken && authState.user && !expired);
 }
 
 function updateAuthUi() {
@@ -263,7 +267,8 @@ function updateAuthUi() {
     ? "auth-card__state auth-card__state--success"
     : "auth-card__state auth-card__state--idle";
   sessionText.textContent = loggedIn ? userEmail : "ログイン中";
-  signupPrompt.hidden = loggedIn || !isAuthStateReady;
+  // 保存セッションの確認中でも、未ログイン画面の入口を隠さない。
+  signupPrompt.hidden = loggedIn;
 
   if (isLoginView) {
     loginViewLoggedOutIcon.hidden = loggedIn;
@@ -914,8 +919,10 @@ function parseSupabaseError(data, fallbackMessage) {
 
 function isInvalidRefreshSessionError(data) {
   const normalizedMessage = parseSupabaseError(data, "").toLowerCase();
+  const code = data?.code || data?.error_code;
 
   return (
+    ["refresh_token_not_found", "refresh_token_already_used", "session_not_found", "session_expired"].includes(code) ||
     normalizedMessage.includes("invalid_grant") ||
     (normalizedMessage.includes("refresh token") &&
       (normalizedMessage.includes("not found") ||
@@ -1029,6 +1036,43 @@ function shouldRefreshAuthToken(expiresAt) {
   return typeof expiresAt !== "number" || Date.now() >= expiresAt - TOKEN_REFRESH_MARGIN_MS;
 }
 
+async function requestSupabaseAuth(grantType, payload) {
+  const { url, anonKey } = getConfig();
+  const controller = new AbortController();
+  let timer;
+  try {
+    // ヘッダーだけ届いて本文が止まった場合も、待ち続けない。
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(`${url}/auth/v1/token?grant_type=${grantType}`, {
+          method: "POST",
+          headers: { apikey: anonKey, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        const data = await response.json().catch(() => null);
+        return { response, data };
+      })(),
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error(AUTH_NETWORK_ERROR));
+        }, AUTH_REQUEST_TIMEOUT_MS);
+      })
+    ]);
+  } catch {
+    throw new Error(AUTH_NETWORK_ERROR);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isSameStoredAuthSession(left, right) {
+  return left.supabaseAccessToken === right.supabaseAccessToken &&
+    left.supabaseRefreshToken === right.supabaseRefreshToken &&
+    left.supabaseUser?.id === right.supabaseUser?.id;
+}
+
 async function persistAuthSession(data, fallbackRefreshToken = null, fallbackUser = null) {
   const tokenExpiresAt = getTokenExpiresAt(data.expires_in);
 
@@ -1051,53 +1095,35 @@ async function refreshSupabaseSession() {
   }
 
   const latestStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
-  const latestRefreshToken =
-    typeof latestStorage.supabaseRefreshToken === "string" ? latestStorage.supabaseRefreshToken : null;
-  if (
-    latestRefreshToken &&
-    latestRefreshToken !== authState.refreshToken &&
-    applyAuthStateFromStorage(latestStorage) &&
-    !shouldRefreshAuthToken(authState.tokenExpiresAt)
-  ) {
-    return true;
-  }
-  if (latestRefreshToken && latestRefreshToken !== authState.refreshToken) {
-    applyAuthStateFromStorage(latestStorage);
-  }
+  applyAuthStateFromStorage(latestStorage);
+  if (!authState.refreshToken) return false;
+  if (isLoggedIn() && !shouldRefreshAuthToken(authState.tokenExpiresAt)) return true;
 
-  const { url, anonKey } = getConfig();
-  const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
-    method: "POST",
-    headers: {
-      apikey: anonKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ refresh_token: authState.refreshToken })
-  });
-  const data = await response.json().catch(() => null);
+  const requestVersion = authRequestVersion;
+  const requestedRefreshToken = authState.refreshToken;
+  const requestedUser = authState.user;
+  const result = await requestSupabaseAuth("refresh_token", { refresh_token: requestedRefreshToken })
+    .catch(error => ({ error }));
+  const currentStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
+
+  // 待っている間に別タブで連携・ログアウトした場合は、その新しい状態を優先する。
+  if (requestVersion !== authRequestVersion || !isSameStoredAuthSession(latestStorage, currentStorage)) {
+    return applyAuthStateFromStorage(currentStorage);
+  }
+  if (result.error) throw result.error;
+  const { response, data } = result;
 
   if (!response.ok || !data?.access_token) {
-    const fallbackStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
-    if (
-      fallbackStorage.supabaseRefreshToken &&
-      fallbackStorage.supabaseRefreshToken !== authState.refreshToken &&
-      applyAuthStateFromStorage(fallbackStorage)
-    ) {
-      if (!shouldRefreshAuthToken(authState.tokenExpiresAt)) {
-        return true;
-      }
-
-      return refreshSupabaseSession();
-    }
-
-    if (isInvalidRefreshSessionError(data)) {
+    if ([400, 401, 403].includes(response.status) && isInvalidRefreshSessionError(data)) {
       await logoutFromSupabase();
+      return false;
     }
-
-    return false;
+    if (response.status === 429) throw new Error("操作が続いています。少し時間をおいて、もう一度お試しください。");
+    // サーバー障害をログアウト・期限切れと扱わず、再接続に必要な情報を保持する。
+    throw new Error(AUTH_NETWORK_ERROR);
   }
 
-  await persistAuthSession(data, authState.refreshToken, authState.user);
+  await persistAuthSession(data, requestedRefreshToken, requestedUser);
 
   return isLoggedIn();
 }
@@ -1131,6 +1157,7 @@ function applyAuthStateFromStorage(storageState) {
 async function restoreAuthState() {
   const storageState = await getLocalStorage(AUTH_STORAGE_KEYS);
   let hasSession = applyAuthStateFromStorage(storageState);
+  updateAuthUi();
 
   if (
     authState.refreshToken &&
@@ -1139,33 +1166,32 @@ async function restoreAuthState() {
     hasSession = await refreshSupabaseSession();
   }
 
-  isAuthStateReady = true;
   updateAuthUi();
   setAuthMessage(hasSession ? "success" : "idle", hasSession ? "ログイン状態を復元しました" : "未ログインです");
 }
 
 async function loginToSupabase(email, password) {
-  const { url, anonKey } = getConfig();
+  const requestVersion = ++authRequestVersion;
+  const initialStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
+  const result = await requestSupabaseAuth("password", { email, password }).catch(error => ({ error }));
+  const currentStorage = await getLocalStorage(AUTH_STORAGE_KEYS);
+  if (requestVersion !== authRequestVersion || !isSameStoredAuthSession(initialStorage, currentStorage)) {
+    // 既存アカウントの自動更新もここに来るため、今回の明示ログイン成功とは扱わない。
+    const hasCurrentSession = applyAuthStateFromStorage(currentStorage);
+    throw new Error(hasCurrentSession
+      ? "ログイン状態が変更されました。表示中のアカウントを確認してください。別のアカウントを使う場合は、ログアウトしてからやり直してください。"
+      : "ログイン状態が変更されました。もう一度ログインしてください。");
+  }
+  if (result.error) throw result.error;
+  const { response, data } = result;
 
-  const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: {
-      apikey: anonKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      email,
-      password
-    })
-  });
-
-  const data = await response.json().catch(() => null);
-
+  if (response.status >= 500) throw new Error(AUTH_NETWORK_ERROR);
+  if (response.status === 429) throw new Error("操作が続いています。少し時間をおいて、もう一度お試しください。");
   if (!response.ok) {
     throw new Error(parseSupabaseError(data, "ログインに失敗しました"));
   }
 
-  if (!data?.access_token || !data?.user) {
+  if (!data?.access_token || !data?.refresh_token || !data?.user?.id) {
     throw new Error("ログイン結果の取得に失敗しました");
   }
 
@@ -1173,6 +1199,7 @@ async function loginToSupabase(email, password) {
 }
 
 async function logoutFromSupabase() {
+  authRequestVersion += 1;
   authState.accessToken = null;
   authState.refreshToken = null;
   authState.user = null;
@@ -1232,7 +1259,6 @@ async function handleLoginSubmit(event) {
 
   try {
     await loginToSupabase(email, password);
-    isAuthStateReady = true;
     passwordInput.value = "";
     updateAuthUi();
     setAuthMessage("success", "ログインしました");
@@ -1287,7 +1313,6 @@ async function handleAuthStorageChanged() {
     const storageState = await getLocalStorage(AUTH_STORAGE_KEYS);
     const nowLoggedIn = applyAuthStateFromStorage(storageState);
 
-    isAuthStateReady = true;
     updateAuthUi();
 
     // ログアウト時のメッセージを上書きしないよう、未ログイン→ログインのときだけ知らせる。
@@ -1306,7 +1331,6 @@ async function handleLogout() {
 
   try {
     await logoutFromSupabase();
-    isAuthStateReady = true;
     updateAuthUi();
     setAuthMessage("idle", "ログアウトしました");
   } catch (error) {
@@ -1779,7 +1803,6 @@ async function initializePopup() {
       await loadRakurakuPendingTaskPreview();
     }
   } catch (error) {
-    isAuthStateReady = true;
     updateAuthUi();
     setAuthMessage("error", getUserFacingErrorMessage(error, "ログイン状態の復元に失敗しました"));
   }
@@ -1802,6 +1825,7 @@ if (chrome.storage?.onChanged) {
       return;
     }
 
+    authRequestVersion += 1;
     void handleAuthStorageChanged();
   });
 }
