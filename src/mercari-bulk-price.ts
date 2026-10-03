@@ -47,15 +47,17 @@
   function mount() {
     const root = activeRoot();
     if (!root) { mounted?.remove(); mounted = null; return; }
-    if (mounted?.isConnected) return;
-    const tabs = root.querySelector('[role="tablist"]');
-    const firstCard = root.querySelector('a[data-testid="listed-item"][href^="/item/"]');
-    // タブDOMが変わった場合は、最初の商品行を内包する一覧の手前に置く。
-    let list: Element | null = firstCard;
-    while (list?.parentElement && list.parentElement !== root && !list.parentElement.querySelector('[role="tablist"]')) {
-      list = list.parentElement;
-    }
+    // メルカリの実タブはrole=tablistではなくnav内のリンク（2026-10-03確認）。
+    const tabs = root.querySelector('[data-testid="tab-to-listing"]')?.closest("nav")
+      ?? root.querySelector('[role="tablist"]');
+    const list = root.querySelector('[data-testid="listed-item-list"]');
     if (!tabs && !list) return;
+    // SPAの再描画でタブだけ差し替わっても、選定した位置に揃える。
+    if (mounted?.isConnected) {
+      if (tabs && tabs.nextElementSibling !== mounted) tabs.after(mounted);
+      else if (!tabs && list?.previousElementSibling !== mounted) list!.before(mounted);
+      return;
+    }
     mounted = element("section", "", "fm-bulk");
     mounted.id = ROOT_ID;
     mounted.setAttribute("aria-label", "フリマネ 一括値下げ");
@@ -84,7 +86,10 @@
     const text = error instanceof Error ? error.message : "処理を続けられませんでした。";
     if (!mounted) return;
     let errorNode = mounted.querySelector<HTMLElement>(".fm-bulk-error");
-    if (!errorNode) { errorNode = element("p", "", "fm-bulk-error"); errorNode.setAttribute("role", "alert"); mounted.append(errorNode); }
+    if (!errorNode) {
+      errorNode = element("p", "", "fm-bulk-error"); errorNode.setAttribute("role", "alert");
+      (mounted.querySelector(".fm-bulk-content") ?? mounted).append(errorNode);
+    }
     errorNode.textContent = text;
   }
 
@@ -105,25 +110,30 @@
     const detailsOpen = mounted.querySelector("details")?.open ?? false;
     const resultScroll = mounted.querySelector(".fm-bulk-results")?.scrollTop ?? 0;
     const focusedLabel = mounted.contains(document.activeElement) ? document.activeElement?.textContent : null;
-    const heading = element("div", "", "fm-bulk-heading");
-    const label = element("div");
-    label.append(element("strong", "フリマネ 一括値下げ"), element("p", "更新から24時間＋5分経過した商品を、各1回100円値下げ"));
+    const heading = element("div", "フリマネ 一括値下げ", "fm-bulk-heading");
+    const content = element("div", "", "fm-bulk-content");
+    const toolbar = element("div", "", "fm-bulk-toolbar");
+    const label = element("p", "更新から24時間以上経過した商品を、各1回100円値下げ", "fm-bulk-hint");
     const actions = element("div", "", "fm-bulk-actions");
     const active = ["scanning", "ready", "running"].includes(state.status);
-    if (!active) actions.append(button(pending ? "確認中…" : "まとめて100円値下げ", "START"));
-    if (state.status === "ready" && owns && state.candidates?.length) actions.append(button(`${state.candidates.length}件を100円値下げする`, "EXECUTE"));
-    if (active && owns) actions.append(button(state.status === "ready" ? "実行せず閉じる" : "停止する", "CANCEL", true));
-    heading.append(label, actions);
-    mounted.replaceChildren(heading);
-    if (state.status === "idle") mounted.append(element("p", "対象を確認してから実行します。自動の定期実行はしません。", "fm-bulk-note"));
-    else {
+    if (!active) {
+      const start = button(pending ? "確認中…" : "一括 −100円", "START");
+      start.title = "対象商品を確認してから、各1回100円値下げします";
+      actions.append(start);
+    }
+    if (state.status === "ready" && owns && state.candidates?.length) actions.append(button(`${state.candidates.length}件を−100円`, "EXECUTE"));
+    if (active && owns) actions.append(button(state.status === "ready" ? "キャンセル" : "停止", "CANCEL", true));
+    toolbar.append(label, actions);
+    content.append(toolbar);
+    mounted.replaceChildren(heading, content);
+    if (state.status !== "idle") {
       const status = element("p", state.message ?? "確認中…", "fm-bulk-status");
       status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
-      mounted.append(status);
-      if (active && !owns) mounted.append(element("p", "開始したタブで操作してください。", "fm-bulk-note"));
-      mounted.append(element("p", `確認 ${state.scanned ?? 0}件 ／ 対象 ${state.candidates?.length ?? 0}件 ／ 完了 ${state.completed ?? 0}件 ／ 対象外・除外 ${state.skipped ?? 0}件`, "fm-bulk-counts"));
+      content.append(status);
+      if (active && !owns) content.append(element("p", "開始したタブで操作してください。", "fm-bulk-note"));
+      content.append(element("p", `確認 ${state.scanned ?? 0}件 ／ 対象 ${state.candidates?.length ?? 0}件 ／ 完了 ${state.completed ?? 0}件 ／ 対象外・除外 ${state.skipped ?? 0}件`, "fm-bulk-counts"));
       if (["ready", "running"].includes(state.status)) {
-        mounted.append(element("p", "400円未満・日時不明の商品などは対象外です。実行中はこの一覧を開いたままにしてください。停止時も保存を開始した1件は結果を確認します。", "fm-bulk-note"));
+        content.append(element("p", "400円未満・日時不明の商品などは対象外です。実行中はこの一覧を開いたままにしてください。停止時も保存を開始した1件は結果を確認します。", "fm-bulk-note"));
       }
       if (state.rows?.length) {
         const details = element("details");
@@ -140,11 +150,11 @@
             : `${price} · ${row.reason ?? row.status}`));
           rows.append(entry);
         }
-        details.append(rows); mounted.append(details);
+        details.append(rows); content.append(details);
         rows.scrollTop = resultScroll;
       }
     }
-    if (error) mounted.append(error);
+    if (error) content.append(error);
     if (focusedLabel) [...mounted.querySelectorAll<HTMLElement>("button, summary")].find(node => node.textContent === focusedLabel)?.focus({ preventScroll: true });
   }
 

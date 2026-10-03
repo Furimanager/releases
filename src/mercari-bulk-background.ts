@@ -13,7 +13,7 @@
       job = { ...saved[P.STATE_KEY], token: null, workerTab: null };
       if (busy()) {
         job.status = "interrupted";
-        job.message = "前回の処理が中断しました。自動再開はしません。確認中の商品は24時間＋5分、再実行の対象外です。";
+        job.message = "前回の処理が中断しました。自動再開はしません。確認中の商品は24時間、再実行の対象外です。";
       }
     }
   });
@@ -266,7 +266,16 @@
     }
     const action = message.type.slice(P.PREFIX.length);
     if (action === "AUTHORIZE") return authorize(message, sender);
-    if (sender.frameId !== 0 || !P.listingsPage(sender.url ?? "") || !Number.isInteger(sender.tab?.id)) {
+    let senderOrigin = "";
+    try { senderOrigin = new URL(sender.url).origin; } catch { /* URL不明は許可しない。 */ }
+    if (sender.frameId !== 0 || senderOrigin !== P.ORIGIN || (sender.origin && sender.origin !== P.ORIGIN)
+      || !Number.isInteger(sender.tab?.id)) {
+      throw new Error("出品中ページから操作してください。");
+    }
+    // SPA内の移動ではsender.urlに元の文書URLが残ることがある。
+    // 送信元のorigin/frameを確認した上で、Chromeが持つ現在のタブURLで判定する。
+    const currentTab = await api.tabs.get(sender.tab.id);
+    if (!P.listingsPage(currentTab.url ?? "") || (currentTab.pendingUrl && !P.listingsPage(currentTab.pendingUrl))) {
       throw new Error("出品中ページから操作してください。");
     }
     if (action === "STATUS") {

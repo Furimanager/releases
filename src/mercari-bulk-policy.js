@@ -39,7 +39,7 @@
       if (!Number.isSafeInteger(value.price) || value.price < 400 || value.price > 9999999) return "400\u5186\u672A\u6E80\u30FB\u4FA1\u683C\u4E0D\u660E";
       if (!Number.isFinite(at) || value.created === null || value.updated === null || value.updated < value.created) return "\u65E5\u6642\u3092\u78BA\u8A8D\u3067\u304D\u306A\u3044";
       if (!Number.isFinite(attemptedAt) || attemptedAt < 0) return "\u524D\u56DE\u306E\u5B9F\u884C\u8A18\u9332\u3092\u78BA\u8A8D\u3067\u304D\u306A\u3044";
-      if (at - Math.max(value.created, value.updated, attemptedAt) < AGE_MS) return "\u66F4\u65B0\u304B\u308924\u6642\u9593\uFF0B5\u5206\u672A\u6E80";
+      if (at - Math.max(value.created, value.updated, attemptedAt) < AGE_MS) return "\u66F4\u65B0\u304B\u308924\u6642\u9593\u672A\u6E80";
       return null;
     }
     function unchanged(before, after) {

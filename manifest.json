@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "フリマネージャー",
   "description": "メルカリの販売履歴をボタン一つでフリマネに記録。利益・確定申告の管理、再出品・値下げのワンクリック補助、ライバルセラーリサーチも。",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7nZC0bCXq142JrzUMlqYbQx1ENnoJkXW9azOGoWbTi3cSfA65nUGnLFIap64T5cxz0YDkTrpliX8CT5kl8DdYO/EdAlMLgxhc9mSSNt9DE0nNOWxcUPwn+n3gFDqCjRvxZ492fU+J4yvLo1ENXvJBUV0/vNDGRMhthhBpOKe3otDPia+5Q2Il1AyUUxIL4pJsx3qQl0L4k5tCgZonn+CoPRENgq85luwvnMO7clzxcPOaJW/ZWj1zWeiszh+qvYDZkDPwjqI3gWr395/Q5fm7gcc8dvFwtpddskNIKGWycYtPXGPm9CXw3V5Rykq+eFAauEzpnd/v1y2XCmDfyPXyQIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",

@@ -123,6 +123,8 @@ function fixture(options = {}) {
     for (let i = 0; i < 2000; i++) {
       const response = await send("STATUS");
       if (status.includes(response?.state?.status)) return response.state;
+      // 一覧を離れた後のSTATUSは拒否されるので、停止結果は永続記録で確認する。
+      if (response?.error && status.includes(storage[STATE]?.status)) return structuredClone(storage[STATE]);
       await new Promise(resolve => setImmediate(resolve));
     }
     throw new Error("state wait timeout");
@@ -161,8 +163,36 @@ test("2つの開始が重なっても1回、取引中や他のタブから実行
   const preview = await f.settle(["ready"]);
   const other = await f.send("EXECUTE", { jobId: preview.id }, { frameId: 0, tab: { id: 2 }, url: `${ORIGIN}/mypage/listings` });
   assert.ok(other.error);
+  f.tabs.get(1).url = `${ORIGIN}/mypage/listings/in_progress`;
   const trading = await f.send("START", {}, { frameId: 0, tab: { id: 1 }, url: `${ORIGIN}/mypage/listings/in_progress` });
   assert.ok(trading.error);
+});
+
+test("サイト内移動でsender.urlが古くても現在の出品中タブから対象確認できる", async () => {
+  const f = fixture();
+  const sender = { frameId: 0, tab: { id: 1 }, url: `${ORIGIN}/item/m123`, origin: ORIGIN };
+  assert.equal((await f.send("STATUS", {}, sender)).state?.status, "idle");
+  const started = await f.send("START", {}, sender);
+  assert.equal(started.error, undefined);
+  assert.equal((await f.settle(["ready"])).candidates.length, 1);
+  assert.equal(f.log.saves.length, 0);
+});
+
+test("古い送信元・偽のpageUrlで取引中や遷移中のタブを許可しない", async () => {
+  for (const url of [`${ORIGIN}/mypage/listings/in_progress`, `${ORIGIN}/mypage/listings/sold`, "https://example.com/"]) {
+    const f = fixture(); f.tabs.get(1).url = url;
+    assert.ok((await f.send("START", { pageUrl: `${ORIGIN}/mypage/listings` })).error);
+    assert.equal(f.log.reads.length, 0);
+  }
+  const pending = fixture(); pending.tabs.get(1).pendingUrl = `${ORIGIN}/item/m123`;
+  assert.ok((await pending.send("START")).error);
+  const foreign = fixture();
+  for (const sender of [
+    { frameId: 1, tab: { id: 1 }, url: `${ORIGIN}/mypage/listings`, origin: ORIGIN },
+    { frameId: 0, tab: { id: 1 }, url: "https://example.com/", origin: "https://example.com" },
+    { frameId: 0, url: `${ORIGIN}/mypage/listings`, origin: ORIGIN },
+  ]) assert.ok((await foreign.send("START", {}, sender)).error);
+  assert.equal(foreign.log.reads.length, 0);
 });
 
 test("確認後に価格や日時が変わった商品を除外", async () => {

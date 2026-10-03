@@ -14,7 +14,7 @@
         job = { ...saved[P.STATE_KEY], token: null, workerTab: null };
         if (busy()) {
           job.status = "interrupted";
-          job.message = "\u524D\u56DE\u306E\u51E6\u7406\u304C\u4E2D\u65AD\u3057\u307E\u3057\u305F\u3002\u81EA\u52D5\u518D\u958B\u306F\u3057\u307E\u305B\u3093\u3002\u78BA\u8A8D\u4E2D\u306E\u5546\u54C1\u306F24\u6642\u9593\uFF0B5\u5206\u3001\u518D\u5B9F\u884C\u306E\u5BFE\u8C61\u5916\u3067\u3059\u3002";
+          job.message = "\u524D\u56DE\u306E\u51E6\u7406\u304C\u4E2D\u65AD\u3057\u307E\u3057\u305F\u3002\u81EA\u52D5\u518D\u958B\u306F\u3057\u307E\u305B\u3093\u3002\u78BA\u8A8D\u4E2D\u306E\u5546\u54C1\u306F24\u6642\u9593\u3001\u518D\u5B9F\u884C\u306E\u5BFE\u8C61\u5916\u3067\u3059\u3002";
         }
       }
     });
@@ -273,7 +273,16 @@
       }
       const action = message.type.slice(P.PREFIX.length);
       if (action === "AUTHORIZE") return authorize(message, sender);
-      if (sender.frameId !== 0 || !P.listingsPage(sender.url ?? "") || !Number.isInteger(sender.tab?.id)) {
+      let senderOrigin = "";
+      try {
+        senderOrigin = new URL(sender.url).origin;
+      } catch {
+      }
+      if (sender.frameId !== 0 || senderOrigin !== P.ORIGIN || sender.origin && sender.origin !== P.ORIGIN || !Number.isInteger(sender.tab?.id)) {
+        throw new Error("\u51FA\u54C1\u4E2D\u30DA\u30FC\u30B8\u304B\u3089\u64CD\u4F5C\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      }
+      const currentTab = await api.tabs.get(sender.tab.id);
+      if (!P.listingsPage(currentTab.url ?? "") || currentTab.pendingUrl && !P.listingsPage(currentTab.pendingUrl)) {
         throw new Error("\u51FA\u54C1\u4E2D\u30DA\u30FC\u30B8\u304B\u3089\u64CD\u4F5C\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
       }
       if (action === "STATUS") {

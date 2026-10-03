@@ -40,7 +40,7 @@
     if (!Number.isSafeInteger(value.price) || value.price < 400 || value.price > 9_999_999) return "400円未満・価格不明";
     if (!Number.isFinite(at) || value.created === null || value.updated === null || value.updated < value.created) return "日時を確認できない";
     if (!Number.isFinite(attemptedAt) || attemptedAt < 0) return "前回の実行記録を確認できない";
-    if (at - Math.max(value.created, value.updated, attemptedAt) < AGE_MS) return "更新から24時間＋5分未満";
+    if (at - Math.max(value.created, value.updated, attemptedAt) < AGE_MS) return "更新から24時間未満";
     return null;
   }
 

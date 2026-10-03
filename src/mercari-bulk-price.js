@@ -52,14 +52,14 @@
         mounted = null;
         return;
       }
-      if (mounted?.isConnected) return;
-      const tabs = root.querySelector('[role="tablist"]');
-      const firstCard = root.querySelector('a[data-testid="listed-item"][href^="/item/"]');
-      let list = firstCard;
-      while (list?.parentElement && list.parentElement !== root && !list.parentElement.querySelector('[role="tablist"]')) {
-        list = list.parentElement;
-      }
+      const tabs = root.querySelector('[data-testid="tab-to-listing"]')?.closest("nav") ?? root.querySelector('[role="tablist"]');
+      const list = root.querySelector('[data-testid="listed-item-list"]');
       if (!tabs && !list) return;
+      if (mounted?.isConnected) {
+        if (tabs && tabs.nextElementSibling !== mounted) tabs.after(mounted);
+        else if (!tabs && list?.previousElementSibling !== mounted) list.before(mounted);
+        return;
+      }
       mounted = element("section", "", "fm-bulk");
       mounted.id = ROOT_ID;
       mounted.setAttribute("aria-label", "\u30D5\u30EA\u30DE\u30CD \u4E00\u62EC\u5024\u4E0B\u3052");
@@ -93,7 +93,7 @@
       if (!errorNode) {
         errorNode = element("p", "", "fm-bulk-error");
         errorNode.setAttribute("role", "alert");
-        mounted.append(errorNode);
+        (mounted.querySelector(".fm-bulk-content") ?? mounted).append(errorNode);
       }
       errorNode.textContent = text;
     }
@@ -115,26 +115,31 @@
       const detailsOpen = mounted.querySelector("details")?.open ?? false;
       const resultScroll = mounted.querySelector(".fm-bulk-results")?.scrollTop ?? 0;
       const focusedLabel = mounted.contains(document.activeElement) ? document.activeElement?.textContent : null;
-      const heading = element("div", "", "fm-bulk-heading");
-      const label = element("div");
-      label.append(element("strong", "\u30D5\u30EA\u30DE\u30CD \u4E00\u62EC\u5024\u4E0B\u3052"), element("p", "\u66F4\u65B0\u304B\u308924\u6642\u9593\uFF0B5\u5206\u7D4C\u904E\u3057\u305F\u5546\u54C1\u3092\u3001\u54041\u56DE100\u5186\u5024\u4E0B\u3052"));
+      const heading = element("div", "\u30D5\u30EA\u30DE\u30CD \u4E00\u62EC\u5024\u4E0B\u3052", "fm-bulk-heading");
+      const content = element("div", "", "fm-bulk-content");
+      const toolbar = element("div", "", "fm-bulk-toolbar");
+      const label = element("p", "\u66F4\u65B0\u304B\u308924\u6642\u9593\u4EE5\u4E0A\u7D4C\u904E\u3057\u305F\u5546\u54C1\u3092\u3001\u54041\u56DE100\u5186\u5024\u4E0B\u3052", "fm-bulk-hint");
       const actions = element("div", "", "fm-bulk-actions");
       const active = ["scanning", "ready", "running"].includes(state.status);
-      if (!active) actions.append(button(pending ? "\u78BA\u8A8D\u4E2D\u2026" : "\u307E\u3068\u3081\u3066100\u5186\u5024\u4E0B\u3052", "START"));
-      if (state.status === "ready" && owns && state.candidates?.length) actions.append(button(`${state.candidates.length}\u4EF6\u3092100\u5186\u5024\u4E0B\u3052\u3059\u308B`, "EXECUTE"));
-      if (active && owns) actions.append(button(state.status === "ready" ? "\u5B9F\u884C\u305B\u305A\u9589\u3058\u308B" : "\u505C\u6B62\u3059\u308B", "CANCEL", true));
-      heading.append(label, actions);
-      mounted.replaceChildren(heading);
-      if (state.status === "idle") mounted.append(element("p", "\u5BFE\u8C61\u3092\u78BA\u8A8D\u3057\u3066\u304B\u3089\u5B9F\u884C\u3057\u307E\u3059\u3002\u81EA\u52D5\u306E\u5B9A\u671F\u5B9F\u884C\u306F\u3057\u307E\u305B\u3093\u3002", "fm-bulk-note"));
-      else {
+      if (!active) {
+        const start = button(pending ? "\u78BA\u8A8D\u4E2D\u2026" : "\u4E00\u62EC \u2212100\u5186", "START");
+        start.title = "\u5BFE\u8C61\u5546\u54C1\u3092\u78BA\u8A8D\u3057\u3066\u304B\u3089\u3001\u54041\u56DE100\u5186\u5024\u4E0B\u3052\u3057\u307E\u3059";
+        actions.append(start);
+      }
+      if (state.status === "ready" && owns && state.candidates?.length) actions.append(button(`${state.candidates.length}\u4EF6\u3092\u2212100\u5186`, "EXECUTE"));
+      if (active && owns) actions.append(button(state.status === "ready" ? "\u30AD\u30E3\u30F3\u30BB\u30EB" : "\u505C\u6B62", "CANCEL", true));
+      toolbar.append(label, actions);
+      content.append(toolbar);
+      mounted.replaceChildren(heading, content);
+      if (state.status !== "idle") {
         const status = element("p", state.message ?? "\u78BA\u8A8D\u4E2D\u2026", "fm-bulk-status");
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
-        mounted.append(status);
-        if (active && !owns) mounted.append(element("p", "\u958B\u59CB\u3057\u305F\u30BF\u30D6\u3067\u64CD\u4F5C\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "fm-bulk-note"));
-        mounted.append(element("p", `\u78BA\u8A8D ${state.scanned ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61 ${state.candidates?.length ?? 0}\u4EF6 \uFF0F \u5B8C\u4E86 ${state.completed ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61\u5916\u30FB\u9664\u5916 ${state.skipped ?? 0}\u4EF6`, "fm-bulk-counts"));
+        content.append(status);
+        if (active && !owns) content.append(element("p", "\u958B\u59CB\u3057\u305F\u30BF\u30D6\u3067\u64CD\u4F5C\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "fm-bulk-note"));
+        content.append(element("p", `\u78BA\u8A8D ${state.scanned ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61 ${state.candidates?.length ?? 0}\u4EF6 \uFF0F \u5B8C\u4E86 ${state.completed ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61\u5916\u30FB\u9664\u5916 ${state.skipped ?? 0}\u4EF6`, "fm-bulk-counts"));
         if (["ready", "running"].includes(state.status)) {
-          mounted.append(element("p", "400\u5186\u672A\u6E80\u30FB\u65E5\u6642\u4E0D\u660E\u306E\u5546\u54C1\u306A\u3069\u306F\u5BFE\u8C61\u5916\u3067\u3059\u3002\u5B9F\u884C\u4E2D\u306F\u3053\u306E\u4E00\u89A7\u3092\u958B\u3044\u305F\u307E\u307E\u306B\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u505C\u6B62\u6642\u3082\u4FDD\u5B58\u3092\u958B\u59CB\u3057\u305F1\u4EF6\u306F\u7D50\u679C\u3092\u78BA\u8A8D\u3057\u307E\u3059\u3002", "fm-bulk-note"));
+          content.append(element("p", "400\u5186\u672A\u6E80\u30FB\u65E5\u6642\u4E0D\u660E\u306E\u5546\u54C1\u306A\u3069\u306F\u5BFE\u8C61\u5916\u3067\u3059\u3002\u5B9F\u884C\u4E2D\u306F\u3053\u306E\u4E00\u89A7\u3092\u958B\u3044\u305F\u307E\u307E\u306B\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u505C\u6B62\u6642\u3082\u4FDD\u5B58\u3092\u958B\u59CB\u3057\u305F1\u4EF6\u306F\u7D50\u679C\u3092\u78BA\u8A8D\u3057\u307E\u3059\u3002", "fm-bulk-note"));
         }
         if (state.rows?.length) {
           const details = element("details");
@@ -152,11 +157,11 @@
             rows.append(entry);
           }
           details.append(rows);
-          mounted.append(details);
+          content.append(details);
           rows.scrollTop = resultScroll;
         }
       }
-      if (error) mounted.append(error);
+      if (error) content.append(error);
       if (focusedLabel) [...mounted.querySelectorAll("button, summary")].find((node) => node.textContent === focusedLabel)?.focus({ preventScroll: true });
     }
     async function poll() {

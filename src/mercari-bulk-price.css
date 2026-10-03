@@ -1,37 +1,39 @@
 #furimane-bulk-price {
   box-sizing: border-box;
   width: 100%;
-  margin: 20px 0;
-  padding: 18px 20px;
-  border: 1px solid #f5bdd5;
-  border-radius: 12px;
-  background: #fff8fb;
+  margin: 10px 0 12px;
+  padding: 0;
+  border: 1px solid #ff9fcb;
+  border-radius: 9px;
+  background: white;
   color: #303038;
-  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif;
 }
 #furimane-bulk-price * { box-sizing: border-box; }
-#furimane-bulk-price .fm-bulk-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-#furimane-bulk-price strong { font-size: 16px; font-weight: 700; }
+#furimane-bulk-price .fm-bulk-heading { padding: 6px 18px; border-bottom: 1px solid #fce2ef; border-radius: 8px 8px 0 0; background: #fff6fa; font-size: 18px; line-height: 1.35; font-weight: 700; }
+#furimane-bulk-price .fm-bulk-content { padding: 8px 18px; }
+#furimane-bulk-price .fm-bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
 #furimane-bulk-price p { margin: 5px 0 0; }
-#furimane-bulk-price .fm-bulk-heading p { color: #56515a; }
-#furimane-bulk-price .fm-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-#furimane-bulk-price button { min-height: 44px; border: 1px solid transparent; border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 700; cursor: pointer; }
+#furimane-bulk-price .fm-bulk-toolbar .fm-bulk-hint { flex: 1 1 400px; margin: 0; color: #454550; font-size: 15px; overflow-wrap: anywhere; }
+#furimane-bulk-price .fm-bulk-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+#furimane-bulk-price button { min-height: 36px; border: 1px solid transparent; border-radius: 8px; padding: 5px 16px; font: inherit; font-size: 16px; font-weight: 700; white-space: nowrap; cursor: pointer; }
 #furimane-bulk-price button:focus-visible, #furimane-bulk-price summary:focus-visible { outline: 3px solid #7525bb; outline-offset: 3px; }
-#furimane-bulk-price .fm-bulk-primary { background: #cb246e; color: white; }
-#furimane-bulk-price .fm-bulk-primary:hover { background: #af195b; }
+#furimane-bulk-price .fm-bulk-primary { min-width: 144px; background: #ff4fa3; color: white; }
+#furimane-bulk-price .fm-bulk-primary:hover { background: #f13d94; }
 #furimane-bulk-price .fm-bulk-secondary { color: #5d3345; background: white; border-color: #e5c6d3; }
 #furimane-bulk-price button:disabled { opacity: .6; cursor: wait; }
-#furimane-bulk-price .fm-bulk-status { margin-top: 14px; font-weight: 700; font-size: 16px; }
+#furimane-bulk-price .fm-bulk-status { margin-top: 12px; font-weight: 700; font-size: 14px; }
 #furimane-bulk-price .fm-bulk-note { color: #67606a; font-size: 12px; }
-#furimane-bulk-price .fm-bulk-counts { font-variant-numeric: tabular-nums; }
+#furimane-bulk-price .fm-bulk-counts { font-size: 12px; font-variant-numeric: tabular-nums; }
 #furimane-bulk-price .fm-bulk-error { color: #ae1738; font-weight: 700; }
-#furimane-bulk-price details { margin-top: 12px; }
+#furimane-bulk-price details { margin-top: 8px; }
 #furimane-bulk-price summary { cursor: pointer; color: #963361; }
 #furimane-bulk-price .fm-bulk-results { max-height: 300px; overflow: auto; margin-top: 8px; }
 #furimane-bulk-price .fm-bulk-result { padding: 9px 0; border-top: 1px solid #f2dce5; overflow-wrap: anywhere; }
 #furimane-bulk-price .fm-bulk-result a { color: #303038; display: block; }
 #furimane-bulk-price .fm-bulk-result span { color: #655360; font-size: 13px; }
 @media (max-width: 640px) {
-  #furimane-bulk-price { padding: 14px; }
-  #furimane-bulk-price .fm-bulk-heading, #furimane-bulk-price .fm-bulk-actions { display: grid; width: 100%; }
+  #furimane-bulk-price .fm-bulk-heading { padding: 6px 14px; }
+  #furimane-bulk-price .fm-bulk-content { padding: 8px 14px; }
+  #furimane-bulk-price .fm-bulk-toolbar .fm-bulk-hint { flex-basis: 100%; }
 }
