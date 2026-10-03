@@ -181,6 +181,10 @@
       return "\u5546\u54C1\u64CD\u4F5C\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
     }
     chromeApi?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+      if (message?.type === "FURIMANE_PRICE_ADJUST_READY") {
+        sendResponse({ ready: getEditPageItemId() === message.itemId && findPriceField() !== null && findEditSubmitButton() !== null });
+        return false;
+      }
       if (message?.type !== "APPLY_FURIMANE_PRICE_DROP_ON_EDIT") {
         return false;
       }
@@ -455,6 +459,9 @@
           continue;
         }
         const result = await fillAvailableFields(item);
+        if (await handleSelectionSubPage(item)) {
+          return;
+        }
         latestResult = result;
         hasFilledAnyField = result.filled || hasFilledAnyField;
         const readinessBeforeWait = getFinalActionReadiness(item);
@@ -1346,9 +1353,11 @@
       return { targetCount, filledCount, missingFields };
     }
     async function fillCategoryFields(categoryPath) {
-      if (sessionStorage.getItem(CATEGORY_DONE_KEY) === "true") {
+      if (categorySelectionMatches(categoryPath)) {
+        sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
         return true;
       }
+      sessionStorage.removeItem(CATEGORY_DONE_KEY);
       if (await fillCategorySelects(categoryPath)) {
         sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
         return true;
@@ -1360,6 +1369,10 @@
       sessionStorage.setItem(CATEGORY_STEP_KEY, "0");
       sessionStorage.removeItem(CATEGORY_ID_PATH_KEY);
       link.click();
+      const startedAt = Date.now();
+      while (window.location.pathname === "/sell/create" && Date.now() - startedAt < MAX_WAIT_MS) {
+        await sleep(SELECTION_POLL_MS);
+      }
       return false;
     }
     function findCategoryEntryLink() {
@@ -1376,7 +1389,7 @@
         selectedCount += 1;
         await sleep(METADATA_SELECT_WAIT_MS);
       }
-      return selectedCount > 0;
+      return selectedCount === categoryPath.length;
     }
     async function fillConditionField(condition) {
       if (!condition) {
@@ -1557,53 +1570,55 @@
       if (categoryPath.length === 0) {
         return;
       }
-      for (let attempt = 0; attempt < categoryPath.length + 2; attempt += 1) {
-        await waitForReadyCategoryLinks();
-        const step = Number(sessionStorage.getItem(CATEGORY_STEP_KEY) ?? "0");
-        const target = categoryPath[step];
-        if (!target) {
-          sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
-          return;
-        }
-        if (!currentCategoryPageMatchesStep(step)) {
-          await sleep(SELECTION_POLL_MS);
-          continue;
-        }
-        const links = getCategoryPageLinks();
-        const link = links.find((candidate) => categoryTextMatches(normalizeText(candidate.textContent), target));
-        if (!link) {
-          const createLink = findCategoryCreateLink(links);
-          if (createLink) {
-            sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
-            await clickCategoryCreateLink(createLink);
-            await continueOnSellCreate(item);
-          }
-          return;
-        }
+      const clicks = /* @__PURE__ */ new Map();
+      while (window.location.pathname === "/sell/categories") {
+        const selection = await waitForReadyCategoryLinks(categoryPath);
+        if (!selection) break;
+        const { link, step } = selection;
         const url = new URL(link.href);
+        const clickKey = `${step}:${link.href}`;
+        const clickCount = clicks.get(clickKey) ?? 0;
+        if (clickCount >= 2) break;
+        clicks.set(clickKey, clickCount + 1);
         if (url.pathname === "/sell/categories") {
+          if (step >= categoryPath.length - 1) break;
           saveCategoryIdForStep(step, url.searchParams.get("category_id"));
-          sessionStorage.setItem(CATEGORY_STEP_KEY, String(step + 1));
           link.click();
-          await sleep(SAFE_CLICK_SETTLE_MS);
+          await waitForCategoryTransition(url, categoryPath, step + 1);
           continue;
         }
         if (url.pathname === "/sell/create" || url.pathname === "/sell") {
-          sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
+          if (step !== categoryPath.length - 1) break;
           await clickCategoryCreateLink(link);
-          await continueOnSellCreate(item);
-          return;
+          if (await waitForCategoryTransition(url, categoryPath, step + 1)) {
+            sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
+            await continueOnSellCreate(item);
+            return;
+          }
         }
       }
+      logRelistFlow("\u30AB\u30C6\u30B4\u30EA\u30FC\u9078\u629E\u5F85\u3061", { pathname: window.location.pathname, reason: "category-transition-unconfirmed" }, { force: true });
+      showToast("\u30AB\u30C6\u30B4\u30EA\u30FC\u306E\u9078\u629E\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u8868\u793A\u4E2D\u306E\u30AB\u30C6\u30B4\u30EA\u30FC\u3092\u78BA\u8A8D\u3057\u3066\u3001\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304F\u3060\u3055\u3044");
     }
-    function findCategoryCreateLink(links) {
-      return links.find((link) => {
-        const url = new URL(link.href);
-        return url.pathname === "/sell/create" || url.pathname === "/sell";
-      }) ?? null;
+    function categorySelectionMatches(categoryPath) {
+      const selected = Array.from(document.querySelectorAll('[data-testid="sell-category"] [role="listitem"]'));
+      return selected.length === categoryPath.length && selected.every((element, index) => categoryTextMatches(normalizeText(element.textContent), categoryPath[index]));
+    }
+    async function waitForCategoryTransition(url, categoryPath, nextStep) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < MAX_WAIT_MS) {
+        if (url.pathname === "/sell/categories") {
+          if (currentCategoryPageMatchesStep(nextStep) && categoryPageHeadingMatches(nextStep, categoryPath)) return true;
+        } else if (window.location.pathname === "/sell/create" && categorySelectionMatches(categoryPath)) {
+          return true;
+        }
+        await sleep(SELECTION_POLL_MS);
+      }
+      return false;
     }
     async function clickCategoryCreateLink(link) {
       await sleep(SAFE_CLICK_SETTLE_MS);
+      if (!link.isConnected || window.location.pathname !== "/sell/categories") return;
       const shadowButton = link.firstElementChild?.shadowRoot?.querySelector("button");
       if (shadowButton instanceof HTMLButtonElement) {
         shadowButton.click();
@@ -1616,14 +1631,27 @@
       }
       link.click();
     }
-    async function waitForReadyCategoryLinks() {
-      for (let attempt = 0; attempt < 20; attempt += 1) {
+    async function waitForReadyCategoryLinks(categoryPath) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < MAX_WAIT_MS && window.location.pathname === "/sell/categories") {
+        const currentId = new URL(window.location.href).searchParams.get("category_id");
+        const savedIndex = currentId ? getSavedCategoryIds().indexOf(currentId) : -1;
+        const step = currentId ? savedIndex >= 0 ? savedIndex + 1 : -1 : 0;
         const links = getCategoryPageLinks();
-        if (links.length > 0 && !hasCurrentCategorySelfLink(links)) {
-          return;
+        if (step >= 0 && categoryPath[step] && categoryPageHeadingMatches(step, categoryPath) && !hasCurrentCategorySelfLink(links)) {
+          const link = links.find((candidate) => categoryTextMatches(normalizeText(candidate.textContent), categoryPath[step]));
+          if (link) {
+            sessionStorage.setItem(CATEGORY_STEP_KEY, String(step));
+            return { link, step };
+          }
         }
         await sleep(SELECTION_POLL_MS);
       }
+      return null;
+    }
+    function categoryPageHeadingMatches(step, categoryPath) {
+      const heading = normalizeText(document.querySelector("main h1")?.textContent);
+      return categoryTextMatches(heading, step === 0 ? "\u30AB\u30C6\u30B4\u30EA\u30FC" : categoryPath[step - 1]);
     }
     function getCategoryPageLinks() {
       const excludedTexts = ["\u30AB\u30C6\u30B4\u30EA\u30FC\u3092\u9078\u629E\u3059\u308B", "\u5909\u66F4\u3059\u308B", "\u52A0\u76DF\u5E97\u898F\u7D04"];
@@ -1641,6 +1669,7 @@
       });
     }
     function currentCategoryPageMatchesStep(step) {
+      if (window.location.pathname !== "/sell/categories") return false;
       if (step === 0) {
         return !new URL(window.location.href).searchParams.get("category_id");
       }
@@ -1666,6 +1695,7 @@
       }
     }
     function categoryTextMatches(text, value) {
+      text = normalizeText(text.replace(/このカテゴリーを選択しています/g, ""));
       return text === value || normalizeOptionText(text) === normalizeOptionText(value);
     }
     async function handleConditionSelectionPage(item, condition) {
@@ -2481,6 +2511,9 @@
         throw new Error("price field not found");
       }
       const currentPrice = parsePriceValue(priceField.value || priceField.getAttribute("value") || "");
+      if (message?.bulkJobId && (itemId !== message.itemId || currentPrice !== message.expectedPrice || delta !== -100)) {
+        throw new Error("\u5BFE\u8C61\u306E\u5546\u54C1\u307E\u305F\u306F\u4FA1\u683C\u304C\u5909\u308F\u3063\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
+      }
       if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
         throw new Error("current price could not be read");
       }
@@ -2507,7 +2540,7 @@
         ...getButtonLogDetails(submitButton)
       };
       console.info("[furimanager:price-adjust] \u4FDD\u5B58\u30DC\u30BF\u30F3\u691C\u77E5", sanitizeLogDetails(details));
-      handOffManualConfirmation(details, "\u4FA1\u683C\u6B04\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u4FDD\u5B58\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
+      if (!message?.bulkJobId) handOffManualConfirmation(details, "\u4FA1\u683C\u6B04\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3002\u6700\u5F8C\u306E\u4FDD\u5B58\u30DC\u30BF\u30F3\u306F\u624B\u52D5\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
       return {
         submitted: false,
         manualConfirmationRequired: true,

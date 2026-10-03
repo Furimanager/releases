@@ -5,14 +5,14 @@
     if (!api?.runtime?.onMessage || !P) return;
     let job = null;
     let ledger = {};
-    const busy = () => job && ["scanning", "ready", "running"].includes(job.status);
+    const busy = () => job && ["scanning", "running"].includes(job.status);
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const errorText = (error) => error instanceof Error ? error.message : "\u51E6\u7406\u3092\u7D9A\u3051\u3089\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
     const initial = api.storage.local.get([P.STATE_KEY, P.LEDGER_KEY]).then((saved) => {
       ledger = saved[P.LEDGER_KEY] ?? {};
       if (saved[P.STATE_KEY]) {
         job = { ...saved[P.STATE_KEY], token: null, workerTab: null };
-        if (busy()) {
+        if (["scanning", "ready", "running"].includes(job.status)) {
           job.status = "interrupted";
           job.message = "\u524D\u56DE\u306E\u51E6\u7406\u304C\u4E2D\u65AD\u3057\u307E\u3057\u305F\u3002\u81EA\u52D5\u518D\u958B\u306F\u3057\u307E\u305B\u3093\u3002\u78BA\u8A8D\u4E2D\u306E\u5546\u54C1\u306F24\u6642\u9593\u3001\u518D\u5B9F\u884C\u306E\u5BFE\u8C61\u5916\u3067\u3059\u3002";
         }
@@ -123,10 +123,17 @@
         await pause(current, 600 + Math.random() * 600);
       }
       await assertOwner(current);
-      current.status = "ready";
-      current.readyAt = Date.now();
-      current.message = current.candidates.length ? `${current.candidates.length}\u4EF6\u3092\u5404100\u5186\u5024\u4E0B\u3052\u3067\u304D\u307E\u3059\u3002` : "\u4ECA\u56DE\u306E\u5BFE\u8C61\u5546\u54C1\u306F\u3042\u308A\u307E\u305B\u3093\u3002";
+      if (!current.candidates.length) {
+        current.status = "done";
+        current.message = "\u4ECA\u56DE\u306E\u5BFE\u8C61\u5546\u54C1\u306F\u3042\u308A\u307E\u305B\u3093\u3002";
+        await persist();
+        return;
+      }
+      current.status = "running";
+      current.message = `${current.candidates.length}\u4EF6\u306E\u5024\u4E0B\u3052\u3092\u958B\u59CB\u3057\u307E\u3059\u2026`;
       await persist();
+      await assertOwner(current);
+      await run(current);
     }
     async function pause(current, ms) {
       const end = performance.now() + ms;
@@ -136,24 +143,31 @@
       }
       assertActive(current);
     }
-    async function readyEditor(current) {
+    async function readyPage(current, stage) {
+      const expected = `${P.ORIGIN}/${stage === "ITEM" ? "item" : "sell/edit"}/${current.current.id}`;
       for (let retry = 0; retry < 40; retry++) {
         await assertOwner(current);
         const tab = await api.tabs.get(current.workerTab);
-        if (tab.url !== `${P.ORIGIN}/sell/edit/${current.current.id}`) {
-          if (tab.status === "complete") throw new Error("\u7DE8\u96C6\u753B\u9762\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30ED\u30B0\u30A4\u30F3\u72B6\u614B\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+        if (tab.url !== expected) {
+          const openingEditor = stage === "EDITOR" && tab.url === `${P.ORIGIN}/item/${current.current.id}`;
+          if (tab.status === "complete" && !openingEditor) throw new Error("\u5BFE\u8C61\u306E\u5546\u54C1\u753B\u9762\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30ED\u30B0\u30A4\u30F3\u72B6\u614B\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
         } else {
           let result;
           try {
-            result = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}EDITOR_READY`, itemId: current.current.id });
+            result = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}${stage}_READY`, itemId: current.current.id });
+            if (stage === "EDITOR" && result?.ready) {
+              const legacy = await api.tabs.sendMessage(current.workerTab, { type: "FURIMANE_PRICE_ADJUST_READY", itemId: current.current.id });
+              result = { ready: legacy?.ready === true };
+            }
           } catch {
+            result = null;
           }
           if (result?.error) throw new Error(result.error);
           if (result?.ready) return;
         }
         await pause(current, 500);
       }
-      throw new Error("\u7DE8\u96C6\u753B\u9762\u306E\u4FA1\u683C\u6B04\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      throw new Error(stage === "ITEM" ? "\u5546\u54C1\u30DA\u30FC\u30B8\u306E\u300C\u5546\u54C1\u306E\u7DE8\u96C6\u300D\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002" : "\u7DE8\u96C6\u753B\u9762\u306E\u4FA1\u683C\u6B04\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
     }
     async function closeWorker(current) {
       if (!Number.isInteger(current.workerTab)) return;
@@ -187,9 +201,25 @@
         current.authorized = false;
         current.authorizing = false;
         current.message = `\u5024\u4E0B\u3052\u4E2D\u2026 ${current.completed + 1} / ${current.candidates.length}\u4EF6`;
-        const tab = await api.tabs.create({ url: `${P.ORIGIN}/sell/edit/${candidate.id}`, active: false });
+        const tab = await api.tabs.create({ url: `${P.ORIGIN}/item/${candidate.id}`, active: false });
         current.workerTab = tab.id;
-        await readyEditor(current);
+        await readyPage(current, "ITEM");
+        await assertOwner(current);
+        const opened = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}ITEM_OPEN_EDIT`, itemId: candidate.id });
+        if (!opened?.opened) throw new Error(opened?.error ?? "\u5546\u54C1\u306E\u7DE8\u96C6\u3078\u9032\u3081\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+        await readyPage(current, "EDITOR");
+        await assertOwner(current);
+        const prepared = await api.tabs.sendMessage(current.workerTab, {
+          type: "APPLY_FURIMANE_PRICE_DROP_ON_EDIT",
+          delta: -100,
+          minimumPrice: 300,
+          bulkJobId: current.id,
+          itemId: candidate.id,
+          expectedPrice: candidate.price
+        });
+        if (!prepared?.success || prepared.currentPrice !== candidate.price || prepared.nextPrice !== candidate.price - 100) {
+          throw new Error(prepared?.reason ?? "\u2212100\u5186\u306E\u5165\u529B\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+        }
         await assertOwner(current);
         let reply;
         try {
@@ -239,13 +269,15 @@
         await persist().catch(() => {
         });
       } finally {
-        if (!["ready", "running", "scanning"].includes(current.status)) current.token = null;
+        if (!["running", "scanning"].includes(current.status)) current.token = null;
       }
     }
     async function authorize(message, sender) {
       const current = job;
-      if (!current || sender.frameId !== 0 || sender.tab?.id !== current.workerTab || current.status !== "running" || current.id !== message.jobId || current.current?.id !== message.itemId || current.authorized || current.authorizing || sender.url !== `${P.ORIGIN}/sell/edit/${message.itemId}`) throw new Error("\u3053\u306E\u7DE8\u96C6\u753B\u9762\u3067\u306F\u4E00\u62EC\u51E6\u7406\u3092\u5B9F\u884C\u3067\u304D\u307E\u305B\u3093\u3002");
+      if (!current || sender.frameId !== 0 || sender.tab?.id !== current.workerTab || current.status !== "running" || current.id !== message.jobId || current.current?.id !== message.itemId || current.authorized || current.authorizing || new URL(sender.url).origin !== P.ORIGIN) throw new Error("\u3053\u306E\u7DE8\u96C6\u753B\u9762\u3067\u306F\u4E00\u62EC\u51E6\u7406\u3092\u5B9F\u884C\u3067\u304D\u307E\u305B\u3093\u3002");
       current.authorizing = true;
+      const editor = await api.tabs.get(sender.tab.id);
+      if (editor.url !== `${P.ORIGIN}/sell/edit/${message.itemId}` || editor.pendingUrl) throw new Error("\u7DE8\u96C6\u5BFE\u8C61\u306E\u30DA\u30FC\u30B8\u304C\u5909\u308F\u3063\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
       await assertOwner(current);
       if (typeof message.accessToken !== "string" || message.accessToken !== current.token) throw new Error("\u30ED\u30B0\u30A4\u30F3\u60C5\u5831\u304C\u5909\u308F\u3063\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
       const account = await profile(message.accessToken);
@@ -265,12 +297,6 @@
     }
     async function handle(message, sender) {
       await initial;
-      if (job?.status === "ready" && (job.cancelled || Date.now() - job.heartbeat > 3e4 || Date.now() - job.readyAt > 15 * 6e4)) {
-        job.status = "stopped";
-        job.token = null;
-        job.message = "\u78BA\u8A8D\u3092\u7D42\u4E86\u3057\u307E\u3057\u305F\u3002\u5B9F\u884C\u3059\u308B\u5834\u5408\u306F\u5BFE\u8C61\u3092\u78BA\u8A8D\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
-        await persist();
-      }
       const action = message.type.slice(P.PREFIX.length);
       if (action === "AUTHORIZE") return authorize(message, sender);
       let senderOrigin = "";
@@ -327,35 +353,12 @@
       if (action === "CANCEL") {
         job.cancelled = true;
         job.message = "\u505C\u6B62\u3092\u53D7\u3051\u4ED8\u3051\u307E\u3057\u305F\u3002\u4FDD\u5B58\u3092\u958B\u59CB\u3057\u305F\u5546\u54C1\u306E\u7D50\u679C\u3092\u78BA\u8A8D\u3057\u3066\u3044\u307E\u3059\u2026";
-        if (job.status === "ready") {
-          job.status = "stopped";
-          job.message = "\u5B9F\u884C\u305B\u305A\u306B\u7D42\u4E86\u3057\u307E\u3057\u305F\u3002";
-          job.token = null;
-          await persist();
-        }
-        return { state: summary(), owns: true };
-      }
-      if (action === "EXECUTE") {
-        if (job.status !== "ready" || job.instance !== message.instance || Date.now() - job.readyAt > 15 * 6e4) {
-          throw new Error("\u5BFE\u8C61\u3092\u78BA\u8A8D\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044\uFF08\u78BA\u8A8D\u7D50\u679C\u306E\u6709\u52B9\u671F\u9650\u306F15\u5206\u3067\u3059\uFF09\u3002");
-        }
-        assertActive(job);
-        if (!job.candidates.length) throw new Error("\u5BFE\u8C61\u5546\u54C1\u306F\u3042\u308A\u307E\u305B\u3093\u3002");
-        job.status = "running";
-        try {
-          await persist();
-        } catch (error) {
-          job.status = "error";
-          job.token = null;
-          throw error;
-        }
-        void launch(job, run);
         return { state: summary(), owns: true };
       }
       throw new Error("\u64CD\u4F5C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
     }
     api.runtime.onMessage.addListener((message, sender, respond) => {
-      if (!message?.type?.startsWith(P.PREFIX) || message.type.includes("EDITOR_")) return false;
+      if (!message?.type?.startsWith(P.PREFIX) || message.type.includes("EDITOR_") || message.type.includes("ITEM_")) return false;
       void handle(message, sender).then(respond).catch((error) => respond({ error: errorText(error) }));
       return true;
     });

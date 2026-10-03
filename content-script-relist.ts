@@ -270,6 +270,10 @@
   }
 
   chromeApi?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "FURIMANE_PRICE_ADJUST_READY") {
+      sendResponse({ ready: getEditPageItemId() === message.itemId && findPriceField() !== null && findEditSubmitButton() !== null });
+      return false;
+    }
     if (message?.type !== "APPLY_FURIMANE_PRICE_DROP_ON_EDIT") {
       return false;
     }
@@ -644,6 +648,10 @@
       }
 
       const result = await fillAvailableFields(item);
+      // 画像取得中に12秒を超えても、開いた選択画面へ必ず処理を引き継ぐ。
+      if (await handleSelectionSubPage(item)) {
+        return;
+      }
       latestResult = result;
       hasFilledAnyField = result.filled || hasFilledAnyField;
       const readinessBeforeWait = getFinalActionReadiness(item);
@@ -1757,9 +1765,11 @@
   }
 
   async function fillCategoryFields(categoryPath: string[]): Promise<boolean> {
-    if (sessionStorage.getItem(CATEGORY_DONE_KEY) === "true") {
+    if (categorySelectionMatches(categoryPath)) {
+      sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
       return true;
     }
+    sessionStorage.removeItem(CATEGORY_DONE_KEY);
 
     if (await fillCategorySelects(categoryPath)) {
       sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
@@ -1775,6 +1785,12 @@
     sessionStorage.setItem(CATEGORY_STEP_KEY, "0");
     sessionStorage.removeItem(CATEGORY_ID_PATH_KEY);
     link.click();
+
+    // SPAのURL変更を待つ。クリック直後はまだ出品フォームのことがある。
+    const startedAt = Date.now();
+    while (window.location.pathname === "/sell/create" && Date.now() - startedAt < MAX_WAIT_MS) {
+      await sleep(SELECTION_POLL_MS);
+    }
 
     return false;
   }
@@ -1800,7 +1816,7 @@
       await sleep(METADATA_SELECT_WAIT_MS);
     }
 
-    return selectedCount > 0;
+    return selectedCount === categoryPath.length;
   }
 
   async function fillConditionField(condition: string | null): Promise<boolean> {
@@ -2048,65 +2064,63 @@
       return;
     }
 
-    for (let attempt = 0; attempt < categoryPath.length + 2; attempt += 1) {
-      await waitForReadyCategoryLinks();
-      const step = Number(sessionStorage.getItem(CATEGORY_STEP_KEY) ?? "0");
-      const target = categoryPath[step];
-
-      if (!target) {
-        sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
-        return;
-      }
-
-      if (!currentCategoryPageMatchesStep(step)) {
-        await sleep(SELECTION_POLL_MS);
-        continue;
-      }
-
-      const links = getCategoryPageLinks();
-      const link = links.find((candidate) => categoryTextMatches(normalizeText(candidate.textContent), target));
-
-      if (!link) {
-        const createLink = findCategoryCreateLink(links);
-
-        if (createLink) {
-          sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
-          await clickCategoryCreateLink(createLink);
-          await continueOnSellCreate(item);
-        }
-
-        return;
-      }
-
+    const clicks = new Map<string, number>();
+    while (window.location.pathname === "/sell/categories") {
+      const selection = await waitForReadyCategoryLinks(categoryPath);
+      if (!selection) break;
+      const { link, step } = selection;
       const url = new URL(link.href);
+      const clickKey = `${step}:${link.href}`;
+      const clickCount = clicks.get(clickKey) ?? 0;
+      // 反応しなかった選択だけ1回再試行。別候補で穴埋めしない。
+      if (clickCount >= 2) break;
+      clicks.set(clickKey, clickCount + 1);
 
       if (url.pathname === "/sell/categories") {
+        if (step >= categoryPath.length - 1) break;
+        // 遷移先IDは先に保存し、進捗は実際のURL・見出し確認後に更新する。
         saveCategoryIdForStep(step, url.searchParams.get("category_id"));
-        sessionStorage.setItem(CATEGORY_STEP_KEY, String(step + 1));
         link.click();
-        await sleep(SAFE_CLICK_SETTLE_MS);
+        await waitForCategoryTransition(url, categoryPath, step + 1);
         continue;
       }
 
       if (url.pathname === "/sell/create" || url.pathname === "/sell") {
-        sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
+        if (step !== categoryPath.length - 1) break;
         // 最終カテゴリの確定はメルカリ側の内部ボタンを押す必要がある。
         await clickCategoryCreateLink(link);
-        await continueOnSellCreate(item);
-        return;
+        if (await waitForCategoryTransition(url, categoryPath, step + 1)) {
+          sessionStorage.setItem(CATEGORY_DONE_KEY, "true");
+          await continueOnSellCreate(item);
+          return;
+        }
       }
     }
+    logRelistFlow("カテゴリー選択待ち", { pathname: window.location.pathname, reason: "category-transition-unconfirmed" }, { force: true });
+    showToast("カテゴリーの選択を確認できませんでした。表示中のカテゴリーを確認して、ページを再読み込みしてください");
   }
 
-  function findCategoryCreateLink(links: HTMLAnchorElement[]): HTMLAnchorElement | null {
-    return links.find((link) => {
-      const url = new URL(link.href);
-      return url.pathname === "/sell/create" || url.pathname === "/sell";
-    }) ?? null;
+  function categorySelectionMatches(categoryPath: string[]): boolean {
+    const selected = Array.from(document.querySelectorAll('[data-testid="sell-category"] [role="listitem"]'));
+    return selected.length === categoryPath.length && selected.every((element, index) => categoryTextMatches(normalizeText(element.textContent), categoryPath[index]));
+  }
+
+  async function waitForCategoryTransition(url: URL, categoryPath: string[], nextStep: number): Promise<boolean> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < MAX_WAIT_MS) {
+      if (url.pathname === "/sell/categories") {
+        if (currentCategoryPageMatchesStep(nextStep) && categoryPageHeadingMatches(nextStep, categoryPath)) return true;
+      } else if (window.location.pathname === "/sell/create" && categorySelectionMatches(categoryPath)) {
+        return true;
+      }
+      await sleep(SELECTION_POLL_MS);
+    }
+    return false;
   }
 
   async function clickCategoryCreateLink(link: HTMLAnchorElement): Promise<void> {
     await sleep(SAFE_CLICK_SETTLE_MS);
+    if (!link.isConnected || window.location.pathname !== "/sell/categories") return;
 
     const shadowButton = link.firstElementChild?.shadowRoot?.querySelector("button");
 
@@ -2125,16 +2139,29 @@
     link.click();
   }
 
-  async function waitForReadyCategoryLinks(): Promise<void> {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+  async function waitForReadyCategoryLinks(categoryPath: string[]): Promise<{ link: HTMLAnchorElement; step: number } | null> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < MAX_WAIT_MS && window.location.pathname === "/sell/categories") {
+      const currentId = new URL(window.location.href).searchParams.get("category_id");
+      const savedIndex = currentId ? getSavedCategoryIds().indexOf(currentId) : -1;
+      const step = currentId ? (savedIndex >= 0 ? savedIndex + 1 : -1) : 0;
       const links = getCategoryPageLinks();
-
-      if (links.length > 0 && !hasCurrentCategorySelfLink(links)) {
-        return;
+      // URLだけ先に変わるSPA遷移では、前画面の「その他」を押さない。
+      if (step >= 0 && categoryPath[step] && categoryPageHeadingMatches(step, categoryPath) && !hasCurrentCategorySelfLink(links)) {
+        const link = links.find((candidate) => categoryTextMatches(normalizeText(candidate.textContent), categoryPath[step]));
+        if (link) {
+          sessionStorage.setItem(CATEGORY_STEP_KEY, String(step));
+          return { link, step };
+        }
       }
-
       await sleep(SELECTION_POLL_MS);
     }
+    return null;
+  }
+
+  function categoryPageHeadingMatches(step: number, categoryPath: string[]): boolean {
+    const heading = normalizeText(document.querySelector("main h1")?.textContent);
+    return categoryTextMatches(heading, step === 0 ? "カテゴリー" : categoryPath[step - 1]);
   }
 
   function getCategoryPageLinks(): HTMLAnchorElement[] {
@@ -2162,6 +2189,7 @@
   }
 
   function currentCategoryPageMatchesStep(step: number): boolean {
+    if (window.location.pathname !== "/sell/categories") return false;
     if (step === 0) {
       return !new URL(window.location.href).searchParams.get("category_id");
     }
@@ -2192,6 +2220,7 @@
   }
 
   function categoryTextMatches(text: string, value: string): boolean {
+    text = normalizeText(text.replace(/このカテゴリーを選択しています/g, ""));
     return text === value || normalizeOptionText(text) === normalizeOptionText(value);
   }
 
@@ -3281,6 +3310,11 @@
 
     const currentPrice = parsePriceValue(priceField.value || priceField.getAttribute("value") || "");
 
+    // 一括操作は対象確認時の価格から変更された商品へ入力しない。
+    if (message?.bulkJobId && (itemId !== message.itemId || currentPrice !== message.expectedPrice || delta !== -100)) {
+      throw new Error("対象の商品または価格が変わったため停止しました。");
+    }
+
     if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
       throw new Error("current price could not be read");
     }
@@ -3313,7 +3347,7 @@
       ...getButtonLogDetails(submitButton),
     };
     console.info("[furimanager:price-adjust] 保存ボタン検知", sanitizeLogDetails(details));
-    handOffManualConfirmation(details, "価格欄を更新しました。最後の保存ボタンは手動で確認してください");
+    if (!message?.bulkJobId) handOffManualConfirmation(details, "価格欄を更新しました。最後の保存ボタンは手動で確認してください");
 
     return {
       submitted: false,

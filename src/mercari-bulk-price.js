@@ -120,14 +120,13 @@
       const toolbar = element("div", "", "fm-bulk-toolbar");
       const label = element("p", "\u66F4\u65B0\u304B\u308924\u6642\u9593\u4EE5\u4E0A\u7D4C\u904E\u3057\u305F\u5546\u54C1\u3092\u3001\u54041\u56DE100\u5186\u5024\u4E0B\u3052", "fm-bulk-hint");
       const actions = element("div", "", "fm-bulk-actions");
-      const active = ["scanning", "ready", "running"].includes(state.status);
+      const active = ["scanning", "running"].includes(state.status);
       if (!active) {
         const start = button(pending ? "\u78BA\u8A8D\u4E2D\u2026" : "\u4E00\u62EC \u2212100\u5186", "START");
-        start.title = "\u5BFE\u8C61\u5546\u54C1\u3092\u78BA\u8A8D\u3057\u3066\u304B\u3089\u3001\u54041\u56DE100\u5186\u5024\u4E0B\u3052\u3057\u307E\u3059";
+        start.title = "\u5BFE\u8C61\u5546\u54C1\u3092\u81EA\u52D5\u78BA\u8A8D\u3057\u3001\u305D\u306E\u307E\u307E\u54041\u56DE100\u5186\u5024\u4E0B\u3052\u3057\u307E\u3059";
         actions.append(start);
       }
-      if (state.status === "ready" && owns && state.candidates?.length) actions.append(button(`${state.candidates.length}\u4EF6\u3092\u2212100\u5186`, "EXECUTE"));
-      if (active && owns) actions.append(button(state.status === "ready" ? "\u30AD\u30E3\u30F3\u30BB\u30EB" : "\u505C\u6B62", "CANCEL", true));
+      if (active && owns) actions.append(button("\u505C\u6B62", "CANCEL", true));
       toolbar.append(label, actions);
       content.append(toolbar);
       mounted.replaceChildren(heading, content);
@@ -138,7 +137,7 @@
         content.append(status);
         if (active && !owns) content.append(element("p", "\u958B\u59CB\u3057\u305F\u30BF\u30D6\u3067\u64CD\u4F5C\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "fm-bulk-note"));
         content.append(element("p", `\u78BA\u8A8D ${state.scanned ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61 ${state.candidates?.length ?? 0}\u4EF6 \uFF0F \u5B8C\u4E86 ${state.completed ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61\u5916\u30FB\u9664\u5916 ${state.skipped ?? 0}\u4EF6`, "fm-bulk-counts"));
-        if (["ready", "running"].includes(state.status)) {
+        if (active) {
           content.append(element("p", "400\u5186\u672A\u6E80\u30FB\u65E5\u6642\u4E0D\u660E\u306E\u5546\u54C1\u306A\u3069\u306F\u5BFE\u8C61\u5916\u3067\u3059\u3002\u5B9F\u884C\u4E2D\u306F\u3053\u306E\u4E00\u89A7\u3092\u958B\u3044\u305F\u307E\u307E\u306B\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u505C\u6B62\u6642\u3082\u4FDD\u5B58\u3092\u958B\u59CB\u3057\u305F1\u4EF6\u306F\u7D50\u679C\u3092\u78BA\u8A8D\u3057\u307E\u3059\u3002", "fm-bulk-note"));
         }
         if (state.rows?.length) {
@@ -192,10 +191,17 @@
     }, 5e3);
     void poll();
     let editorUsed = false;
+    let itemOpened = false;
+    function itemEditLink(itemId) {
+      if (!/^m\d+$/.test(itemId) || location.href !== `${P.ORIGIN}/item/${itemId}`) throw new Error("\u5BFE\u8C61\u306E\u5546\u54C1\u30DA\u30FC\u30B8\u3067\u306F\u3042\u308A\u307E\u305B\u3093\u3002");
+      const links = [...document.querySelectorAll(`a[href="/sell/edit/${itemId}"], a[href="${P.ORIGIN}/sell/edit/${itemId}"]`)].filter((link) => link.textContent?.trim() === "\u5546\u54C1\u306E\u7DE8\u96C6" && link.getClientRects().length > 0);
+      if (links.length !== 1) throw new Error("\u5546\u54C1\u30DA\u30FC\u30B8\u306E\u300C\u5546\u54C1\u306E\u7DE8\u96C6\u300D\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      return links[0];
+    }
     function editorFields(itemId) {
       if (editorTouched) throw new Error("\u7DE8\u96C6\u753B\u9762\u304C\u64CD\u4F5C\u3055\u308C\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002\u4FDD\u5B58\u306F\u884C\u3063\u3066\u3044\u307E\u305B\u3093\u3002");
       if (location.href !== `${P.ORIGIN}/sell/edit/${itemId}`) throw new Error("\u7DE8\u96C6\u5BFE\u8C61\u306E\u30DA\u30FC\u30B8\u304C\u5909\u308F\u3063\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
-      const inputs = [...document.querySelectorAll('input[data-testid="price-input"][name="price"]')];
+      const inputs = [...document.querySelectorAll('input[name="price"][data-testid="price-text-input"], input[name="price"][data-testid="price-input"]')];
       const buttons = [...document.querySelectorAll('button[data-testid="edit-button"]')];
       if (inputs.length !== 1 || buttons.length !== 1 || buttons[0].textContent?.trim() !== "\u5909\u66F4\u3059\u308B" || inputs[0].disabled || inputs[0].readOnly || buttons[0].disabled) throw new Error("\u4FA1\u683C\u6B04\u307E\u305F\u306F\u5909\u66F4\u30DC\u30BF\u30F3\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
       return { price: inputs[0], submit: buttons[0] };
@@ -204,7 +210,7 @@
       if (editorUsed) throw new Error("\u3053\u306E\u7DE8\u96C6\u753B\u9762\u3067\u306F\u65E2\u306B\u5B9F\u884C\u6E08\u307F\u3067\u3059\u3002");
       editorUsed = true;
       const fields = editorFields(message.itemId);
-      if (!Number.isSafeInteger(message.price) || message.price < 400 || Number(fields.price.value) !== message.price) throw new Error("\u4FA1\u683C\u304C\u5909\u308F\u3063\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
+      if (!Number.isSafeInteger(message.price) || message.price < 400 || Number(fields.price.value) !== message.price - 100) throw new Error("\u2212100\u5186\u306E\u5165\u529B\u304C\u4E00\u81F4\u3057\u306A\u3044\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
       let touched = false;
       const onInput = (event) => {
         if (event.isTrusted) touched = true;
@@ -218,11 +224,6 @@
         }
       };
       try {
-        const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-        if (!setValue) throw new Error("\u4FA1\u683C\u6B04\u3078\u5165\u529B\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
-        setValue.call(fields.price, String(message.price - 100));
-        fields.price.dispatchEvent(new Event("input", { bubbles: true }));
-        fields.price.dispatchEvent(new Event("change", { bubbles: true }));
         await new Promise((resolve) => setTimeout(resolve, 700));
         assertForm();
         const result = await request("AUTHORIZE", { jobId: message.jobId, itemId: message.itemId });
@@ -236,6 +237,27 @@
     }
     api.runtime.onMessage.addListener((message, sender, respond) => {
       if (sender.id !== api.runtime.id || sender.tab) return false;
+      if (message?.type === `${P.PREFIX}ITEM_READY`) {
+        try {
+          itemEditLink(message.itemId);
+          respond({ ready: !itemOpened });
+        } catch {
+          respond({ ready: false });
+        }
+        return false;
+      }
+      if (message?.type === `${P.PREFIX}ITEM_OPEN_EDIT`) {
+        try {
+          if (itemOpened) throw new Error("\u3053\u306E\u5546\u54C1\u3067\u306F\u65E2\u306B\u7DE8\u96C6\u3078\u9032\u3093\u3067\u3044\u307E\u3059\u3002");
+          const link = itemEditLink(message.itemId);
+          itemOpened = true;
+          respond({ opened: true });
+          location.assign(link.href);
+        } catch (error) {
+          respond({ error: error instanceof Error ? error.message : "\u7DE8\u96C6\u3078\u9032\u3081\u307E\u305B\u3093\u3067\u3057\u305F\u3002" });
+        }
+        return false;
+      }
       if (message?.type === `${P.PREFIX}EDITOR_READY`) {
         if (editorTouched) {
           respond({ error: "\u7DE8\u96C6\u753B\u9762\u304C\u64CD\u4F5C\u3055\u308C\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002" });

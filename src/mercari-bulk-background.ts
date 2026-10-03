@@ -4,14 +4,14 @@
   if (!api?.runtime?.onMessage || !P) return;
   let job: any = null;
   let ledger: Record<string, number> = {};
-  const busy = () => job && ["scanning", "ready", "running"].includes(job.status);
+  const busy = () => job && ["scanning", "running"].includes(job.status);
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   const errorText = (error: unknown) => error instanceof Error ? error.message : "処理を続けられませんでした。";
   const initial = api.storage.local.get([P.STATE_KEY, P.LEDGER_KEY]).then((saved: any) => {
     ledger = saved[P.LEDGER_KEY] ?? {};
     if (saved[P.STATE_KEY]) {
       job = { ...saved[P.STATE_KEY], token: null, workerTab: null };
-      if (busy()) {
+      if (["scanning", "ready", "running"].includes(job.status)) {
         job.status = "interrupted";
         job.message = "前回の処理が中断しました。自動再開はしません。確認中の商品は24時間、再実行の対象外です。";
       }
@@ -116,10 +116,18 @@
       await pause(current, 600 + Math.random() * 600);
     }
     await assertOwner(current);
-    current.status = "ready";
-    current.readyAt = Date.now();
-    current.message = current.candidates.length ? `${current.candidates.length}件を各100円値下げできます。` : "今回の対象商品はありません。";
+    if (!current.candidates.length) {
+      current.status = "done";
+      current.message = "今回の対象商品はありません。";
+      await persist();
+      return;
+    }
+    // 1回のクリックで対象確認から実行へ進む。基準時刻は開始時のまま固定する。
+    current.status = "running";
+    current.message = `${current.candidates.length}件の値下げを開始します…`;
     await persist();
+    await assertOwner(current);
+    await run(current);
   }
 
   async function pause(current: any, ms: number) {
@@ -132,23 +140,30 @@
     assertActive(current);
   }
 
-  async function readyEditor(current: any) {
+  async function readyPage(current: any, stage: "ITEM" | "EDITOR") {
+    const expected = `${P.ORIGIN}/${stage === "ITEM" ? "item" : "sell/edit"}/${current.current.id}`;
     for (let retry = 0; retry < 40; retry++) {
       await assertOwner(current);
       const tab = await api.tabs.get(current.workerTab);
-      if (tab.url !== `${P.ORIGIN}/sell/edit/${current.current.id}`) {
-        if (tab.status === "complete") throw new Error("編集画面を開けませんでした。ログイン状態を確認してください。");
+      if (tab.url !== expected) {
+        const openingEditor = stage === "EDITOR" && tab.url === `${P.ORIGIN}/item/${current.current.id}`;
+        if (tab.status === "complete" && !openingEditor) throw new Error("対象の商品画面を開けませんでした。ログイン状態を確認してください。");
       } else {
         let result: any;
         try {
-          result = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}EDITOR_READY`, itemId: current.current.id });
-        } catch { /* 読み込み中の確認メッセージだけを再送する。保存は再送しない。 */ }
+          result = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}${stage}_READY`, itemId: current.current.id });
+          // 既存の−100円入力スクリプトも読み込み済みであることを確認する。
+          if (stage === "EDITOR" && result?.ready) {
+            const legacy = await api.tabs.sendMessage(current.workerTab, { type: "FURIMANE_PRICE_ADJUST_READY", itemId: current.current.id });
+            result = { ready: legacy?.ready === true };
+          }
+        } catch { result = null; /* 読み込み中の確認だけを再送し、操作は再送しない。 */ }
         if (result?.error) throw new Error(result.error);
         if (result?.ready) return;
       }
       await pause(current, 500);
     }
-    throw new Error("編集画面の価格欄を確認できませんでした。");
+    throw new Error(stage === "ITEM" ? "商品ページの「商品の編集」を確認できませんでした。" : "編集画面の価格欄を確認できませんでした。");
   }
 
   async function closeWorker(current: any) {
@@ -181,9 +196,23 @@
       current.authorized = false;
       current.authorizing = false;
       current.message = `値下げ中… ${current.completed + 1} / ${current.candidates.length}件`;
-      const tab = await api.tabs.create({ url: `${P.ORIGIN}/sell/edit/${candidate.id}`, active: false });
+      const tab = await api.tabs.create({ url: `${P.ORIGIN}/item/${candidate.id}`, active: false });
       current.workerTab = tab.id;
-      await readyEditor(current);
+      await readyPage(current, "ITEM");
+      await assertOwner(current);
+      // 商品ページの実リンクから編集へ進む。商品ごとにこの順序を完了させる。
+      const opened = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}ITEM_OPEN_EDIT`, itemId: candidate.id });
+      if (!opened?.opened) throw new Error(opened?.error ?? "商品の編集へ進めませんでした。");
+      await readyPage(current, "EDITOR");
+      await assertOwner(current);
+      // 個別の−100円と同じ入力処理を再利用する。入力も保存も1回だけ。
+      const prepared = await api.tabs.sendMessage(current.workerTab, {
+        type: "APPLY_FURIMANE_PRICE_DROP_ON_EDIT", delta: -100, minimumPrice: 300,
+        bulkJobId: current.id, itemId: candidate.id, expectedPrice: candidate.price,
+      });
+      if (!prepared?.success || prepared.currentPrice !== candidate.price || prepared.nextPrice !== candidate.price - 100) {
+        throw new Error(prepared?.reason ?? "−100円の入力を確認できませんでした。");
+      }
       await assertOwner(current);
       // 保存メッセージは1回だけ。応答が失われても同じ操作を再送しない。
       let reply: any;
@@ -228,7 +257,7 @@
       current.message = current.cancelled ? "停止しました。保存を開始した商品の結果を確認してください。" : errorText(error);
       await persist().catch(() => {});
     } finally {
-      if (!["ready", "running", "scanning"].includes(current.status)) current.token = null;
+      if (!["running", "scanning"].includes(current.status)) current.token = null;
     }
   }
 
@@ -236,8 +265,10 @@
     const current = job;
     if (!current || sender.frameId !== 0 || sender.tab?.id !== current.workerTab || current.status !== "running"
       || current.id !== message.jobId || current.current?.id !== message.itemId || current.authorized || current.authorizing
-      || sender.url !== `${P.ORIGIN}/sell/edit/${message.itemId}`) throw new Error("この編集画面では一括処理を実行できません。");
+      || new URL(sender.url).origin !== P.ORIGIN) throw new Error("この編集画面では一括処理を実行できません。");
     current.authorizing = true;
+    const editor = await api.tabs.get(sender.tab.id);
+    if (editor.url !== `${P.ORIGIN}/sell/edit/${message.itemId}` || editor.pendingUrl) throw new Error("編集対象のページが変わったため停止しました。");
     await assertOwner(current);
     if (typeof message.accessToken !== "string" || message.accessToken !== current.token) throw new Error("ログイン情報が変わったため停止しました。");
     const account = await profile(message.accessToken);
@@ -260,10 +291,6 @@
 
   async function handle(message: any, sender: any) {
     await initial;
-    if (job?.status === "ready" && (job.cancelled || Date.now() - job.heartbeat > 30_000 || Date.now() - job.readyAt > 15 * 60_000)) {
-      job.status = "stopped"; job.token = null; job.message = "確認を終了しました。実行する場合は対象を確認し直してください。";
-      await persist();
-    }
     const action = message.type.slice(P.PREFIX.length);
     if (action === "AUTHORIZE") return authorize(message, sender);
     let senderOrigin = "";
@@ -303,26 +330,13 @@
     if (action === "CANCEL") {
       job.cancelled = true;
       job.message = "停止を受け付けました。保存を開始した商品の結果を確認しています…";
-      if (job.status === "ready") { job.status = "stopped"; job.message = "実行せずに終了しました。"; job.token = null; await persist(); }
-      return { state: summary(), owns: true };
-    }
-    if (action === "EXECUTE") {
-      if (job.status !== "ready" || job.instance !== message.instance || Date.now() - job.readyAt > 15 * 60_000) {
-        throw new Error("対象を確認し直してください（確認結果の有効期限は15分です）。");
-      }
-      assertActive(job);
-      if (!job.candidates.length) throw new Error("対象商品はありません。");
-      job.status = "running";
-      try { await persist(); }
-      catch (error) { job.status = "error"; job.token = null; throw error; }
-      void launch(job, run);
       return { state: summary(), owns: true };
     }
     throw new Error("操作を確認できませんでした。");
   }
 
   api.runtime.onMessage.addListener((message: any, sender: any, respond: (result: any) => void) => {
-    if (!message?.type?.startsWith(P.PREFIX) || message.type.includes("EDITOR_")) return false;
+    if (!message?.type?.startsWith(P.PREFIX) || message.type.includes("EDITOR_") || message.type.includes("ITEM_")) return false;
     void handle(message, sender).then(respond).catch((error: unknown) => respond({ error: errorText(error) }));
     return true;
   });

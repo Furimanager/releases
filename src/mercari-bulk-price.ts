@@ -115,14 +115,13 @@
     const toolbar = element("div", "", "fm-bulk-toolbar");
     const label = element("p", "更新から24時間以上経過した商品を、各1回100円値下げ", "fm-bulk-hint");
     const actions = element("div", "", "fm-bulk-actions");
-    const active = ["scanning", "ready", "running"].includes(state.status);
+    const active = ["scanning", "running"].includes(state.status);
     if (!active) {
       const start = button(pending ? "確認中…" : "一括 −100円", "START");
-      start.title = "対象商品を確認してから、各1回100円値下げします";
+      start.title = "対象商品を自動確認し、そのまま各1回100円値下げします";
       actions.append(start);
     }
-    if (state.status === "ready" && owns && state.candidates?.length) actions.append(button(`${state.candidates.length}件を−100円`, "EXECUTE"));
-    if (active && owns) actions.append(button(state.status === "ready" ? "キャンセル" : "停止", "CANCEL", true));
+    if (active && owns) actions.append(button("停止", "CANCEL", true));
     toolbar.append(label, actions);
     content.append(toolbar);
     mounted.replaceChildren(heading, content);
@@ -132,7 +131,7 @@
       content.append(status);
       if (active && !owns) content.append(element("p", "開始したタブで操作してください。", "fm-bulk-note"));
       content.append(element("p", `確認 ${state.scanned ?? 0}件 ／ 対象 ${state.candidates?.length ?? 0}件 ／ 完了 ${state.completed ?? 0}件 ／ 対象外・除外 ${state.skipped ?? 0}件`, "fm-bulk-counts"));
-      if (["ready", "running"].includes(state.status)) {
+      if (active) {
         content.append(element("p", "400円未満・日時不明の商品などは対象外です。実行中はこの一覧を開いたままにしてください。停止時も保存を開始した1件は結果を確認します。", "fm-bulk-note"));
       }
       if (state.rows?.length) {
@@ -181,10 +180,18 @@
   void poll();
 
   let editorUsed = false;
+  let itemOpened = false;
+  function itemEditLink(itemId: string) {
+    if (!/^m\d+$/.test(itemId) || location.href !== `${P.ORIGIN}/item/${itemId}`) throw new Error("対象の商品ページではありません。");
+    const links = [...document.querySelectorAll<HTMLAnchorElement>(`a[href="/sell/edit/${itemId}"], a[href="${P.ORIGIN}/sell/edit/${itemId}"]`)]
+      .filter(link => link.textContent?.trim() === "商品の編集" && link.getClientRects().length > 0);
+    if (links.length !== 1) throw new Error("商品ページの「商品の編集」を確認できませんでした。");
+    return links[0];
+  }
   function editorFields(itemId: string) {
     if (editorTouched) throw new Error("編集画面が操作されたため停止しました。保存は行っていません。");
     if (location.href !== `${P.ORIGIN}/sell/edit/${itemId}`) throw new Error("編集対象のページが変わったため停止しました。");
-    const inputs = [...document.querySelectorAll<HTMLInputElement>('input[data-testid="price-input"][name="price"]')];
+    const inputs = [...document.querySelectorAll<HTMLInputElement>('input[name="price"][data-testid="price-text-input"], input[name="price"][data-testid="price-input"]')];
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button[data-testid="edit-button"]')];
     if (inputs.length !== 1 || buttons.length !== 1 || buttons[0].textContent?.trim() !== "変更する"
       || inputs[0].disabled || inputs[0].readOnly || buttons[0].disabled) throw new Error("価格欄または変更ボタンを確認できませんでした。");
@@ -195,7 +202,7 @@
     if (editorUsed) throw new Error("この編集画面では既に実行済みです。");
     editorUsed = true;
     const fields = editorFields(message.itemId);
-    if (!Number.isSafeInteger(message.price) || message.price < 400 || Number(fields.price.value) !== message.price) throw new Error("価格が変わったため停止しました。");
+    if (!Number.isSafeInteger(message.price) || message.price < 400 || Number(fields.price.value) !== message.price - 100) throw new Error("−100円の入力が一致しないため停止しました。");
     let touched = false;
     const onInput = (event: Event) => { if (event.isTrusted) touched = true; };
     const events = ["input", "change", "pointerdown", "keydown"];
@@ -207,12 +214,7 @@
       }
     };
     try {
-      // Reactの入力イベントを通し、再レンダリング後にも同じ欄か確認する。
-      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-      if (!setValue) throw new Error("価格欄へ入力できませんでした。");
-      setValue.call(fields.price, String(message.price - 100));
-      fields.price.dispatchEvent(new Event("input", { bubbles: true }));
-      fields.price.dispatchEvent(new Event("change", { bubbles: true }));
+      // 入力は既存の−100円処理で済んでいる。再度減算せず、保存だけ行う。
       await new Promise(resolve => setTimeout(resolve, 700));
       assertForm();
       const result = await request("AUTHORIZE", { jobId: message.jobId, itemId: message.itemId });
@@ -228,6 +230,22 @@
 
   api.runtime.onMessage.addListener((message: any, sender: any, respond: (result: any) => void) => {
     if (sender.id !== api.runtime.id || sender.tab) return false;
+    if (message?.type === `${P.PREFIX}ITEM_READY`) {
+      try { itemEditLink(message.itemId); respond({ ready: !itemOpened }); }
+      catch { respond({ ready: false }); }
+      return false;
+    }
+    if (message?.type === `${P.PREFIX}ITEM_OPEN_EDIT`) {
+      try {
+        if (itemOpened) throw new Error("この商品では既に編集へ進んでいます。");
+        const link = itemEditLink(message.itemId);
+        itemOpened = true;
+        respond({ opened: true });
+        // 既存の個別操作同様、実リンクを使い編集用スクリプトを通常読込する。
+        location.assign(link.href);
+      } catch (error) { respond({ error: error instanceof Error ? error.message : "編集へ進めませんでした。" }); }
+      return false;
+    }
     if (message?.type === `${P.PREFIX}EDITOR_READY`) {
       if (editorTouched) { respond({ error: "編集画面が操作されたため停止しました。" }); return false; }
       try { editorFields(message.itemId); respond({ ready: !editorUsed }); }
