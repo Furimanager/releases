@@ -7,7 +7,7 @@
   const NAV_KEY = "furimanager_yahoo_navigation";
   const JOB_PREFIX = "furimanager_yahoo_relist_";
   const MAX_AGE_MS = 120000;
-  type Action = "relist" | "draft" | "decrease" | "increase" | "stop" | "delete";
+  type Action = "relist" | "draft" | "decrease" | "increase" | "stop" | "delete" | "inventory";
   type Navigation = { itemId: string; action: Action; savedAt: number };
   let running = false;
   let queued = false;
@@ -74,7 +74,7 @@
   function readNavigation(): Navigation | null {
     try {
       const value = JSON.parse(sessionStorage.getItem(NAV_KEY) || "null");
-      if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete"].includes(value.action) &&
+      if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete", "inventory"].includes(value.action) &&
         typeof value.savedAt === "number" && Date.now() >= value.savedAt && Date.now() - value.savedAt <= MAX_AGE_MS) return value;
     } catch { /* 壊れた一時データは引き継がない。 */ }
     sessionStorage.removeItem(NAV_KEY);
@@ -101,8 +101,7 @@
     bar.className = "furimanager-yahoo-toolbar";
     bar.dataset.itemId = id;
     bar.setAttribute("aria-label", "フリマネ 商品操作");
-    const definitions: [Action, string][] = [["relist", "再出品"], ["decrease", "-100"], ["increase", "+100"], ["draft", "下書き"], ["stop", "停止"], ["delete", "削除"]];
-    // TODO: Yahoo!フリマの在庫連携はサーバー側の受け口を確認してから追加する。
+    const definitions: [Action, string][] = [["inventory", "在庫連携"], ["relist", "再出品"], ["decrease", "-100"], ["increase", "+100"], ["draft", "下書き"], ["stop", "停止"], ["delete", "削除"]];
     for (const [action, label] of definitions) {
       const button = document.createElement("button");
       button.type = "button";
@@ -137,8 +136,12 @@
     if (pending && pending.itemId !== id) { sessionStorage.removeItem(NAV_KEY); return; }
     if (location.pathname === `/item/${id}`) {
       const edit = dom.editLink(document, id);
+      if (edit) toolbar(edit.parentElement, id);
+      // 他サービスへのコピーは元商品を変更しない。画像の下へ文字リンクを置く。
+      const gallery = document.querySelector("main .slick-slider");
+      const copyAnchor = edit?.parentElement?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
+      if (copyAnchor) (globalThis as any).FurimanagerCrossListing?.mount(copyAnchor, () => dom.collectItem(document, location.href), location.href);
       if (!edit) return; // 自分の商品であることを編集リンクで確認。
-      toolbar(edit.parentElement, id);
       if (pending) void runNavigation(pending);
     } else if (location.pathname === `/item/${id}/edit` && pending && document.querySelector("main form")) {
       void runNavigation(pending);
@@ -153,7 +156,17 @@
       if (location.pathname === `/item/${pending.itemId}`) {
         const edit = dom.editLink(document, pending.itemId);
         if (!edit) throw new Error("自分の商品の編集リンクを確認できませんでした。");
-        if (pending.action === "relist" || pending.action === "draft") {
+        if (pending.action === "inventory") {
+          const item = await waitFor(() => dom.collectItem(document, location.href));
+          const response = await chromeApi.runtime.sendMessage({ type: "OPEN_INVENTORY_LINK", payload: {
+            platform: "paypay_flea", yahooItemId: item.itemId, listingUrl: item.itemUrl,
+            listingTitle: item.title, listingPrice: item.price, listingStatus: "active",
+            imageUrl: item.imageUrls[0] ?? null, capturedAt: new Date().toISOString()
+          } });
+          if (!response?.success) throw new Error(response?.message || "在庫連携ページを開けませんでした。");
+          sessionStorage.removeItem(NAV_KEY);
+          notify("在庫連携ページを開きました。");
+        } else if (pending.action === "relist" || pending.action === "draft") {
           const item = await waitFor(() => dom.collectItem(document, location.href));
           if (!item.imageUrls.length || !item.categoryPath.length) throw new Error("画像またはカテゴリを取得できないため、新規出品画面を開きませんでした。");
           const token = crypto.randomUUID();
@@ -254,11 +267,12 @@
     }
   }
 
-  async function fillImages(form: Element, urls: string[], check = () => {}): Promise<boolean> {
+  async function fillImages(form: Element, urls: string[], check = () => {}, prepared?: File[]): Promise<boolean> {
     check();
     if (!urls.length || urls.length > 20 || form.querySelector('img[src^="https://auctions.c.yimg.jp/"]')) return false;
     const files = new DataTransfer();
-    for (let index = 0; index < urls.length; index++) {
+    if (prepared) prepared.forEach(file => files.items.add(file));
+    for (let index = 0; !prepared && index < urls.length; index++) {
       const response = await chromeApi.runtime.sendMessage({ type: "FETCH_YAHOO_IMAGE_AS_DATA_URL", url: urls[index] });
       check();
       if (!response?.success || !/^data:image\/(jpeg|png|webp);base64,/.test(response.dataUrl ?? "")) throw new Error(`画像${index + 1}枚目の取得に失敗しました。元の商品からやり直してください。`);
@@ -410,7 +424,62 @@
     queued = true;
     setTimeout(() => { queued = false; scan(); }, 250);
   }
+  async function fillCrossListing(item: any, job: any, check: () => void): Promise<void> {
+    const cross = (globalThis as any).FurimanagerCrossListing;
+    const form = await cross.wait(() => {
+      const f = document.querySelector("main form");
+      return f && dom.unique(f, 'input[placeholder="商品名を入力してください（必須）"]') && dom.unique(f, "textarea") && dom.priceField(f) ? f : null;
+    }, check);
+    const fields = () => ({ title: dom.unique(form, 'input[placeholder="商品名を入力してください（必須）"]'), description: dom.unique(form, "textarea"), price: dom.priceField(form) });
+    const empty = () => {
+      check(); const f = fields();
+      if (!form.isConnected || !f.title || !f.description || !f.price || f.title.value || f.description.value || f.price.value || form.querySelector('img[src^="https://auctions.c.yimg.jp/"]')) throw new Error("入力済みの内容があるため、上書きせず止めました。空の出品画面でやり直してください。");
+    };
+    const originalCheck = check;
+    check = () => {
+      originalCheck();
+      if (!form.isConnected || document.querySelector("main form") !== form) throw new Error("出品フォームが切り替わったため、自動入力を止めました。");
+    };
+    empty(); await cross.claim(job, check); const files = await cross.files(job, check); empty();
+    const warnings = ["カテゴリ"];
+    const values = cross.metadata(item);
+    if (!(await fillImages(form, item.imageUrls, check, files))) warnings.push("画像の追加枚数");
+    check(); const f = fields();
+    if (!f.title || !f.description || !f.price || f.title.value || f.description.value || f.price.value) throw new Error("別の入力内容を確認したため、上書きせず止めました。");
+    const expectedTitle = cross.setTitle(f.title, item, warnings);
+    cross.setText(f.description, item.description, "説明", warnings);
+    dom.setPriceValue(f.price, String(item.price));
+    if (!values.condition || !(await fillPicker(form, "商品の状態", [values.condition], check))) warnings.push("商品の状態");
+    check();
+    const shippingSelector = values.carrier ? `input[type="radio"][name="${values.carrier === "post" ? "JAPAN_POST" : "YAMATO"}"]` : null;
+    const shipping = shippingSelector ? dom.unique(form, shippingSelector) : null;
+    if (shipping && !shipping.disabled) {
+      if (!shipping.checked) {
+        // radio.click由来の同期changeを、本人の手入力と取り違えない。
+        if ((originalCheck as any).write) (originalCheck as any).write(() => shipping.click()); else shipping.click();
+      }
+    } else warnings.push("配送方法");
+    check();
+    if (!values.shippingPayer) warnings.push("送料負担（Yahoo!フリマは出品者負担です）");
+    if (!cross.selectExact(form.querySelector('select[name="timeToShip"]'), values.shippingDays)) warnings.push("発送までの日数");
+    if (!cross.selectExact(form.querySelector('select[name="prefectures"]'), values.shippingFrom)) warnings.push("発送元の地域（選択してください）");
+    if (item.brand) warnings.push("ブランド"); if (item.size) warnings.push("サイズ");
+    await new Promise(resolve => setTimeout(resolve, 400)); check();
+    const final = fields();
+    if (final.title?.value !== expectedTitle) warnings.push("商品名の一致");
+    if (final.description?.value !== item.description) warnings.push("説明の一致");
+    if (dom.price(final.price?.value ?? "") !== item.price) warnings.push("価格の一致");
+    if (values.condition && !pickerMatches(form, "商品の状態", [values.condition])) warnings.push("商品の状態");
+    if (shippingSelector && !dom.unique(form, shippingSelector)?.checked) warnings.push("配送方法");
+    if (values.shippingDays && !cross.selectedExact(form.querySelector('select[name="timeToShip"]'), values.shippingDays)) warnings.push("発送までの日数");
+    if (values.shippingFrom && !cross.selectedExact(form.querySelector('select[name="prefectures"]'), values.shippingFrom)) warnings.push("発送元の地域");
+    cross.complete(item, warnings);
+  }
   new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });
   setInterval(() => { if (lastUrl !== location.href) { lastUrl = location.href; scheduleScan(); } }, 500);
-  void fillRelist().then(scan);
+  const cross = (globalThis as any).FurimanagerCrossListing;
+  void (async () => {
+    if (!(await cross?.receive("yahoo", fillCrossListing))) await fillRelist();
+    scan();
+  })();
 })();

@@ -404,32 +404,34 @@
       .furimanager-listing-date-panel {
         box-sizing: border-box;
         container-type: inline-size;
-        width: 100%;
-        min-width: 0;
-        margin-top: 16px;
+        /* PC\u306F\u5F93\u6765\u306E\u7D046\u5272\u3002\u72ED\u3044\u89AA\u8981\u7D20\u3067\u306F\u5E45\u3092\u53CE\u3081\u3001\u65E5\u6642\u306E\u91CD\u306A\u308A\u3092\u9632\u3050\u3002 */
+        width: 60%;
+        min-width: min(312px, 100%);
+        max-width: 100%;
+        margin-top: 10px;
         overflow: hidden;
         border: 1px solid #f6b6d5;
-        border-radius: 10px;
+        border-radius: 6px;
         background: #ffffff;
         color: #27272a;
-        font-size: 16px;
+        font-size: 11px;
         line-height: 1.5;
       }
 
       .furimanager-listing-date-panel__title {
-        padding: 13px 18px;
+        padding: 8px 11px;
         background: #fdf2f8;
         color: #27272a;
-        font-size: 16px;
+        font-size: 11px;
         font-weight: 700;
       }
 
       .furimanager-listing-date-panel__row {
         display: grid;
         grid-template-columns: max-content minmax(0, 1fr) max-content;
-        gap: 16px;
+        gap: 8px;
         align-items: center;
-        padding: 14px 18px;
+        padding: 9px 11px;
       }
 
       .furimanager-listing-date-panel__row + .furimanager-listing-date-panel__row {
@@ -439,15 +441,15 @@
       .furimanager-listing-date-panel__label {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
+        gap: 4px;
         color: #52525b;
         font-weight: 600;
         white-space: nowrap;
       }
 
       .furimanager-listing-date-panel__icon {
-        width: 18px;
-        height: 18px;
+        width: 12px;
+        height: 12px;
         flex-shrink: 0;
         color: #52525b;
         fill: none;
@@ -474,27 +476,27 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 70px;
-        padding: 7px 12px;
-        border-radius: 8px;
+        min-width: 44px;
+        padding: 4px 7px;
+        border-radius: 5px;
         background: #fce7f3;
         color: #be185d;
-        font-size: 18px;
+        font-size: 12px;
         font-weight: 700;
         line-height: 1.25;
         white-space: nowrap;
       }
 
       /* \u753B\u9762\u5E45\u3067\u306F\u306A\u304F\u30AB\u30FC\u30C9\u5E45\u306B\u5408\u308F\u305B\u3001\u72ED\u3044PC\u30AB\u30E9\u30E0\u3067\u3082\u65E5\u6642\u3092\u5207\u3089\u306A\u3044\u3002 */
-      @container (max-width: 440px) {
+      @container (max-width: 300px) {
         .furimanager-listing-date-panel__row {
           grid-template-columns: minmax(0, 1fr) max-content;
-          gap: 8px 12px;
-          padding: 12px 16px;
+          gap: 4px 8px;
+          padding: 8px 10px;
         }
 
         .furimanager-listing-date-panel__title {
-          padding: 12px 16px;
+          padding: 8px 10px;
         }
 
         .furimanager-listing-date-panel__value {
@@ -2267,6 +2269,7 @@
       const existingToolbar = context.root.querySelector(`[${TOOLBAR_ATTRIBUTE}="true"]`);
       const buttonSignature = buttonDefinitions.map((definition) => definition.id).join(",");
       if (existingToolbar?.getAttribute(TOOLBAR_KIND_ATTRIBUTE) === pageKind && existingToolbar.getAttribute(TOOLBAR_BUTTONS_ATTRIBUTE) === buttonSignature) {
+        mountCrossListing(existingToolbar, context);
         return;
       }
       existingToolbar?.remove();
@@ -2281,12 +2284,18 @@
       });
       if (context.placement === "after") {
         context.mount.insertAdjacentElement("afterend", toolbar);
+        mountCrossListing(toolbar, context);
         return;
       }
       if (context.placement === "inlineEnd") {
         ensurePositionedContainer(context.mount);
       }
       context.mount.appendChild(toolbar);
+      mountCrossListing(toolbar, context);
+    }
+    function mountCrossListing(toolbar, context) {
+      if (!PRODUCT_PATH_PATTERN.test(location.pathname)) return;
+      globalThis.FurimanagerCrossListing?.mount(toolbar, () => extractItemDataFromElement(document, location.href, "copy", true), location.href);
     }
     function applyToolbarPlacementClass(toolbar, placement) {
       if (placement === "after") {
@@ -2737,8 +2746,8 @@
     function isRelistItemMissingRequiredData(item) {
       return typeof item.price !== "number";
     }
-    function extractItemDataFromElement(source, fallbackUrl, mode) {
-      const itemUrl = normalizeItemUrl(getItemLink(source)?.href ?? fallbackUrl ?? window.location.href);
+    function extractItemDataFromElement(source, fallbackUrl, mode, currentProductOnly = false) {
+      const itemUrl = normalizeItemUrl(currentProductOnly ? window.location.href : getItemLink(source)?.href ?? fallbackUrl ?? window.location.href);
       const itemId = extractMercariItemId(itemUrl);
       const detailSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : source;
       const imageSource = PRODUCT_PATH_PATTERN.test(window.location.pathname) ? document : source;

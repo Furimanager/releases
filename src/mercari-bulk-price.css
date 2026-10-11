@@ -10,7 +10,9 @@
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif;
 }
 #furimane-bulk-price * { box-sizing: border-box; }
-#furimane-bulk-price .fm-bulk-heading { padding: 6px 18px; border-bottom: 1px solid #fce2ef; border-radius: 8px 8px 0 0; background: #fff6fa; font-size: 18px; line-height: 1.35; font-weight: 700; }
+#furimane-bulk-price .fm-bulk-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 18px; border-bottom: 1px solid #fce2ef; border-radius: 8px 8px 0 0; background: #fff6fa; font-size: 18px; line-height: 1.35; font-weight: 700; }
+#furimane-bulk-price .fm-bulk-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+#furimane-bulk-price .fm-bulk-brand { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid #ffadd0; border-radius: 999px; background: #fff; color: #c82375; font-size: 11px; line-height: 1.5; font-weight: 700; white-space: nowrap; }
 #furimane-bulk-price .fm-bulk-content { padding: 8px 18px; }
 #furimane-bulk-price .fm-bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
 #furimane-bulk-price p { margin: 5px 0 0; }
@@ -32,6 +34,38 @@
 #furimane-bulk-price .fm-bulk-result { padding: 9px 0; border-top: 1px solid #f2dce5; overflow-wrap: anywhere; }
 #furimane-bulk-price .fm-bulk-result a { color: #303038; display: block; }
 #furimane-bulk-price .fm-bulk-result span { color: #655360; font-size: 13px; }
+#furimane-bulk-price [hidden] { display: none !important; }
+#furimane-bulk-price .fm-bulk-help { position: relative; flex: 0 0 auto; }
+#furimane-bulk-price .fm-bulk-help-button { display: grid; place-items: center; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid #e7c96a; border-radius: 50%; background: #fff1b8; color: #806000; }
+#furimane-bulk-price .fm-bulk-help-button:hover { background: #ffe797; }
+#furimane-bulk-price .fm-bulk-help-popover { position: absolute; z-index: 20; top: 100%; right: -5px; width: min(370px, calc(100vw - 68px)); padding-top: 8px; font-size: 12px; font-weight: 400; line-height: 1.7; }
+#furimane-bulk-price .fm-bulk-help-popover.opens-up { top: auto; bottom: 100%; padding-top: 0; padding-bottom: 8px; }
+#furimane-bulk-price .fm-bulk-help-panel { max-height: min(540px, var(--fm-bulk-help-height, 70vh)); overflow: auto; padding: 15px 17px; border: 1px solid #ecd996; border-radius: 12px; background: #fffdf4; color: #514a36; box-shadow: 0 8px 28px #40330d1a; }
+#furimane-bulk-price .fm-bulk-help-panel strong { color: #6e540f; font-size: inherit; font-weight: 700; }
+#furimane-bulk-price .fm-bulk-help-panel > strong { display: block; margin-top: 14px; font-size: 14px; }
+#furimane-bulk-price .fm-bulk-help-panel > strong:first-child { margin-top: 0; }
+#furimane-bulk-price .fm-bulk-help-panel ul { padding-left: 17px; margin: 7px 0 14px; }
+#furimane-bulk-price .fm-bulk-help-panel li + li { margin-top: 7px; }
+#furimane-bulk-price .fm-bulk-help-panel .fm-bulk-pacing-note { margin-top: 12px; }
+#furimane-bulk-price .fm-bulk-progress { margin-top: 10px; }
+#furimane-bulk-price .fm-bulk-progress-caption { display: flex; align-items: baseline; gap: 12px; font-size: 13px; }
+#furimane-bulk-price .fm-bulk-progress-caption span { color: #726775; font-size: 12px; font-variant-numeric: tabular-nums; }
+#furimane-bulk-price .fm-bulk-progress-track { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; }
+#furimane-bulk-price .fm-bulk-meter { display: flex; gap: 3px; }
+/* リサーチ画面のSegmentMeterと同じ12×10px・角丸3px・135度グラデーション。 */
+#furimane-bulk-price .fm-bulk-segment { display: block; width: 12px; height: 10px; border-radius: 3px; background: #ece6f2; }
+#furimane-bulk-price .fm-bulk-segment.is-complete,
+#furimane-bulk-price .fm-bulk-segment.is-current { background: linear-gradient(135deg, #7c3aed, #ec4899); }
+#furimane-bulk-price .fm-bulk-segment.is-current { animation: fm-bulk-square-pulse 1.25s ease-in-out infinite; }
+#furimane-bulk-price .fm-bulk-eta { font-size: 12px; line-height: 1; color: #726775; font-variant-numeric: tabular-nums; }
+#furimane-bulk-price .fm-bulk-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@keyframes fm-bulk-square-pulse {
+  0%, 100% { opacity: .35; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #furimane-bulk-price .fm-bulk-segment.is-current { animation: none; outline: 1px solid #7c3aed; outline-offset: 2px; }
+}
 @media (max-width: 640px) {
   #furimane-bulk-price .fm-bulk-heading { padding: 6px 14px; }
   #furimane-bulk-price .fm-bulk-content { padding: 8px 14px; }

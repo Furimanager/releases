@@ -62,7 +62,7 @@
       }
       mounted = element("section", "", "fm-bulk");
       mounted.id = ROOT_ID;
-      mounted.setAttribute("aria-label", "\u30D5\u30EA\u30DE\u30CD \u4E00\u62EC\u5024\u4E0B\u3052");
+      mounted.setAttribute("aria-label", "\u4E00\u62EC\u5024\u4E0B\u3052\uFF08\u30D5\u30EA\u30DE\u30CD\uFF09");
       if (tabs) tabs.after(mounted);
       else list.before(mounted);
       lastRender = "";
@@ -106,6 +106,173 @@
       });
       return node;
     }
+    let helpPinned = false;
+    function showHelp(open) {
+      const toggle = mounted?.querySelector(".fm-bulk-help-button");
+      const popup = mounted?.querySelector(".fm-bulk-help-popover");
+      toggle?.setAttribute("aria-expanded", String(open));
+      if (popup) {
+        popup.hidden = !open;
+        if (open && toggle) {
+          const rect = toggle.getBoundingClientRect();
+          const below = innerHeight - rect.bottom - 24;
+          const above = rect.top - 24;
+          const upward = below < 180 && above > below;
+          popup.classList.toggle("opens-up", upward);
+          popup.style.setProperty("--fm-bulk-help-height", `${Math.max(100, upward ? above : below)}px`);
+        }
+      }
+    }
+    function helpButton() {
+      helpPinned = false;
+      const help = element("div", "", "fm-bulk-help");
+      const toggle = element("button", "", "fm-bulk-help-button");
+      toggle.type = "button";
+      toggle.setAttribute("aria-label", "\u6CE8\u610F\u66F8\u304D\u3068\u6240\u8981\u6642\u9593\u306E\u76EE\u5B89");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-controls", "fm-bulk-help-popover");
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "20", height: "20", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
+      const circle = document.createElementNS(svg.namespaceURI, "circle");
+      circle.setAttribute("cx", "12");
+      circle.setAttribute("cy", "12");
+      circle.setAttribute("r", "10");
+      const path = document.createElementNS(svg.namespaceURI, "path");
+      path.setAttribute("d", "M12 8v4m0 4h.01");
+      svg.append(circle, path);
+      toggle.append(svg);
+      const popup = element("div", "", "fm-bulk-help-popover");
+      popup.id = "fm-bulk-help-popover";
+      popup.hidden = true;
+      const panel = element("div", "", "fm-bulk-help-panel");
+      panel.setAttribute("role", "note");
+      panel.setAttribute("aria-label", "\u4E00\u62EC\u5024\u4E0B\u3052\u306E\u6CE8\u610F\u66F8\u304D");
+      panel.tabIndex = 0;
+      panel.append(element("strong", "\u5B9F\u884C\u4E2D\u306E\u304A\u9858\u3044"));
+      const list = element("ul");
+      for (const [before, emphasis, after] of [
+        ["", "\u3053\u306E\u753B\u9762\u3092\u8868\u793A\u3057\u305F\u307E\u307E", "\u304A\u5F85\u3061\u304F\u3060\u3055\u3044\u3002"],
+        ["\u5BFE\u8C61\u5546\u54C1\u306E", "\u7DE8\u96C6\u30FB\u4FA1\u683C\u5909\u66F4", "\u306F\u3001\u7D42\u308F\u308B\u307E\u3067\u304A\u5F85\u3061\u304F\u3060\u3055\u3044\u3002"],
+        ["\u5024\u4E0B\u3052\u7528\u306B\u958B\u304F", "\u5546\u54C1\u30FB\u7DE8\u96C6\u753B\u9762\u306E\u30BF\u30D6", "\u306F\u64CD\u4F5C\u3057\u306A\u3044\u3067\u304F\u3060\u3055\u3044\u3002"]
+      ]) {
+        const item = element("li");
+        item.append(before, element("strong", emphasis), after);
+        list.append(item);
+      }
+      panel.append(list, element("p", "\u203B\u518D\u8AAD\u307F\u8FBC\u307F\u3084\u753B\u9762\u306E\u5207\u308A\u66FF\u3048\u3001\u30D1\u30BD\u30B3\u30F3\u306E\u30B9\u30EA\u30FC\u30D7\u3067\u3001\u9014\u4E2D\u3067\u6B62\u307E\u308B\u3053\u3068\u304C\u3042\u308A\u307E\u3059\u3002", "fm-bulk-note"));
+      const pacing = element("p", "", "fm-bulk-pacing-note");
+      pacing.append("\u64CD\u4F5C\u304C\u96C6\u4E2D\u3057\u306A\u3044\u3088\u3046\u3001", element("strong", "\u30E9\u30F3\u30C0\u30E0\u306B\u9593\u9694\u3092\u3042\u3051\u3066"), "\u5024\u4E0B\u3052\u3057\u307E\u3059\u3002\u5F85\u3061\u6642\u9593\u304C\u7D42\u308F\u308B\u3068\u3001\u81EA\u52D5\u3067\u6B21\u306E\u5546\u54C1\u3078\u9032\u307F\u307E\u3059\u3002");
+      panel.append(pacing);
+      panel.append(element("strong", "\u304B\u304B\u308B\u6642\u9593\u306E\u76EE\u5B89"));
+      for (const [count, time] of [["20\u4EF6", "\u7D044\u301C6\u5206"], ["50\u4EF6", "\u7D0410\u301C15\u5206"], ["100\u4EF6", "\u7D0420\u301C30\u5206"]]) {
+        const guide = element("p");
+        guide.append(`${count} \u2192 `, element("strong", time));
+        panel.append(guide);
+      }
+      const estimate = element("p", "", "fm-bulk-note");
+      estimate.append(element("strong", "\u6642\u9593\u306F\u3042\u304F\u307E\u3067\u76EE\u5B89\u3067\u3059\u3002"), "\u5546\u54C1\u306E\u78BA\u8A8D\u3084\u901A\u4FE1\u72B6\u6CC1\u306B\u3088\u3063\u3066\u524D\u5F8C\u3057\u307E\u3059\u3002\u5B9F\u884C\u4E2D\u306F\u3001\u6B8B\u308A\u6642\u9593\u3092\u753B\u9762\u306B\u8868\u793A\u3057\u307E\u3059\u3002");
+      panel.append(estimate);
+      popup.append(panel);
+      help.append(toggle, popup);
+      help.addEventListener("pointerenter", (event) => {
+        if (event.pointerType !== "touch") showHelp(true);
+      });
+      help.addEventListener("pointerleave", () => {
+        if (!helpPinned && !help.matches(":focus-within")) showHelp(false);
+      });
+      help.addEventListener("focusin", () => showHelp(true));
+      help.addEventListener("focusout", (event) => {
+        if (!help.contains(event.relatedTarget)) {
+          helpPinned = false;
+          showHelp(false);
+        }
+      });
+      toggle.addEventListener("click", () => {
+        helpPinned = !helpPinned;
+        showHelp(helpPinned);
+      });
+      return help;
+    }
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      const help = mounted?.querySelector(".fm-bulk-help");
+      if (help?.contains(document.activeElement)) help.querySelector("button")?.focus({ preventScroll: true });
+      helpPinned = false;
+      showHelp(false);
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!mounted?.querySelector(".fm-bulk-help")?.contains(event.target)) {
+        helpPinned = false;
+        showHelp(false);
+      }
+    });
+    let meterJob = null;
+    let meterLit = 0;
+    let meterTarget = 0;
+    let meterActive = false;
+    let meterNode = null;
+    let meterTimer = null;
+    function paintMeter() {
+      if (!meterNode) return;
+      [...meterNode.children].forEach((square, index) => {
+        square.className = `fm-bulk-segment${index < meterLit ? " is-complete" : meterActive && index === meterLit ? " is-current" : ""}`;
+      });
+    }
+    function advanceMeter() {
+      meterTimer = null;
+      if (!meterNode?.isConnected) return;
+      if (meterLit < meterTarget) meterLit++;
+      paintMeter();
+      if (meterLit < meterTarget) meterTimer = setTimeout(advanceMeter, 180);
+    }
+    function progressDisplay(previous) {
+      const view = P.progress(state);
+      const scanning = state.status === "scanning";
+      const active = scanning || state.status === "running";
+      const group = previous ?? element("div", "", "fm-bulk-progress");
+      if (!previous) {
+        const caption = element("div", "", "fm-bulk-progress-caption");
+        caption.append(element("strong"), element("span"));
+        const meter2 = element("div", "", "fm-bulk-meter");
+        meter2.setAttribute("role", "progressbar");
+        meter2.setAttribute("aria-label", "\u4E00\u62EC\u5024\u4E0B\u3052\u306E\u9032\u6357");
+        meter2.setAttribute("aria-valuemin", "0");
+        meter2.setAttribute("aria-valuemax", "100");
+        for (let index = 0; index < 10; index++) {
+          const square = element("span", "", "fm-bulk-segment");
+          square.setAttribute("aria-hidden", "true");
+          meter2.append(square);
+        }
+        const track = element("div", "", "fm-bulk-progress-track");
+        track.append(meter2, element("span", "", "fm-bulk-eta"));
+        group.append(caption, track);
+      }
+      const label = scanning ? "\u5BFE\u8C61\u3092\u78BA\u8A8D\u4E2D" : active ? "\u4E00\u62EC\u5024\u4E0B\u3052\u3092\u5B9F\u884C\u4E2D" : state.status === "done" ? "\u5B8C\u4E86" : "\u505C\u6B62\u4E2D";
+      const count = scanning ? `${state.scanned ?? 0}\u4EF6\u78BA\u8A8D` : `${view.processed} / ${view.total}\u4EF6`;
+      group.querySelector(".fm-bulk-progress-caption strong").textContent = label;
+      group.querySelector(".fm-bulk-progress-caption span").textContent = count;
+      const meter = group.querySelector(".fm-bulk-meter");
+      if (!scanning) meter.setAttribute("aria-valuenow", String(view.percent));
+      else meter.removeAttribute("aria-valuenow");
+      meter.setAttribute("aria-valuetext", `${label}\u30FB${count}`);
+      if (meterJob !== state.id || scanning || !active && state.status !== "done") {
+        if (meterTimer !== null) clearTimeout(meterTimer);
+        meterTimer = null;
+        meterLit = active ? 0 : view.lit;
+        meterJob = state.id;
+      }
+      meterNode = meter;
+      meterTarget = view.lit;
+      meterActive = active;
+      meterLit = Math.min(meterLit, meterTarget);
+      if (!active && state.status === "done" && !previous) meterLit = meterTarget;
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) meterLit = meterTarget;
+      paintMeter();
+      if (meterLit < meterTarget && meterTimer === null) meterTimer = setTimeout(advanceMeter, 180);
+      const time = scanning ? "\u6B8B\u308A\u6642\u9593\u3092\u8A08\u7B97\u4E2D\u2026" : view.remainingMs == null ? "" : view.remainingMs < 6e4 ? "\u6B8B\u308A\u7D041\u5206\u4EE5\u5185" : `\u6B8B\u308A\u7D04${Math.ceil(view.remainingMs / 6e4)}\u5206`;
+      group.querySelector(".fm-bulk-eta").textContent = time;
+      return group;
+    }
     function render() {
       if (!mounted) return;
       const key = JSON.stringify([state, pending, owns]);
@@ -115,7 +282,14 @@
       const detailsOpen = mounted.querySelector("details")?.open ?? false;
       const resultScroll = mounted.querySelector(".fm-bulk-results")?.scrollTop ?? 0;
       const focusedLabel = mounted.contains(document.activeElement) ? document.activeElement?.textContent : null;
-      const heading = element("div", "\u30D5\u30EA\u30DE\u30CD \u4E00\u62EC\u5024\u4E0B\u3052", "fm-bulk-heading");
+      let heading = mounted.querySelector(".fm-bulk-heading");
+      if (!heading) {
+        heading = element("div", "", "fm-bulk-heading");
+        const title = element("div", "", "fm-bulk-title");
+        title.append(element("span", "\u4E00\u62EC\u5024\u4E0B\u3052"), element("span", "\u30D5\u30EA\u30DE\u30CD", "fm-bulk-brand"));
+        heading.append(title, helpButton());
+        mounted.append(heading);
+      }
       const content = element("div", "", "fm-bulk-content");
       const toolbar = element("div", "", "fm-bulk-toolbar");
       const label = element("p", "\u66F4\u65B0\u304B\u308924\u6642\u9593\u4EE5\u4E0A\u7D4C\u904E\u3057\u305F\u5546\u54C1\u3092\u3001\u54041\u56DE100\u5186\u5024\u4E0B\u3052", "fm-bulk-hint");
@@ -129,21 +303,27 @@
       if (active && owns) actions.append(button("\u505C\u6B62", "CANCEL", true));
       toolbar.append(label, actions);
       content.append(toolbar);
-      mounted.replaceChildren(heading, content);
+      const previousContent = mounted.querySelector(".fm-bulk-content");
+      const previousProgress = mounted.querySelector(".fm-bulk-progress");
+      if (previousContent) previousContent.replaceWith(content);
+      else mounted.append(content);
       if (state.status !== "idle") {
-        const status = element("p", state.message ?? "\u78BA\u8A8D\u4E2D\u2026", "fm-bulk-status");
+        if (active || state.candidates?.length) content.append(progressDisplay(previousProgress));
+        const status = element("p", active ? "" : state.message ?? "", "fm-bulk-status");
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
+        if (active) {
+          const progress = P.progress(state);
+          status.classList.add("fm-bulk-sr-only");
+          status.textContent = state.status === "scanning" ? `\u5BFE\u8C61\u78BA\u8A8D\u4E2D\u30FB${state.scanned ?? 0}\u4EF6\u78BA\u8A8D` : `${progress.processed} / ${progress.total}\u4EF6\u51E6\u7406\u6E08\u307F`;
+        }
         content.append(status);
         if (active && !owns) content.append(element("p", "\u958B\u59CB\u3057\u305F\u30BF\u30D6\u3067\u64CD\u4F5C\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "fm-bulk-note"));
-        content.append(element("p", `\u78BA\u8A8D ${state.scanned ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61 ${state.candidates?.length ?? 0}\u4EF6 \uFF0F \u5B8C\u4E86 ${state.completed ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61\u5916\u30FB\u9664\u5916 ${state.skipped ?? 0}\u4EF6`, "fm-bulk-counts"));
-        if (active) {
-          content.append(element("p", "400\u5186\u672A\u6E80\u30FB\u65E5\u6642\u4E0D\u660E\u306E\u5546\u54C1\u306A\u3069\u306F\u5BFE\u8C61\u5916\u3067\u3059\u3002\u5B9F\u884C\u4E2D\u306F\u3053\u306E\u4E00\u89A7\u3092\u958B\u3044\u305F\u307E\u307E\u306B\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u505C\u6B62\u6642\u3082\u4FDD\u5B58\u3092\u958B\u59CB\u3057\u305F1\u4EF6\u306F\u7D50\u679C\u3092\u78BA\u8A8D\u3057\u307E\u3059\u3002", "fm-bulk-note"));
-        }
         if (state.rows?.length) {
           const details = element("details");
           details.open = detailsOpen;
           details.append(element("summary", "\u5BFE\u8C61\u3068\u7D50\u679C\u3092\u898B\u308B"));
+          details.append(element("p", `\u78BA\u8A8D ${state.scanned ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61 ${state.candidates?.length ?? 0}\u4EF6 \uFF0F \u5B8C\u4E86 ${state.completed ?? 0}\u4EF6 \uFF0F \u5BFE\u8C61\u5916\u30FB\u9664\u5916 ${state.skipped ?? 0}\u4EF6`, "fm-bulk-counts"));
           const rows = element("div", "", "fm-bulk-results");
           for (const row of state.rows) {
             const entry = element("div", "", "fm-bulk-result");
@@ -161,11 +341,13 @@
         }
       }
       if (error) content.append(error);
-      if (focusedLabel) [...mounted.querySelectorAll("button, summary")].find((node) => node.textContent === focusedLabel)?.focus({ preventScroll: true });
+      if (focusedLabel && !heading.contains(document.activeElement)) [...content.querySelectorAll("button, summary")].find((node) => node.textContent === focusedLabel)?.focus({ preventScroll: true });
     }
+    let polling = false;
     async function poll() {
       mount();
-      if (!mounted || pending) return;
+      if (!mounted || pending || polling) return;
+      polling = true;
       const epoch = actionEpoch;
       try {
         const response = await request("STATUS");
@@ -175,6 +357,8 @@
         render();
       } catch (error) {
         showError(error);
+      } finally {
+        polling = false;
       }
     }
     let scheduled = false;
@@ -186,9 +370,10 @@
         mount();
       }, 200);
     }).observe(document, { childList: true, subtree: true });
+    let refreshTicks = 0;
     setInterval(() => {
-      void poll();
-    }, 5e3);
+      if (++refreshTicks % 10 === 0 || ["scanning", "running"].includes(state.status)) void poll();
+    }, 500);
     void poll();
     let editorUsed = false;
     let itemOpened = false;

@@ -1,14 +1,14 @@
-/* global require, __dirname, Buffer */
+/* global require, __dirname, Buffer, process */
 // 自作のYahoo画面モック。外部への商品保存・画像送信は行わない。
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const port = 4327;
+const port = Number(process.env.YAHOO_FIXTURE_PORT || 4327);
 const origin = `http://127.0.0.1:${port}`;
 const root = path.resolve(__dirname, '..');
 const token = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRRsAAAAASUVORK5CYII=';
-const item = {itemId:'z12345',itemUrl:origin+'/item/z12345',title:'検証用　シャツ',description:'元の商品説明\n2行目',price:1000,imageUrls:[origin+'/images.auctions.yahoo.co.jp/1.png'],categoryPath:['ファッション','トップス'],rows:{カテゴリ:'ファッション > トップス',商品の状態:'未使用に近い',配送の方法:'おてがる配送（日本郵便）',発送までの日数:'2〜3日で発送',発送元の地域:'兵庫県',商品ID:'z12345',色:'ブラック系'},hashtags:[]};
+const item = {itemId:'z123456789',itemUrl:origin+'/item/z123456789',title:'検証用　シャツ',description:'元の商品説明\n2行目',price:1000,imageUrls:[origin+'/images.auctions.yahoo.co.jp/1.png'],categoryPath:['ファッション','トップス'],rows:{カテゴリ:'ファッション > トップス',商品の状態:'未使用に近い',配送の方法:'おてがる配送（日本郵便）',発送までの日数:'2〜3日で発送',発送元の地域:'兵庫県',商品ID:'z123456789',色:'ブラック系'},hashtags:[]};
 function picker(name, values){
  const panel=`<div class="panel" style="display:none"><div><p>${name}</p><button type="button"><img alt="閉じるボタン" src="${image}"></button></div><div>${values.map(v=>name==='カテゴリ'?`<li><span>${v}</span></li>`:`<p>${v}</p><small>状態の説明</small>`).join('')}</div></div>`;
  // 実Yahooの商品状態は、選択表示と非表示パネルが同じ親に入る。
@@ -20,7 +20,7 @@ function fixture(url){
 const isEdit=url.pathname.endsWith('/edit'), isAdd=url.pathname==='/item/add';
 const caseName=url.searchParams.get('case')||'';
 const itemRows=Object.entries(item.rows).map(([k,v])=>`<tr><th>${k}</th><td>${k==='カテゴリ'?'<a href="/category/1">ファッション</a><a href="/category/1/2">トップス</a>':v}</td></tr>`).join('');
-const body=isEdit||isAdd?form(isEdit):url.pathname==='/my/item/selling'?'<main><div id="itm"><div><a href="/item/z12345"><span>検証用シャツ 1,000円</span></a></div><div><a href="/item/z99999"><span>検証用パンツ 2,000円</span></a></div></div></main>':`<main><h1>${item.title}</h1><div class="ItemPrice__Component"><span>1,000円</span><span style="display:none">1,000円</span></div><div class="ItemText__Text">元の商品説明\n2行目</div><div class="slick-slide"><img src="${origin}/images.auctions.yahoo.co.jp/1.png"></div><div class="slick-slide slick-cloned"><img src="${origin}/images.auctions.yahoo.co.jp/1.png"></div><table class="ItemTable__Component">${itemRows}</table><div><a href="/item/z12345/edit">編集する</a></div></main>`;
+const body=isEdit||isAdd?form(isEdit):url.pathname==='/my/item/selling'?'<main><div id="itm"><div><a href="/item/z123456789"><span>検証用シャツ 1,000円</span></a></div><div><a href="/item/z99999"><span>検証用パンツ 2,000円</span></a></div></div></main>':`<main><h1>${item.title}</h1><div class="ItemPrice__Component"><span>1,000円</span><span style="display:none">1,000円</span></div><div class="ItemText__Text">元の商品説明\n2行目</div><div class="slick-slide"><img src="${origin}/images.auctions.yahoo.co.jp/1.png"></div><div class="slick-slide slick-cloned"><img src="${origin}/images.auctions.yahoo.co.jp/1.png"></div><table class="ItemTable__Component">${itemRows}</table><div><a href="/item/z123456789/edit">編集する</a></div></main>`;
 return `<!doctype html><meta charset="utf-8"><style>body{font-family:sans-serif;margin:16px}main{max-width:720px;margin:auto}input,textarea,select{display:block;margin:10px 0;max-width:95%;font-size:16px}label{display:block}li{list-style:none;padding:10px}.panel{position:fixed;inset:15% 10%;background:white;border:2px solid #777;z-index:100}.panel button img{width:24px;height:24px}#itm>div{border:1px solid #bbb;padding:8px}#itm a{display:block;min-height:60px}</style>${body}<script>
 window.finalClicks=0;window.priceInputEvents=0;
 // 実Yahooと同じく、価格はblurで保存用の値へ確定する。
@@ -46,11 +46,12 @@ if(['tags','custom-tags'].includes('${caseName}')){
 }
 if('${caseName}'==='existing')document.querySelector('input[placeholder^=商品名]').value='編集途中';
 if(${isEdit}){
- const pending={itemId:'${caseName==='wrong'?'z99999':'z12345'}',action:'${caseName==='increase'?'increase':caseName==='stop'?'stop':caseName==='delete'?'delete':'decrease'}',savedAt:Date.now()-${caseName==='stale'?130000:0}};
+ const pending={itemId:'${caseName==='wrong'?'z99999':'z123456789'}',action:'${caseName==='increase'?'increase':caseName==='stop'?'stop':caseName==='delete'?'delete':'decrease'}',savedAt:Date.now()-${caseName==='stale'?130000:0}};
  sessionStorage.setItem('furimanager_yahoo_navigation',JSON.stringify(pending));
  if('${caseName}'==='minimum')document.querySelector('input[type=tel]').value='300';
 }
-window.chrome={storage:{local:{get:async key=>({[key]:store[key]}),set:async value=>Object.assign(store,value),remove:async key=>{delete store[key]}}},runtime:{sendMessage:async message=>message.type==='FETCH_YAHOO_IMAGE_AS_DATA_URL'?{success:true,dataUrl:'${image}'}:{success:true}}};
+window.inventoryRequests=[];
+window.chrome={storage:{local:{get:async key=>({[key]:store[key]}),set:async value=>Object.assign(store,value),remove:async key=>{delete store[key]}}},runtime:{sendMessage:async message=>{if(message.type==='OPEN_INVENTORY_LINK'){inventoryRequests.push(message);return {success:true};}return message.type==='FETCH_YAHOO_IMAGE_AS_DATA_URL'?{success:true,dataUrl:'${image}'}:{success:true};}}};
 </script><script src="/src/yahoo-fleamarket-dom.js"></script><script src="/src/yahoo-fleamarket.js"></script>`;
 }
 const tests=`<!doctype html><meta charset="utf-8"><title>Yahoo!フリマ入力補助 検証</title><style>body{font:16px sans-serif;color:#251434;background:#fcf7fb;margin:24px}li{padding:6px}.pass{color:#146b38}.fail{color:#ae143a}iframe{width:720px;height:750px;border:1px solid #bbb}</style><h1>Yahoo!フリマ入力補助 検証</h1><p>実DOMの目印を再現したローカル画面。商品データ・送信・画像通信はモック。</p><ol id="results"></ol><iframe></iframe><script>
@@ -62,8 +63,10 @@ async function status(w){for(let i=0;i<100;i++){const s=w.document.querySelector
 async function check(name,run){const li=document.createElement('li');li.textContent=name;results.append(li);try{await run();li.className='pass';li.textContent+='：PASS';}catch(e){li.className='fail';li.textContent+='：FAIL '+e.message;}}
 (async()=>{
 await check('出品一覧に2商品の操作ボタン、DOM再描画でも重複なし',async()=>{const w=await load('/my/item/selling');await sleep(600);assert(w.document.querySelectorAll('.furimanager-yahoo-toolbar').length===2,'bars');w.document.body.append(w.document.createElement('div'));await sleep(500);assert(w.document.querySelectorAll('.furimanager-yahoo-toolbar').length===2,'duplicate');assert(!w.document.querySelector('a button'),'nested button');});
-await check('商品情報をDOMから抽出、非表示の重複価格・画像を除外',async()=>{const w=await load('/item/z12345');const data=w.FurimanagerYahooDom.collectItem(w.document,w.location.href);assert(data.price===1000&&data.imageUrls.length===1&&data.categoryPath.length===2&&data.title==='検証用\\u3000シャツ','capture');});
-for(const c of ['decrease','increase','minimum','wrong','stale','stop','delete'])await check('編集 '+c+'、最終確定を押さない',async()=>{const w=await load('/item/z12345/edit?case='+c);if(c==='wrong'||c==='stale')await sleep(700);else await status(w);const expected=c==='decrease'?'900':c==='increase'?'1100':c==='minimum'?'300':'1000';assert(w.document.querySelector('input[type=tel]').value===expected,'price');if(c==='decrease'||c==='increase')assert(w.committedPrice===expected,'price not committed');assert(w.finalClicks===0,'final clicked');if(c==='decrease'){w.document.body.append(w.document.createElement('div'));await sleep(500);assert(w.priceInputEvents===1,'double apply');}});
+await check('商品情報をDOMから抽出、非表示の重複価格・画像を除外',async()=>{const w=await load('/item/z123456789');const data=w.FurimanagerYahooDom.collectItem(w.document,w.location.href);assert(data.price===1000&&data.imageUrls.length===1&&data.categoryPath.length===2&&data.title==='検証用\\u3000シャツ','capture');});
+await check('在庫連携ボタンからYahooの商品ID・名前・画像を送る',async()=>{const w=await load('/item/z123456789');await sleep(600);const b=w.document.querySelector('[data-furimanager-yahoo-action="inventory"]');assert(b,'inventory button');b.click();const s=await status(w);assert(s.includes('在庫連携ページを開きました'),'not opened: '+s);const p=w.inventoryRequests[0]?.payload;assert(p?.platform==='paypay_flea'&&p.yahooItemId==='z123456789'&&p.listingTitle==='検証用\\u3000シャツ'&&p.imageUrl.endsWith('/1.png'),'wrong payload');assert(!w.sessionStorage.getItem('furimanager_yahoo_navigation'),'pending not removed');});
+await check('出品一覧の在庫連携から詳細へ移って情報を読む',async()=>{let w=await load('/my/item/selling');await sleep(600);w.document.querySelector('[data-furimanager-yahoo-action="inventory"]').click();await new Promise(r=>iframe.onload=r);w=iframe.contentWindow;const s=await status(w);assert(s.includes('在庫連携ページを開きました')&&w.inventoryRequests.length===1,'list to detail failed');});
+for(const c of ['decrease','increase','minimum','wrong','stale','stop','delete'])await check('編集 '+c+'、最終確定を押さない',async()=>{const w=await load('/item/z123456789/edit?case='+c);if(c==='wrong'||c==='stale')await sleep(700);else await status(w);const expected=c==='decrease'?'900':c==='increase'?'1100':c==='minimum'?'300':'1000';assert(w.document.querySelector('input[type=tel]').value===expected,'price');if(c==='decrease'||c==='increase')assert(w.committedPrice===expected,'price not committed');assert(w.finalClicks===0,'final clicked');if(c==='decrease'){w.document.body.append(w.document.createElement('div'));await sleep(500);assert(w.priceInputEvents===1,'double apply');}});
 for(const c of ['relist','draft','missing','existing','tags','custom-tags'])await check('新規フォーム '+c+'、最終確定を押さない',async()=>{const w=await load('/item/add?case='+c+'#furimanager-yahoo=${token}');const s=await status(w);assert(w.finalClicks===0,'final clicked');if(c==='existing'){assert(s.includes('上書きせず'),'overwrite');return;}assert(w.document.querySelector('input[type=tel]').value==='1000','original price');assert(w.committedPrice==='1000','price not committed');assert(w.document.querySelector('select[name=timeToShip]').value==='2','shipping');assert(w.document.querySelector('#images img'),'image');if(c==='missing')assert(s.includes('確認ブランド')&&s.includes('#確認'),'missing not shown');else assert(s.includes('入力が完了'),'incomplete: '+s);});
 document.body.dataset.complete='true';document.title='完了 '+document.querySelectorAll('.pass').length+' PASS / '+document.querySelectorAll('.fail').length+' FAIL';})();
 </script>`;

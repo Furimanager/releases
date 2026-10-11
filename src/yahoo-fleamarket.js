@@ -69,7 +69,7 @@ ${message}`;
     function readNavigation() {
       try {
         const value = JSON.parse(sessionStorage.getItem(NAV_KEY) || "null");
-        if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete"].includes(value.action) && typeof value.savedAt === "number" && Date.now() >= value.savedAt && Date.now() - value.savedAt <= MAX_AGE_MS) return value;
+        if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete", "inventory"].includes(value.action) && typeof value.savedAt === "number" && Date.now() >= value.savedAt && Date.now() - value.savedAt <= MAX_AGE_MS) return value;
       } catch {
       }
       sessionStorage.removeItem(NAV_KEY);
@@ -94,7 +94,7 @@ ${message}`;
       bar.className = "furimanager-yahoo-toolbar";
       bar.dataset.itemId = id;
       bar.setAttribute("aria-label", "\u30D5\u30EA\u30DE\u30CD \u5546\u54C1\u64CD\u4F5C");
-      const definitions = [["relist", "\u518D\u51FA\u54C1"], ["decrease", "-100"], ["increase", "+100"], ["draft", "\u4E0B\u66F8\u304D"], ["stop", "\u505C\u6B62"], ["delete", "\u524A\u9664"]];
+      const definitions = [["inventory", "\u5728\u5EAB\u9023\u643A"], ["relist", "\u518D\u51FA\u54C1"], ["decrease", "-100"], ["increase", "+100"], ["draft", "\u4E0B\u66F8\u304D"], ["stop", "\u505C\u6B62"], ["delete", "\u524A\u9664"]];
       for (const [action, label] of definitions) {
         const button = document.createElement("button");
         button.type = "button";
@@ -131,8 +131,11 @@ ${message}`;
       }
       if (location.pathname === `/item/${id}`) {
         const edit = dom.editLink(document, id);
+        if (edit) toolbar(edit.parentElement, id);
+        const gallery = document.querySelector("main .slick-slider");
+        const copyAnchor = edit?.parentElement?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
+        if (copyAnchor) globalThis.FurimanagerCrossListing?.mount(copyAnchor, () => dom.collectItem(document, location.href), location.href);
         if (!edit) return;
-        toolbar(edit.parentElement, id);
         if (pending) void runNavigation(pending);
       } else if (location.pathname === `/item/${id}/edit` && pending && document.querySelector("main form")) {
         void runNavigation(pending);
@@ -146,7 +149,22 @@ ${message}`;
         if (location.pathname === `/item/${pending.itemId}`) {
           const edit = dom.editLink(document, pending.itemId);
           if (!edit) throw new Error("\u81EA\u5206\u306E\u5546\u54C1\u306E\u7DE8\u96C6\u30EA\u30F3\u30AF\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
-          if (pending.action === "relist" || pending.action === "draft") {
+          if (pending.action === "inventory") {
+            const item = await waitFor(() => dom.collectItem(document, location.href));
+            const response = await chromeApi.runtime.sendMessage({ type: "OPEN_INVENTORY_LINK", payload: {
+              platform: "paypay_flea",
+              yahooItemId: item.itemId,
+              listingUrl: item.itemUrl,
+              listingTitle: item.title,
+              listingPrice: item.price,
+              listingStatus: "active",
+              imageUrl: item.imageUrls[0] ?? null,
+              capturedAt: (/* @__PURE__ */ new Date()).toISOString()
+            } });
+            if (!response?.success) throw new Error(response?.message || "\u5728\u5EAB\u9023\u643A\u30DA\u30FC\u30B8\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+            sessionStorage.removeItem(NAV_KEY);
+            notify("\u5728\u5EAB\u9023\u643A\u30DA\u30FC\u30B8\u3092\u958B\u304D\u307E\u3057\u305F\u3002");
+          } else if (pending.action === "relist" || pending.action === "draft") {
             const item = await waitFor(() => dom.collectItem(document, location.href));
             if (!item.imageUrls.length || !item.categoryPath.length) throw new Error("\u753B\u50CF\u307E\u305F\u306F\u30AB\u30C6\u30B4\u30EA\u3092\u53D6\u5F97\u3067\u304D\u306A\u3044\u305F\u3081\u3001\u65B0\u898F\u51FA\u54C1\u753B\u9762\u3092\u958B\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
             const token = crypto.randomUUID();
@@ -252,11 +270,12 @@ ${message}`;
       }
     }
     async function fillImages(form, urls, check = () => {
-    }) {
+    }, prepared) {
       check();
       if (!urls.length || urls.length > 20 || form.querySelector('img[src^="https://auctions.c.yimg.jp/"]')) return false;
       const files = new DataTransfer();
-      for (let index = 0; index < urls.length; index++) {
+      if (prepared) prepared.forEach((file) => files.items.add(file));
+      for (let index = 0; !prepared && index < urls.length; index++) {
         const response = await chromeApi.runtime.sendMessage({ type: "FETCH_YAHOO_IMAGE_AS_DATA_URL", url: urls[index] });
         check();
         if (!response?.success || !/^data:image\/(jpeg|png|webp);base64,/.test(response.dataUrl ?? "")) throw new Error(`\u753B\u50CF${index + 1}\u679A\u76EE\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u5143\u306E\u5546\u54C1\u304B\u3089\u3084\u308A\u76F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002`);
@@ -415,6 +434,64 @@ ${message}`;
         scan();
       }, 250);
     }
+    async function fillCrossListing(item, job, check) {
+      const cross2 = globalThis.FurimanagerCrossListing;
+      const form = await cross2.wait(() => {
+        const f2 = document.querySelector("main form");
+        return f2 && dom.unique(f2, 'input[placeholder="\u5546\u54C1\u540D\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\uFF08\u5FC5\u9808\uFF09"]') && dom.unique(f2, "textarea") && dom.priceField(f2) ? f2 : null;
+      }, check);
+      const fields = () => ({ title: dom.unique(form, 'input[placeholder="\u5546\u54C1\u540D\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\uFF08\u5FC5\u9808\uFF09"]'), description: dom.unique(form, "textarea"), price: dom.priceField(form) });
+      const empty = () => {
+        check();
+        const f2 = fields();
+        if (!form.isConnected || !f2.title || !f2.description || !f2.price || f2.title.value || f2.description.value || f2.price.value || form.querySelector('img[src^="https://auctions.c.yimg.jp/"]')) throw new Error("\u5165\u529B\u6E08\u307F\u306E\u5185\u5BB9\u304C\u3042\u308B\u305F\u3081\u3001\u4E0A\u66F8\u304D\u305B\u305A\u6B62\u3081\u307E\u3057\u305F\u3002\u7A7A\u306E\u51FA\u54C1\u753B\u9762\u3067\u3084\u308A\u76F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      };
+      const originalCheck = check;
+      check = () => {
+        originalCheck();
+        if (!form.isConnected || document.querySelector("main form") !== form) throw new Error("\u51FA\u54C1\u30D5\u30A9\u30FC\u30E0\u304C\u5207\u308A\u66FF\u308F\u3063\u305F\u305F\u3081\u3001\u81EA\u52D5\u5165\u529B\u3092\u6B62\u3081\u307E\u3057\u305F\u3002");
+      };
+      empty();
+      await cross2.claim(job, check);
+      const files = await cross2.files(job, check);
+      empty();
+      const warnings = ["\u30AB\u30C6\u30B4\u30EA"];
+      const values = cross2.metadata(item);
+      if (!await fillImages(form, item.imageUrls, check, files)) warnings.push("\u753B\u50CF\u306E\u8FFD\u52A0\u679A\u6570");
+      check();
+      const f = fields();
+      if (!f.title || !f.description || !f.price || f.title.value || f.description.value || f.price.value) throw new Error("\u5225\u306E\u5165\u529B\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u305F\u305F\u3081\u3001\u4E0A\u66F8\u304D\u305B\u305A\u6B62\u3081\u307E\u3057\u305F\u3002");
+      const expectedTitle = cross2.setTitle(f.title, item, warnings);
+      cross2.setText(f.description, item.description, "\u8AAC\u660E", warnings);
+      dom.setPriceValue(f.price, String(item.price));
+      if (!values.condition || !await fillPicker(form, "\u5546\u54C1\u306E\u72B6\u614B", [values.condition], check)) warnings.push("\u5546\u54C1\u306E\u72B6\u614B");
+      check();
+      const shippingSelector = values.carrier ? `input[type="radio"][name="${values.carrier === "post" ? "JAPAN_POST" : "YAMATO"}"]` : null;
+      const shipping = shippingSelector ? dom.unique(form, shippingSelector) : null;
+      if (shipping && !shipping.disabled) {
+        if (!shipping.checked) {
+          if (originalCheck.write) originalCheck.write(() => shipping.click());
+          else shipping.click();
+        }
+      } else warnings.push("\u914D\u9001\u65B9\u6CD5");
+      check();
+      if (!values.shippingPayer) warnings.push("\u9001\u6599\u8CA0\u62C5\uFF08Yahoo!\u30D5\u30EA\u30DE\u306F\u51FA\u54C1\u8005\u8CA0\u62C5\u3067\u3059\uFF09");
+      if (!cross2.selectExact(form.querySelector('select[name="timeToShip"]'), values.shippingDays)) warnings.push("\u767A\u9001\u307E\u3067\u306E\u65E5\u6570");
+      if (!cross2.selectExact(form.querySelector('select[name="prefectures"]'), values.shippingFrom)) warnings.push("\u767A\u9001\u5143\u306E\u5730\u57DF\uFF08\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\uFF09");
+      if (item.brand) warnings.push("\u30D6\u30E9\u30F3\u30C9");
+      if (item.size) warnings.push("\u30B5\u30A4\u30BA");
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      check();
+      const final = fields();
+      if (final.title?.value !== expectedTitle) warnings.push("\u5546\u54C1\u540D\u306E\u4E00\u81F4");
+      if (final.description?.value !== item.description) warnings.push("\u8AAC\u660E\u306E\u4E00\u81F4");
+      if (dom.price(final.price?.value ?? "") !== item.price) warnings.push("\u4FA1\u683C\u306E\u4E00\u81F4");
+      if (values.condition && !pickerMatches(form, "\u5546\u54C1\u306E\u72B6\u614B", [values.condition])) warnings.push("\u5546\u54C1\u306E\u72B6\u614B");
+      if (shippingSelector && !dom.unique(form, shippingSelector)?.checked) warnings.push("\u914D\u9001\u65B9\u6CD5");
+      if (values.shippingDays && !cross2.selectedExact(form.querySelector('select[name="timeToShip"]'), values.shippingDays)) warnings.push("\u767A\u9001\u307E\u3067\u306E\u65E5\u6570");
+      if (values.shippingFrom && !cross2.selectedExact(form.querySelector('select[name="prefectures"]'), values.shippingFrom)) warnings.push("\u767A\u9001\u5143\u306E\u5730\u57DF");
+      cross2.complete(item, warnings);
+    }
     new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });
     setInterval(() => {
       if (lastUrl !== location.href) {
@@ -422,6 +499,10 @@ ${message}`;
         scheduleScan();
       }
     }, 500);
-    void fillRelist().then(scan);
+    const cross = globalThis.FurimanagerCrossListing;
+    void (async () => {
+      if (!await cross?.receive("yahoo", fillCrossListing)) await fillRelist();
+      scan();
+    })();
   })();
 })();

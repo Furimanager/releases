@@ -7,16 +7,17 @@ import process from "node:process";
 const root = new URL("../", import.meta.url);
 const [policy, ui, css] = await Promise.all(["src/mercari-bulk-policy.js", "src/mercari-bulk-price.js", "src/mercari-bulk-price.css"].map(file => readFile(new URL(file, root), "utf8")));
 const html = `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>一括値下げ・1クリック実行プレビュー</title>
+<title>一括値下げ・進捗アニメーション</title>
 <style>${css}</style>
 <style>
 body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif;color:#303038;margin:0;background:#fff}*{box-sizing:border-box}
 header{border-bottom:1px solid #eee;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}header strong{font-size:16px}header p{margin:0;color:#777;font-size:12px}.demo-modes{display:flex;gap:6px}.demo-modes a{color:#6b5865;border:1px solid #ead9e2;border-radius:6px;padding:4px 10px;text-decoration:none;font-size:12px}
 .layout{max-width:1220px;margin:38px auto;display:grid;grid-template-columns:210px minmax(0,1fr);gap:40px;padding:0 24px}aside{color:#666}aside strong{font-size:16px;color:#333}aside p{border-bottom:1px solid #eee;margin:0;padding:17px 0}.selected{background:#fafafa}main{min-width:0}h1{font-size:24px;margin:0 0 18px}nav{border-bottom:1px solid #ddd}nav ul{margin:0;padding:0;display:flex;list-style:none}nav li{flex:1;text-align:center}nav a{display:block;padding:14px 4px;color:#666;text-decoration:none;font-weight:600}nav a[aria-current]{color:#ff334b;border-bottom:3px solid #ff334b}
 .sort{display:flex;justify-content:space-between;color:#777;padding:10px 0;font-size:13px}[data-testid=listed-item-list]{list-style:none;padding:0;margin:0}.card{display:flex;padding:18px 0;border-top:1px solid #e8e8e8;gap:16px}.photo{flex:0 0 64px;height:72px;background:linear-gradient(135deg,#e2e5ed,#f4f5f8);border-radius:6px}.shirt{background:linear-gradient(135deg,#e9e3de,#faf7f1)}.case{background:linear-gradient(135deg,#e5e7e0,#f7f8f5)}.card a{color:#333;text-decoration:none;font-size:15px}.card p{margin:4px 0}.muted{color:#888;font-size:12px}.row-actions{margin-left:auto;display:flex;gap:6px;align-items:center}.row-actions span{color:white;background:#ff4fa3;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;white-space:nowrap}
+.demo-modes{flex-wrap:wrap}.demo-modes a{white-space:nowrap}
 @media(max-width:760px){.layout{grid-template-columns:minmax(0,1fr);margin:22px auto;padding:0 16px}aside{display:none}.row-actions{display:none}h1{font-size:21px}header{padding:12px 16px}nav{font-size:12px}}
 </style>
-<header><div><strong>一括値下げの表示プレビュー</strong><p>拡張の読み込み不要。架空の商品で表示を確認できます。</p></div><div class="demo-modes"><a href="?demo=idle">対象あり</a><a href="?demo=empty">対象なし</a><a href="?demo=done">完了</a></div></header>
+<header><div><strong>一括値下げの表示プレビュー</strong><p>架空の商品を使った早送りデモです。1・3・5件でも作業に合わせて四角が進みます。</p></div><div class="demo-modes"><a href="?demo=idle">通常</a><a href="?demo=small&count=1">1件</a><a href="?demo=small&count=3">3件</a><a href="?demo=small&count=5">5件</a><a href="?demo=progress">100件</a><a href="?demo=empty">対象なし</a><a href="?demo=break">途中の表示</a><a href="?demo=done">完了</a></div></header>
 <div class="layout"><aside><strong>商品管理</strong><p>いいね！一覧</p><p>閲覧履歴</p><p>フォローリスト</p><p class="selected">出品した商品</p><p>購入した商品</p><p>下書き一覧</p></aside>
 <main id="my-page-main-content"><div data-testid="listing-container"><h1>出品した商品</h1><nav aria-label="出品した商品"><ul><li><a data-testid="tab-to-listing" aria-current="page" href="#listings">出品中</a></li><li><a data-testid="tab-to-in-progress" href="#in_progress">取引中</a></li><li><a data-testid="tab-to-completed" href="#completed">売却済み</a></li><li><a href="#sold">販売履歴</a></li></ul></nav>
 <div class="sort" data-testid="sorting-menu"><span>3件</span><span>まとめて編集 / 更新順</span></div>
@@ -30,9 +31,29 @@ FurimaneBulkPolicy.listingsPage=()=>document.documentElement.dataset.view==='lis
 document.querySelectorAll('nav a').forEach(link=>link.addEventListener('click',event=>{event.preventDefault();document.documentElement.dataset.view=link.hash.slice(1);document.querySelectorAll('nav a').forEach(a=>a.removeAttribute('aria-current'));link.setAttribute('aria-current','page');}));
 let mock={status:'idle'},timer,alreadyCompleted=false;
 const rows=[{id:'m123',title:'シンプルなニット・ネイビー',price:1200,status:'対象'},{id:'m456',title:'コットンシャツ・ホワイト',price:900,status:'対象'},{id:'m789',title:'スマートフォンケース',price:500,status:'対象外',reason:'更新から24時間未満'}];
-const prepare=()=>({id:'demo',status:'running',scanned:3,completed:0,skipped:1,rows:structuredClone(rows),candidates:rows.slice(0,2),message:'値下げ中… 1 / 2件'});
+const prepare=()=>({id:'demo',status:'running',scanned:3,completed:0,skipped:1,rows:structuredClone(rows),candidates:rows.slice(0,2),message:'値下げ中… 1 / 2件',progressTiming:{samples:0,workMs:0,phase:'working',currentWorkMs:0,waitRemainingMs:0}});
 const complete=()=>{mock=prepare();mock.status='done';mock.completed=2;mock.message='2件の値下げが完了しました。';mock.rows.forEach(r=>{if(r.status==='対象')r.status='完了'});alreadyCompleted=true;document.querySelectorAll('.card b').forEach((price,index)=>{if(index<2)price.textContent='¥'+(rows[index].price-100).toLocaleString('ja-JP')})};
-const demo=new URL(location.href).searchParams.get('demo');if(demo==='done')complete();
+const params=new URL(location.href).searchParams;
+const demo=params.get('demo');if(demo==='done')complete();
+const many=completed=>({...prepare(),scanned:100,completed,skipped:0,
+  candidates:Array.from({length:100},(_,index)=>({id:'m'+(1000+index)})),
+  rows:Array.from({length:100},(_,index)=>({id:'m'+(1000+index),title:'サンプル商品 '+(index+1),price:1200,status:index<completed?'完了':'対象'})),
+  progressTiming:{samples:completed,workMs:completed*7000,phase:'working',currentWorkMs:0,waitRemainingMs:0}});
+const step=()=>{if(mock.status!=='running')return;mock=many(Math.min(100,mock.completed+10));if(mock.completed===100){mock.status='done';mock.message='100件の値下げが完了しました。';return;}timer=setTimeout(step,5000);};
+if(demo==='progress'){mock=many(Math.max(0,Math.min(100,Number(params.get('step'))||0)));if(!params.has('step'))timer=setTimeout(step,5000);}
+if(demo==='break'){mock=many(20);mock.progressTiming.phase='break';mock.progressTiming.waitRemainingMs=20_000;}
+// 少数件でも本体と同じ作業段階を渡す。デモ時間は実サイトの所要時間ではない。
+if(demo==='small'){
+const total=[1,3,5].includes(Number(params.get('count')))?Number(params.get('count')):1;
+const samples=Array.from({length:total},(_,index)=>({id:'m'+(2000+index),title:'サンプル商品 '+(index+1),price:1200,status:'対象'}));
+mock={...prepare(),scanned:total,skipped:0,rows:samples,candidates:structuredClone(samples),workProgress:0};
+const stages=[.1,.2,.35,.45,.6,.7,.9,1];let stage=0;
+const smallStep=()=>{if(mock.status!=='running')return;
+mock.workProgress=stages[stage++];mock.progressTiming.currentWorkMs=stage*750;
+if(mock.workProgress===1){mock.rows[mock.completed].status='完了';mock.completed++;mock.workProgress=0;stage=0;mock.progressTiming={samples:mock.completed,workMs:mock.completed*6000,phase:'working',currentWorkMs:0,waitRemainingMs:0};}
+if(mock.completed===total){mock.status='done';mock.message=total+'件の値下げが完了しました。';return;}
+timer=setTimeout(smallStep,750);};timer=setTimeout(smallStep,750);
+}
 window.chrome={runtime:{id:'fixture',onMessage:{addListener(){}},async sendMessage(message){
 const action=message.type.replace('FURIMANE_BULK_PRICE_','');
 if(action==='START'){
@@ -40,7 +61,7 @@ if(['scanning','running'].includes(mock.status))return{error:'別の一括処理
 mock={id:'demo',status:'scanning',scanned:0,completed:0,skipped:0,rows:[],candidates:[],message:'出品一覧を確認しています…'};
 timer=setTimeout(()=>{
 if(demo==='empty'||alreadyCompleted){mock={...mock,status:'done',scanned:3,skipped:3,message:'今回の対象商品はありません。'};return;}
-mock=prepare();timer=setTimeout(complete,6000);
+mock=prepare();timer=setTimeout(()=>{mock.completed=1;mock.rows[0].status='完了';timer=setTimeout(complete,6000);},6000);
 },1200);
 }
 if(action==='CANCEL'){clearTimeout(timer);mock.status='stopped';mock.message='停止しました。'}

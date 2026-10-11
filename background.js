@@ -1,6 +1,7 @@
 (() => {
   (() => {
     importScripts("src/mercari-bulk-policy.js", "src/mercari-bulk-background.js");
+    importScripts("src/cross-listing.js", "src/cross-listing-background.js");
     try {
       importScripts("config.js");
     } catch {
@@ -42,7 +43,7 @@
     const EXTENSION_CONNECT_RATE_ERROR = "\u9023\u643A\u306E\u64CD\u4F5C\u304C\u7D9A\u3044\u3066\u3044\u307E\u3059\u3002\u5C11\u3057\u6642\u9593\u3092\u304A\u3044\u3066\u3001\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
     const EXTENSION_CONNECT_EXPIRED_ERROR = "\u30ED\u30B0\u30A4\u30F3\u60C5\u5831\u306E\u6709\u52B9\u671F\u9650\u304C\u5207\u308C\u307E\u3057\u305F\u3002\u62E1\u5F35\u6A5F\u80FD\u304B\u3089\u3082\u3046\u4E00\u5EA6\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
     const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
-    const EXTENSION_FALLBACK_VERSION = "0.2.7";
+    const EXTENSION_FALLBACK_VERSION = "0.2.10";
     const EXTENSION_API_SCHEMA = "research-v1";
     const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
     const authState = {
@@ -56,6 +57,7 @@
     if (!chromeApi?.runtime?.onMessage) {
       return;
     }
+    globalThis.installFurimanagerCrossListing?.(fetchImageAsDataUrl);
     chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const respond = (response) => {
         try {
@@ -101,6 +103,10 @@
         return true;
       }
       if (message?.type === "OPEN_INVENTORY_LINK") {
+        if (message.payload?.platform === "paypay_flea") {
+          void openYahooInventoryLink(message.payload, sender).then(respond).catch(() => respond({ success: false, message: "\u9023\u643A\u5143\u306EYahoo\u5546\u54C1\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002" }));
+          return true;
+        }
         void handleOpenInventoryLink(message.payload, respond);
         return true;
       }
@@ -1006,6 +1012,7 @@
       const params = {
         platform: payload.platform ?? "mercari",
         mercari_item_id: payload.mercariItemId ?? null,
+        yahoo_item_id: payload.platform === "paypay_flea" ? payload.yahooItemId ?? null : null,
         listing_url: payload.listingUrl ?? null,
         listing_title: payload.listingTitle ?? null,
         listing_price: typeof payload.listingPrice === "number" ? String(payload.listingPrice) : null,
@@ -1088,6 +1095,19 @@
           reject(error instanceof Error ? error : new Error("\u65B0\u898F\u51FA\u54C1\u30DA\u30FC\u30B8\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F"));
         }
       });
+    }
+    async function openYahooInventoryLink(payload, sender) {
+      if (!isAllowedYahooSender(sender) || sender.frameId != null && sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) || typeof payload.yahooItemId !== "string" || !/^z\d{6,16}$/.test(payload.yahooItemId)) return { success: false };
+      const tab = await new Promise((resolve, reject) => {
+        chromeApi.tabs.get(sender.tab.id, (current) => {
+          if (chromeApi.runtime.lastError || !current) reject(new Error("\u5546\u54C1\u30DA\u30FC\u30B8\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F"));
+          else resolve(current);
+        });
+      });
+      const source = new URL(tab.url || "");
+      if (source.origin !== "https://paypayfleamarket.yahoo.co.jp" || source.pathname !== `/item/${payload.yahooItemId}`) return { success: false };
+      await openInventoryLink({ ...payload, mercariItemId: null, listingUrl: `${source.origin}${source.pathname}` });
+      return { success: true };
     }
     async function openYahooRelist(token, sender) {
       if (!isAllowedYahooSender(sender) || sender.frameId != null && sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) || typeof token !== "string" || !/^[0-9a-f-]{36}$/.test(token)) return { success: false };

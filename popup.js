@@ -25,7 +25,7 @@ const LEGACY_APP_URLS = new Set([
 const RESEARCH_FEATURE_ENABLED_KEY = "furimaneResearchEnabled";
 // 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
 // manifest.json の version と揃えて更新する。
-const EXTENSION_FALLBACK_VERSION = "0.2.8";
+const EXTENSION_FALLBACK_VERSION = "0.2.9";
 const EXTENSION_API_SCHEMA = "research-v1";
 const SALES_RECIPE_STORAGE_KEY = "mercariSalesRecipeCache";
 const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;

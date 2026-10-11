@@ -295,10 +295,11 @@
     return true;
   });
 
-  function boot(): void {
+  async function boot(): Promise<void> {
     if (!window.location.pathname.startsWith("/sell")) {
       return;
     }
+    if (await (globalThis as any).FurimanagerCrossListing?.receive("mercari", fillCrossListing)) return;
 
     if (ENABLE_DOM_DEBUG) {
       debugMercariSellDom();
@@ -617,6 +618,147 @@
       const item = items[RELIST_PENDING_KEY];
       callback(isRelistPendingItem(item) ? item : null);
     });
+  }
+
+  // 同一サービス再出品のセッションキーは使わず、相互コピー専用の入力を行う。
+  async function fillCrossListing(item: any, job: any, check: () => void): Promise<void> {
+    const cross = (globalThis as any).FurimanagerCrossListing;
+    await cross.wait(() => findTitleField() && findDescriptionField() && findPriceField() && findImageField(), check);
+    const empty = () => {
+      check();
+      if (findTitleField()?.value || findDescriptionField()?.value || findPriceField()?.value || hasUploadedListingImages()) throw new Error("入力済みの内容があるため、上書きせず止めました。空の出品画面でやり直してください。");
+    };
+    empty();
+    await cross.claim(job, check);
+    const files = await cross.files(job, check); empty();
+    const input = findImageField();
+    if (!input || !input.isConnected || (input.files?.length ?? 0) > 0) throw new Error("画像欄を確認できませんでした。");
+    const transfer = new DataTransfer(); files.forEach((file: File) => transfer.items.add(file));
+    input.multiple = true; input.files = transfer.files;
+    input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true }));
+    // 一部の画像だけ出た状態を成功にしない。遅延して開く画像ダイアログも待つ。
+    const started = Date.now();
+    while (Date.now() - started < 45000) {
+      check();
+      const next = findImageUploadNextButton();
+      if (next) { clickButtonLike(next); await sleep(METADATA_SELECT_WAIT_MS); check(); }
+      await clickAiSupportSkipButtonIfVisible(); check();
+      if (!isImageUploadDialogOpen() && !isAiSupportDialogOpen() && crossImageCount() === files.length) break;
+      await sleep(200);
+    }
+    check();
+    const title = findTitleField(); const description = findDescriptionField(); const price = findPriceField();
+    if (!title || !description || !price || title.value || description.value || price.value) throw new Error("別の入力内容を確認したため、上書きせず止めました。");
+    const warnings = ["カテゴリ"];
+    const expectedTitle = cross.setTitle(title, item, warnings);
+    cross.setText(description, item.description, "説明", warnings);
+    fillPriceField(item.price);
+    await fillCrossMetadata(item, check, warnings);
+    if (item.brand) warnings.push("ブランド"); if (item.size) warnings.push("サイズ");
+    await sleep(500); check();
+    if (findTitleField()?.value !== expectedTitle) warnings.push("商品名の一致");
+    if (findDescriptionField()?.value !== item.description) warnings.push("説明の一致");
+    if (!isPriceReady(item.price)) warnings.push("価格の一致");
+    // ファイルの選択成功だけでアップロード完了とは扱わない。
+    if (isImageUploadDialogOpen() || isAiSupportDialogOpen() || crossImageCount() !== files.length) warnings.push(`画像（${files.length}枚）のアップロード完了`);
+    cross.complete(item, warnings);
+  }
+
+  function crossImageCount(): number {
+    const root = findImageField()?.closest("section, form, main");
+    if (!root) return 0;
+    return Array.from(root.querySelectorAll("img")).filter(image => {
+      const src = image.currentSrc || image.src;
+      const rect = image.getBoundingClientRect();
+      return isVisible(image) && image.complete && image.naturalWidth > 0 && rect.width >= 40 && rect.height >= 40 &&
+        (/^(blob:|data:image\/)/.test(src) || (globalThis as any).FurimanagerCrossListing.imageAllowed(src, "mercari"));
+    }).length;
+  }
+
+  async function fillCrossMetadata(item: any, check: any, warnings: string[]): Promise<void> {
+    const cross = (globalThis as any).FurimanagerCrossListing;
+    const values = cross.metadata(item);
+    const selectors = {
+      condition: 'select[name="itemCondition"], select[name="condition"]',
+      shippingMethod: 'select[name="shippingMethod"]',
+      shippingPayer: 'select[name="shippingPayer"]',
+      shippingDays: 'select[name="shippingDuration"], select[name="shippingDays"]',
+      shippingFrom: 'select[name="shippingFromArea"], select[name="shippingFrom"]',
+    };
+    const select = (key: keyof typeof selectors) => document.querySelector<HTMLSelectElement>(selectors[key]);
+    const selectedLink = (key: "condition" | "shippingMethod", value: string | null) => {
+      if (!value) return false;
+      const link = key === "condition" ? findConditionEntryLink() : findShippingMethodEntryLink();
+      // 選択済み表示の最小のテキスト要素を照合し、候補一覧の存在だけでは成功としない。
+      return !!link && [link, ...Array.from(link.querySelectorAll("p, span"))].some(node => cross.optionText(node.textContent) === cross.optionText(value));
+    };
+    const backToForm = async () => {
+      check();
+      const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href="/sell/create"]')).filter(isVisible);
+      const back = links.find(link => /戻る/.test(link.textContent ?? ""));
+      if (!back) throw new Error("選択画面から戻れませんでした。出品フォームに戻って入力済みの内容を確認してください。");
+      await check.navigate("/sell/create", () => back.click());
+    };
+    check();
+    if (values.condition && !cross.selectExact(select("condition"), values.condition) && !selectedLink("condition", values.condition)) {
+      const link = findConditionEntryLink();
+      if (link) {
+        await check.navigate("/sell/conditions", () => link.click());
+        const options = await waitForConditionOptions(); check();
+        const matches = options.filter(option => cross.optionText(getConditionOptionText(option)) === cross.optionText(values.condition));
+        if (matches.length === 1) await check.navigate("/sell/create", () => matches[0].click());
+        else await backToForm();
+      }
+    }
+    // URLが先に戻り、フォームが遅れて描画されるSPAを待つ。
+    await cross.wait(() => findTitleField() && findDescriptionField(), check);
+    check();
+    if (values.shippingMethod && !cross.selectExact(select("shippingMethod"), values.shippingMethod) && !selectedLink("shippingMethod", values.shippingMethod)) {
+      let link = findShippingMethodEntryLink();
+      if (!link && !select("shippingMethod")) {
+        try { await cross.wait(() => findShippingMethodEntryLink() || select("shippingMethod"), check, 5000); } catch { check(); }
+        link = findShippingMethodEntryLink();
+        cross.selectExact(select("shippingMethod"), values.shippingMethod);
+      }
+      if (link) {
+        await check.navigate("/sell/shipping_methods", () => link.click());
+        await cross.wait(() => document.querySelector('[data-testid="shipping-services"], [data-testid="shipping-service-group"]') || getShippingMethodCandidates().length, check);
+        await openShippingServicesIfNeeded(); check();
+        await waitForShippingMethodCandidates(); check();
+        const candidates = getShippingMethodCandidates().filter(option =>
+          [option, ...Array.from(option.querySelectorAll("p, span, label"))].some(node => cross.optionText(node.textContent) === cross.optionText(values.shippingMethod)));
+        const inputs = [...new Set(candidates.map(option => option.querySelector<HTMLInputElement>('input[type="radio"]')).filter(Boolean))];
+        const input = inputs.length === 1 ? inputs[0] : null;
+        if (input && !input.disabled) {
+          if (!input.checked) check.write(() => input.click());
+          await cross.wait(() => input.isConnected && input.checked, check, 3500);
+          const update = await waitForShippingUpdateButton(); check();
+          if (update && isClickableButtonLike(update)) await check.navigate("/sell/create", () => update.click());
+          else await backToForm();
+        } else await backToForm();
+      }
+    }
+    await cross.wait(() => findTitleField() && findDescriptionField(), check);
+    // 選択画面から戻る際にフォームが再描画されるので、常に取り直した要素を使う。
+    check();
+    const payer = select("shippingPayer");
+    if (payer) cross.selectExact(payer, values.shippingPayer);
+    cross.selectExact(select("shippingDays"), values.shippingDays);
+    cross.selectExact(select("shippingFrom"), values.shippingFrom);
+    await sleep(300); check();
+    // 選択済みラベルだけ遅れて更新される画面でも、成功を誤って未入力としない。
+    // 待っても期待値にならない場合は、下の照合で確認項目として案内する。
+    for (const key of ["condition", "shippingMethod"] as const) {
+      if (values[key]) {
+        try { await cross.wait(() => cross.selectedExact(select(key), values[key]) || selectedLink(key, values[key]), check, 5000); } catch { check(); }
+      }
+    }
+    if (!cross.selectedExact(select("condition"), values.condition) && !selectedLink("condition", values.condition)) warnings.push("商品の状態");
+    if (!cross.selectedExact(select("shippingMethod"), values.shippingMethod) && !selectedLink("shippingMethod", values.shippingMethod)) warnings.push("配送方法");
+    // メルカリ便は出品者負担。独立した送料欄がある画面では、その選択結果も検証する。
+    if (payer ? !cross.selectedExact(select("shippingPayer"), values.shippingPayer) : !values.shippingPayer || !selectedLink("shippingMethod", values.shippingMethod)) warnings.push("送料負担");
+    if (!cross.selectedExact(select("shippingDays"), values.shippingDays)) warnings.push("発送までの日数");
+    if (!cross.selectedExact(select("shippingFrom"), values.shippingFrom)) warnings.push("発送元の地域（選択してください）");
   }
 
   async function waitForFormAndFill(item: RelistPendingItem): Promise<void> {

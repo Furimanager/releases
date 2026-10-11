@@ -20,8 +20,15 @@
     });
     function summary() {
       if (!job) return { status: "idle" };
-      const { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab } = job;
-      return { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab };
+      const { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab, workProgress } = job;
+      const progressTiming = status === "running" ? {
+        samples: job.workSamples ?? 0,
+        workMs: job.workMs ?? 0,
+        phase: job.phase ?? "working",
+        currentWorkMs: job.workStarted == null ? 0 : Math.max(0, performance.now() - job.workStarted),
+        waitRemainingMs: job.waitUntil == null ? 0 : Math.max(0, job.waitUntil - performance.now())
+      } : null;
+      return { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab, workProgress, progressTiming };
     }
     async function persist() {
       await api.storage.local.set({ [P.STATE_KEY]: summary() });
@@ -185,6 +192,10 @@
       const account = await profile(current.token);
       if (account.seller !== current.seller) throw new Error("\u30ED\u30B0\u30A4\u30F3\u4E2D\u306E\u30A2\u30AB\u30A6\u30F3\u30C8\u304C\u5909\u308F\u3063\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
       for (const candidate of current.candidates) {
+        current.phase = "working";
+        current.workProgress = 0;
+        current.workStarted = performance.now();
+        current.waitUntil = null;
         await assertOwner(current);
         const row = current.rows.find((value) => value.id === candidate.id);
         const fresh = await detail(current, candidate.id);
@@ -194,20 +205,26 @@
           row.status = "\u9664\u5916";
           row.reason = reason ?? "\u78BA\u8A8D\u5F8C\u306B\u5546\u54C1\u60C5\u5831\u304C\u5909\u308F\u3063\u305F";
           current.skipped++;
+          current.workStarted = null;
           await persist();
           continue;
         }
         current.current = candidate;
+        current.workProgress = 0.1;
         current.authorized = false;
         current.authorizing = false;
         current.message = `\u5024\u4E0B\u3052\u4E2D\u2026 ${current.completed + 1} / ${current.candidates.length}\u4EF6`;
         const tab = await api.tabs.create({ url: `${P.ORIGIN}/item/${candidate.id}`, active: false });
         current.workerTab = tab.id;
+        current.workProgress = 0.2;
         await readyPage(current, "ITEM");
+        current.workProgress = 0.35;
         await assertOwner(current);
         const opened = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}ITEM_OPEN_EDIT`, itemId: candidate.id });
         if (!opened?.opened) throw new Error(opened?.error ?? "\u5546\u54C1\u306E\u7DE8\u96C6\u3078\u9032\u3081\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+        current.workProgress = 0.45;
         await readyPage(current, "EDITOR");
+        current.workProgress = 0.6;
         await assertOwner(current);
         const prepared = await api.tabs.sendMessage(current.workerTab, {
           type: "APPLY_FURIMANE_PRICE_DROP_ON_EDIT",
@@ -220,6 +237,7 @@
         if (!prepared?.success || prepared.currentPrice !== candidate.price || prepared.nextPrice !== candidate.price - 100) {
           throw new Error(prepared?.reason ?? "\u2212100\u5186\u306E\u5165\u529B\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
         }
+        current.workProgress = 0.7;
         await assertOwner(current);
         let reply;
         try {
@@ -234,6 +252,7 @@
         }
         if (reply?.error) throw new Error(reply.error);
         if (!current.authorized) throw new Error("\u4FDD\u5B58\u524D\u306E\u6700\u7D42\u78BA\u8A8D\u304C\u5B8C\u4E86\u3057\u306A\u304B\u3063\u305F\u305F\u3081\u505C\u6B62\u3057\u307E\u3057\u305F\u3002");
+        current.workProgress = 0.9;
         let verified = false;
         for (let check = 0; check < 6; check++) {
           await sleep(2e3);
@@ -248,11 +267,19 @@
         row.status = "\u5B8C\u4E86";
         row.reason = null;
         current.completed++;
+        current.workProgress = 0;
+        current.workMs = (current.workMs ?? 0) + performance.now() - current.workStarted;
+        current.workSamples = (current.workSamples ?? 0) + 1;
+        current.workStarted = null;
         await persist();
         await closeWorker(current);
         if (candidate !== current.candidates.at(-1)) {
-          current.message = `\u6B21\u306E\u5546\u54C1\u307E\u3067\u5F85\u6A5F\u4E2D\u2026 \u5B8C\u4E86 ${current.completed}\u4EF6`;
-          await pause(current, 15e3 + Math.random() * 1e4);
+          const batchBreak = current.completed % 20 === 0;
+          const waitMs = batchBreak ? 2e4 + Math.random() * 1e4 : 3e3 + Math.random() * 4e3;
+          current.phase = batchBreak ? "break" : "waiting";
+          current.waitUntil = performance.now() + waitMs;
+          current.message = batchBreak ? `${current.completed}\u4EF6\u5B8C\u4E86\u300220\u301C30\u79D2\u4F11\u61A9\u3057\u3066\u304B\u3089\u7D9A\u3051\u307E\u3059\u2026` : `\u6B21\u306E\u5546\u54C1\u307E\u3067\u5F85\u6A5F\u4E2D\u2026 \u5B8C\u4E86 ${current.completed}\u4EF6`;
+          await pause(current, waitMs);
         }
       }
       assertActive(current);

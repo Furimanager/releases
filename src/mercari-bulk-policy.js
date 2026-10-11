@@ -64,6 +64,31 @@
       }
       return String(cursor);
     }
+    function progress(state) {
+      const total = state.candidates?.length ?? 0;
+      const completed = Math.min(total, Math.max(0, state.completed ?? 0));
+      const ids = new Set((state.candidates ?? []).map((value) => value.id));
+      const excluded = (state.rows ?? []).filter((row) => row.status === "\u9664\u5916" && ids.has(row.id)).length;
+      const processed = Math.min(total, completed + excluded);
+      const running = state.status === "running";
+      const scanning = state.status === "scanning";
+      const work = ["running", "stopped", "error", "interrupted"].includes(state.status) && !["waiting", "break"].includes(state.progressTiming?.phase) && Number.isFinite(state.workProgress) ? Math.max(0, Math.min(0.9, state.workProgress)) : 0;
+      const ratio = !scanning && total ? Math.min(total, processed + (processed < total ? work : 0)) / total : 0;
+      const lit = Math.min(running ? 9 : 10, Math.floor(ratio * 10));
+      const current = scanning ? 0 : running ? lit : -1;
+      const timing = state.progressTiming;
+      let remainingMs = null;
+      if (running && total > processed) {
+        const measured = timing?.samples >= 3 && Number.isFinite(timing.workMs) && timing.workMs > 0;
+        const unit = measured ? timing.workMs / timing.samples : 12e3;
+        const inFlight = Math.max(0, timing?.currentWorkMs ?? 0);
+        const remaining = total - processed;
+        remainingMs = Math.max(unit, inFlight) * remaining - inFlight + Math.max(0, timing?.waitRemainingMs ?? 0);
+        for (let index = 1; index < remaining; index++) remainingMs += (completed + index) % 20 === 0 ? 25e3 : 5e3;
+        remainingMs = Math.max(1e3, remainingMs);
+      }
+      return { total, completed, processed, lit, current, percent: Math.floor(ratio * 100), remainingMs };
+    }
     globalThis.FurimaneBulkPolicy = {
       AGE_MS,
       ORIGIN,
@@ -75,7 +100,8 @@
       reason,
       unchanged,
       listingsPage,
-      nextPage
+      nextPage,
+      progress
     };
   })();
 })();

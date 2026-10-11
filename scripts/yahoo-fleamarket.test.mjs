@@ -127,7 +127,39 @@ test("両manifestのYahooスクリプト順と画像権限が一致する", asyn
   for (const name of ["manifest.json", "manifest.dev.json"]) {
     const manifest = JSON.parse(await readFile(new URL(`../${name}`, import.meta.url), "utf8"));
     const entry = manifest.content_scripts.find(entry => entry.matches.includes("https://paypayfleamarket.yahoo.co.jp/*"));
-    assert.deepEqual(entry.js, ["src/yahoo-fleamarket-dom.js", "src/yahoo-fleamarket.js"]);
+    assert.deepEqual(entry.js, ["src/cross-listing.js", "src/yahoo-fleamarket-dom.js", "src/yahoo-fleamarket.js"]);
     assert.ok(manifest.host_permissions.includes("https://auctions.c.yimg.jp/*"));
   }
+});
+
+
+test("Yahoo在庫連携は商品ID・名前・画像を既存の連携画面へ渡す", async () => {
+  const bg = background();
+  const url = "https://paypayfleamarket.yahoo.co.jp/item/z123456789";
+  const payload = { platform: "paypay_flea", yahooItemId: "z123456789", mercariItemId: "m999", listingTitle: "新品 黒　Tシャツ M", listingPrice: 300, listingStatus: "active", imageUrl: cdn };
+  assert.equal((await bg.send({ type: "OPEN_INVENTORY_LINK", payload }, url)).success, true);
+  const target = new URL(bg.tabs[0].url);
+  assert.equal(target.pathname, "/dashboard/inventory/link");
+  assert.equal(target.searchParams.get("platform"), "paypay_flea");
+  assert.equal(target.searchParams.get("yahoo_item_id"), "z123456789");
+  assert.equal(target.searchParams.get("mercari_item_id"), null);
+  assert.equal(target.searchParams.get("listing_title"), payload.listingTitle);
+  assert.equal(target.searchParams.get("image_url"), cdn);
+  assert.equal(target.searchParams.get("listing_url"), url);
+});
+test("Yahoo在庫連携の別商品・別サイト・不正IDはタブを開かず、SPAの古いURLは現在URLで照合する", async () => {
+  const url = "https://paypayfleamarket.yahoo.co.jp/item/z123456789";
+  const payload = { platform: "paypay_flea", yahooItemId: "z123456789" };
+  for (const source of [url.replace("z123456789", "z999999999"), "https://evil.example/item/z123456789", url + "/edit"]) {
+    const bg = background(); assert.equal((await bg.send({ type: "OPEN_INVENTORY_LINK", payload }, source)).success, false); assert.equal(bg.tabs.length, 0);
+  }
+  const bg = background({}, url);
+  assert.equal((await bg.send({ type: "OPEN_INVENTORY_LINK", payload }, url + "/edit")).success, true);
+  const invalid = background();
+  assert.equal((await invalid.send({ type: "OPEN_INVENTORY_LINK", payload: { ...payload, yahooItemId: "z12" } }, url)).success, false);
+});
+test("メルカリの在庫連携は従来のパラメーターを維持する", async () => {
+  const bg = background();
+  assert.equal((await bg.send({ type: "OPEN_INVENTORY_LINK", payload: { platform: "mercari", mercariItemId: "m12345678901", listingTitle: "商品", listingUrl: "https://jp.mercari.com/item/m12345678901" } }, "https://jp.mercari.com/item/m12345678901")).success, true);
+  const target = new URL(bg.tabs[0].url); assert.equal(target.searchParams.get("mercari_item_id"), "m12345678901"); assert.equal(target.searchParams.get("yahoo_item_id"), null);
 });

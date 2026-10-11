@@ -60,7 +60,7 @@
     }
     mounted = element("section", "", "fm-bulk");
     mounted.id = ROOT_ID;
-    mounted.setAttribute("aria-label", "フリマネ 一括値下げ");
+    mounted.setAttribute("aria-label", "一括値下げ（フリマネ）");
     if (tabs) tabs.after(mounted);
     else list!.before(mounted);
     lastRender = "";
@@ -101,6 +101,156 @@
     return node;
   }
 
+  let helpPinned = false;
+  function showHelp(open: boolean) {
+    const toggle = mounted?.querySelector(".fm-bulk-help-button");
+    const popup = mounted?.querySelector<HTMLElement>(".fm-bulk-help-popover");
+    toggle?.setAttribute("aria-expanded", String(open));
+    if (popup) {
+      popup.hidden = !open;
+      if (open && toggle) {
+        const rect = toggle.getBoundingClientRect();
+        const below = innerHeight - rect.bottom - 24;
+        const above = rect.top - 24;
+        const upward = below < 180 && above > below;
+        popup.classList.toggle("opens-up", upward);
+        popup.style.setProperty("--fm-bulk-help-height", `${Math.max(100, upward ? above : below)}px`);
+      }
+    }
+  }
+
+  function helpButton() {
+    helpPinned = false;
+    const help = element("div", "", "fm-bulk-help");
+    const toggle = element("button", "", "fm-bulk-help-button");
+    toggle.type = "button";
+    toggle.setAttribute("aria-label", "注意書きと所要時間の目安");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-controls", "fm-bulk-help-popover");
+    // Lucide CircleAlert。既存のDOM構成のまま、依存を増やさずSVGで描く。
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "20", height: "20", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
+    const circle = document.createElementNS(svg.namespaceURI, "circle");
+    circle.setAttribute("cx", "12"); circle.setAttribute("cy", "12"); circle.setAttribute("r", "10");
+    const path = document.createElementNS(svg.namespaceURI, "path");
+    path.setAttribute("d", "M12 8v4m0 4h.01");
+    svg.append(circle, path); toggle.append(svg);
+    const popup = element("div", "", "fm-bulk-help-popover");
+    popup.id = "fm-bulk-help-popover"; popup.hidden = true;
+    const panel = element("div", "", "fm-bulk-help-panel");
+    panel.setAttribute("role", "note"); panel.setAttribute("aria-label", "一括値下げの注意書き"); panel.tabIndex = 0;
+    panel.append(element("strong", "実行中のお願い"));
+    const list = element("ul");
+    for (const [before, emphasis, after] of [
+      ["", "この画面を表示したまま", "お待ちください。"],
+      ["対象商品の", "編集・価格変更", "は、終わるまでお待ちください。"],
+      ["値下げ用に開く", "商品・編集画面のタブ", "は操作しないでください。"],
+    ]) {
+      const item = element("li");
+      item.append(before, element("strong", emphasis), after); list.append(item);
+    }
+    panel.append(list, element("p", "※再読み込みや画面の切り替え、パソコンのスリープで、途中で止まることがあります。", "fm-bulk-note"));
+    const pacing = element("p", "", "fm-bulk-pacing-note");
+    pacing.append("操作が集中しないよう、", element("strong", "ランダムに間隔をあけて"), "値下げします。待ち時間が終わると、自動で次の商品へ進みます。");
+    panel.append(pacing);
+    panel.append(element("strong", "かかる時間の目安"));
+    for (const [count, time] of [["20件", "約4〜6分"], ["50件", "約10〜15分"], ["100件", "約20〜30分"]]) {
+      const guide = element("p");
+      guide.append(`${count} → `, element("strong", time)); panel.append(guide);
+    }
+    const estimate = element("p", "", "fm-bulk-note");
+    estimate.append(element("strong", "時間はあくまで目安です。"), "商品の確認や通信状況によって前後します。実行中は、残り時間を画面に表示します。");
+    panel.append(estimate);
+    popup.append(panel); help.append(toggle, popup);
+    help.addEventListener("pointerenter", event => { if (event.pointerType !== "touch") showHelp(true); });
+    help.addEventListener("pointerleave", () => { if (!helpPinned && !help.matches(":focus-within")) showHelp(false); });
+    help.addEventListener("focusin", () => showHelp(true));
+    help.addEventListener("focusout", event => {
+      if (!help.contains(event.relatedTarget as Node | null)) { helpPinned = false; showHelp(false); }
+    });
+    toggle.addEventListener("click", () => { helpPinned = !helpPinned; showHelp(helpPinned); });
+    return help;
+  }
+  document.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    const help = mounted?.querySelector(".fm-bulk-help");
+    if (help?.contains(document.activeElement)) help.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+    helpPinned = false; showHelp(false);
+  });
+  document.addEventListener("pointerdown", event => {
+    if (!mounted?.querySelector(".fm-bulk-help")?.contains(event.target as Node)) { helpPinned = false; showHelp(false); }
+  });
+
+  let meterJob: string | null = null;
+  let meterLit = 0;
+  let meterTarget = 0;
+  let meterActive = false;
+  let meterNode: HTMLElement | null = null;
+  let meterTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function paintMeter() {
+    if (!meterNode) return;
+    [...meterNode.children].forEach((square, index) => {
+      square.className = `fm-bulk-segment${index < meterLit ? " is-complete" : meterActive && index === meterLit ? " is-current" : ""}`;
+    });
+  }
+
+  function advanceMeter() {
+    meterTimer = null;
+    if (!meterNode?.isConnected) return;
+    if (meterLit < meterTarget) meterLit++;
+    paintMeter();
+    if (meterLit < meterTarget) meterTimer = setTimeout(advanceMeter, 180);
+  }
+
+  function progressDisplay(previous: HTMLElement | null) {
+    const view = P.progress(state);
+    const scanning = state.status === "scanning";
+    const active = scanning || state.status === "running";
+    const group = previous ?? element("div", "", "fm-bulk-progress");
+    if (!previous) {
+      const caption = element("div", "", "fm-bulk-progress-caption");
+      caption.append(element("strong"), element("span"));
+      const meter = element("div", "", "fm-bulk-meter");
+      meter.setAttribute("role", "progressbar"); meter.setAttribute("aria-label", "一括値下げの進捗");
+      meter.setAttribute("aria-valuemin", "0"); meter.setAttribute("aria-valuemax", "100");
+      for (let index = 0; index < 10; index++) {
+        const square = element("span", "", "fm-bulk-segment");
+        square.setAttribute("aria-hidden", "true"); meter.append(square);
+      }
+      const track = element("div", "", "fm-bulk-progress-track");
+      track.append(meter, element("span", "", "fm-bulk-eta"));
+      group.append(caption, track);
+    }
+    const label = scanning ? "対象を確認中" : active
+      ? "一括値下げを実行中"
+      : state.status === "done" ? "完了" : "停止中";
+    const count = scanning ? `${state.scanned ?? 0}件確認` : `${view.processed} / ${view.total}件`;
+    group.querySelector(".fm-bulk-progress-caption strong")!.textContent = label;
+    group.querySelector(".fm-bulk-progress-caption span")!.textContent = count;
+    const meter = group.querySelector<HTMLElement>(".fm-bulk-meter")!;
+    if (!scanning) meter.setAttribute("aria-valuenow", String(view.percent));
+    else meter.removeAttribute("aria-valuenow");
+    meter.setAttribute("aria-valuetext", `${label}・${count}`);
+    // 複数目盛り分の応答でも1個ずつ点灯。目標は実作業で到達した地点まで。
+    if (meterJob !== state.id || scanning || (!active && state.status !== "done")) {
+      if (meterTimer !== null) clearTimeout(meterTimer);
+      meterTimer = null;
+      meterLit = active ? 0 : view.lit;
+      meterJob = state.id;
+    }
+    meterNode = meter; meterTarget = view.lit; meterActive = active;
+    meterLit = Math.min(meterLit, meterTarget);
+    if (!active && state.status === "done" && !previous) meterLit = meterTarget;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) meterLit = meterTarget;
+    paintMeter();
+    if (meterLit < meterTarget && meterTimer === null) meterTimer = setTimeout(advanceMeter, 180);
+    const time = scanning ? "残り時間を計算中…" : view.remainingMs == null ? ""
+      : view.remainingMs < 60_000 ? "残り約1分以内" : `残り約${Math.ceil(view.remainingMs / 60_000)}分`;
+    group.querySelector(".fm-bulk-eta")!.textContent = time;
+    return group;
+  }
+
   function render() {
     if (!mounted) return;
     const key = JSON.stringify([state, pending, owns]);
@@ -110,7 +260,15 @@
     const detailsOpen = mounted.querySelector("details")?.open ?? false;
     const resultScroll = mounted.querySelector(".fm-bulk-results")?.scrollTop ?? 0;
     const focusedLabel = mounted.contains(document.activeElement) ? document.activeElement?.textContent : null;
-    const heading = element("div", "フリマネ 一括値下げ", "fm-bulk-heading");
+    // 注意書きは更新のたびに作り直さず、ホバー・フォーカス・スクロールを保つ。
+    let heading = mounted.querySelector<HTMLElement>(".fm-bulk-heading");
+    if (!heading) {
+      heading = element("div", "", "fm-bulk-heading");
+      const title = element("div", "", "fm-bulk-title");
+      title.append(element("span", "一括値下げ"), element("span", "フリマネ", "fm-bulk-brand"));
+      heading.append(title, helpButton());
+      mounted.append(heading);
+    }
     const content = element("div", "", "fm-bulk-content");
     const toolbar = element("div", "", "fm-bulk-toolbar");
     const label = element("p", "更新から24時間以上経過した商品を、各1回100円値下げ", "fm-bulk-hint");
@@ -124,20 +282,26 @@
     if (active && owns) actions.append(button("停止", "CANCEL", true));
     toolbar.append(label, actions);
     content.append(toolbar);
-    mounted.replaceChildren(heading, content);
+    const previousContent = mounted.querySelector(".fm-bulk-content");
+    const previousProgress = mounted.querySelector<HTMLElement>(".fm-bulk-progress");
+    if (previousContent) previousContent.replaceWith(content);
+    else mounted.append(content);
     if (state.status !== "idle") {
-      const status = element("p", state.message ?? "確認中…", "fm-bulk-status");
+      if (active || state.candidates?.length) content.append(progressDisplay(previousProgress));
+      const status = element("p", active ? "" : state.message ?? "", "fm-bulk-status");
       status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+      if (active) {
+        const progress = P.progress(state);
+        status.classList.add("fm-bulk-sr-only");
+        status.textContent = state.status === "scanning" ? `対象確認中・${state.scanned ?? 0}件確認` : `${progress.processed} / ${progress.total}件処理済み`;
+      }
       content.append(status);
       if (active && !owns) content.append(element("p", "開始したタブで操作してください。", "fm-bulk-note"));
-      content.append(element("p", `確認 ${state.scanned ?? 0}件 ／ 対象 ${state.candidates?.length ?? 0}件 ／ 完了 ${state.completed ?? 0}件 ／ 対象外・除外 ${state.skipped ?? 0}件`, "fm-bulk-counts"));
-      if (active) {
-        content.append(element("p", "400円未満・日時不明の商品などは対象外です。実行中はこの一覧を開いたままにしてください。停止時も保存を開始した1件は結果を確認します。", "fm-bulk-note"));
-      }
       if (state.rows?.length) {
         const details = element("details");
         details.open = detailsOpen;
         details.append(element("summary", "対象と結果を見る"));
+        details.append(element("p", `確認 ${state.scanned ?? 0}件 ／ 対象 ${state.candidates?.length ?? 0}件 ／ 完了 ${state.completed ?? 0}件 ／ 対象外・除外 ${state.skipped ?? 0}件`, "fm-bulk-counts"));
         const rows = element("div", "", "fm-bulk-results");
         for (const row of state.rows) {
           const entry = element("div", "", "fm-bulk-result");
@@ -154,12 +318,14 @@
       }
     }
     if (error) content.append(error);
-    if (focusedLabel) [...mounted.querySelectorAll<HTMLElement>("button, summary")].find(node => node.textContent === focusedLabel)?.focus({ preventScroll: true });
+    if (focusedLabel && !heading.contains(document.activeElement)) [...content.querySelectorAll<HTMLElement>("button, summary")].find(node => node.textContent === focusedLabel)?.focus({ preventScroll: true });
   }
 
+  let polling = false;
   async function poll() {
     mount();
-    if (!mounted || pending) return;
+    if (!mounted || pending || polling) return;
+    polling = true;
     const epoch = actionEpoch;
     try {
       const response = await request("STATUS");
@@ -167,6 +333,7 @@
       state = response.state; owns = response.owns; render();
     }
     catch (error) { showError(error); }
+    finally { polling = false; }
   }
 
   // SPAで出品中から取引中へ移動した場合も取り除く。
@@ -176,7 +343,11 @@
     scheduled = true;
     setTimeout(() => { scheduled = false; mount(); }, 200);
   }).observe(document, { childList: true, subtree: true });
-  setInterval(() => { void poll(); }, 5000);
+  // 実行中だけ拡張内の状態を細かく取得する。メルカリへの通信・待機は増やさない。
+  let refreshTicks = 0;
+  setInterval(() => {
+    if (++refreshTicks % 10 === 0 || ["scanning", "running"].includes(state.status)) void poll();
+  }, 500);
   void poll();
 
   let editorUsed = false;

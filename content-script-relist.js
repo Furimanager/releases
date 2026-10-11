@@ -201,10 +201,11 @@
       });
       return true;
     });
-    function boot() {
+    async function boot() {
       if (!window.location.pathname.startsWith("/sell")) {
         return;
       }
+      if (await globalThis.FurimanagerCrossListing?.receive("mercari", fillCrossListing)) return;
       if (ENABLE_DOM_DEBUG) {
         debugMercariSellDom();
         window.setTimeout(debugMercariSellDom, 1500);
@@ -435,6 +436,159 @@
         const item = items[RELIST_PENDING_KEY];
         callback(isRelistPendingItem(item) ? item : null);
       });
+    }
+    async function fillCrossListing(item, job, check) {
+      const cross = globalThis.FurimanagerCrossListing;
+      await cross.wait(() => findTitleField() && findDescriptionField() && findPriceField() && findImageField(), check);
+      const empty = () => {
+        check();
+        if (findTitleField()?.value || findDescriptionField()?.value || findPriceField()?.value || hasUploadedListingImages()) throw new Error("\u5165\u529B\u6E08\u307F\u306E\u5185\u5BB9\u304C\u3042\u308B\u305F\u3081\u3001\u4E0A\u66F8\u304D\u305B\u305A\u6B62\u3081\u307E\u3057\u305F\u3002\u7A7A\u306E\u51FA\u54C1\u753B\u9762\u3067\u3084\u308A\u76F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      };
+      empty();
+      await cross.claim(job, check);
+      const files = await cross.files(job, check);
+      empty();
+      const input = findImageField();
+      if (!input || !input.isConnected || (input.files?.length ?? 0) > 0) throw new Error("\u753B\u50CF\u6B04\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      const transfer = new DataTransfer();
+      files.forEach((file) => transfer.items.add(file));
+      input.multiple = true;
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      const started = Date.now();
+      while (Date.now() - started < 45e3) {
+        check();
+        const next = findImageUploadNextButton();
+        if (next) {
+          clickButtonLike(next);
+          await sleep(METADATA_SELECT_WAIT_MS);
+          check();
+        }
+        await clickAiSupportSkipButtonIfVisible();
+        check();
+        if (!isImageUploadDialogOpen() && !isAiSupportDialogOpen() && crossImageCount() === files.length) break;
+        await sleep(200);
+      }
+      check();
+      const title = findTitleField();
+      const description = findDescriptionField();
+      const price = findPriceField();
+      if (!title || !description || !price || title.value || description.value || price.value) throw new Error("\u5225\u306E\u5165\u529B\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u305F\u305F\u3081\u3001\u4E0A\u66F8\u304D\u305B\u305A\u6B62\u3081\u307E\u3057\u305F\u3002");
+      const warnings = ["\u30AB\u30C6\u30B4\u30EA"];
+      const expectedTitle = cross.setTitle(title, item, warnings);
+      cross.setText(description, item.description, "\u8AAC\u660E", warnings);
+      fillPriceField(item.price);
+      await fillCrossMetadata(item, check, warnings);
+      if (item.brand) warnings.push("\u30D6\u30E9\u30F3\u30C9");
+      if (item.size) warnings.push("\u30B5\u30A4\u30BA");
+      await sleep(500);
+      check();
+      if (findTitleField()?.value !== expectedTitle) warnings.push("\u5546\u54C1\u540D\u306E\u4E00\u81F4");
+      if (findDescriptionField()?.value !== item.description) warnings.push("\u8AAC\u660E\u306E\u4E00\u81F4");
+      if (!isPriceReady(item.price)) warnings.push("\u4FA1\u683C\u306E\u4E00\u81F4");
+      if (isImageUploadDialogOpen() || isAiSupportDialogOpen() || crossImageCount() !== files.length) warnings.push(`\u753B\u50CF\uFF08${files.length}\u679A\uFF09\u306E\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u5B8C\u4E86`);
+      cross.complete(item, warnings);
+    }
+    function crossImageCount() {
+      const root = findImageField()?.closest("section, form, main");
+      if (!root) return 0;
+      return Array.from(root.querySelectorAll("img")).filter((image) => {
+        const src = image.currentSrc || image.src;
+        const rect = image.getBoundingClientRect();
+        return isVisible(image) && image.complete && image.naturalWidth > 0 && rect.width >= 40 && rect.height >= 40 && (/^(blob:|data:image\/)/.test(src) || globalThis.FurimanagerCrossListing.imageAllowed(src, "mercari"));
+      }).length;
+    }
+    async function fillCrossMetadata(item, check, warnings) {
+      const cross = globalThis.FurimanagerCrossListing;
+      const values = cross.metadata(item);
+      const selectors = {
+        condition: 'select[name="itemCondition"], select[name="condition"]',
+        shippingMethod: 'select[name="shippingMethod"]',
+        shippingPayer: 'select[name="shippingPayer"]',
+        shippingDays: 'select[name="shippingDuration"], select[name="shippingDays"]',
+        shippingFrom: 'select[name="shippingFromArea"], select[name="shippingFrom"]'
+      };
+      const select = (key) => document.querySelector(selectors[key]);
+      const selectedLink = (key, value) => {
+        if (!value) return false;
+        const link = key === "condition" ? findConditionEntryLink() : findShippingMethodEntryLink();
+        return !!link && [link, ...Array.from(link.querySelectorAll("p, span"))].some((node) => cross.optionText(node.textContent) === cross.optionText(value));
+      };
+      const backToForm = async () => {
+        check();
+        const links = Array.from(document.querySelectorAll('a[href="/sell/create"]')).filter(isVisible);
+        const back = links.find((link) => /戻る/.test(link.textContent ?? ""));
+        if (!back) throw new Error("\u9078\u629E\u753B\u9762\u304B\u3089\u623B\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u51FA\u54C1\u30D5\u30A9\u30FC\u30E0\u306B\u623B\u3063\u3066\u5165\u529B\u6E08\u307F\u306E\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+        await check.navigate("/sell/create", () => back.click());
+      };
+      check();
+      if (values.condition && !cross.selectExact(select("condition"), values.condition) && !selectedLink("condition", values.condition)) {
+        const link = findConditionEntryLink();
+        if (link) {
+          await check.navigate("/sell/conditions", () => link.click());
+          const options = await waitForConditionOptions();
+          check();
+          const matches = options.filter((option) => cross.optionText(getConditionOptionText(option)) === cross.optionText(values.condition));
+          if (matches.length === 1) await check.navigate("/sell/create", () => matches[0].click());
+          else await backToForm();
+        }
+      }
+      await cross.wait(() => findTitleField() && findDescriptionField(), check);
+      check();
+      if (values.shippingMethod && !cross.selectExact(select("shippingMethod"), values.shippingMethod) && !selectedLink("shippingMethod", values.shippingMethod)) {
+        let link = findShippingMethodEntryLink();
+        if (!link && !select("shippingMethod")) {
+          try {
+            await cross.wait(() => findShippingMethodEntryLink() || select("shippingMethod"), check, 5e3);
+          } catch {
+            check();
+          }
+          link = findShippingMethodEntryLink();
+          cross.selectExact(select("shippingMethod"), values.shippingMethod);
+        }
+        if (link) {
+          await check.navigate("/sell/shipping_methods", () => link.click());
+          await cross.wait(() => document.querySelector('[data-testid="shipping-services"], [data-testid="shipping-service-group"]') || getShippingMethodCandidates().length, check);
+          await openShippingServicesIfNeeded();
+          check();
+          await waitForShippingMethodCandidates();
+          check();
+          const candidates = getShippingMethodCandidates().filter((option) => [option, ...Array.from(option.querySelectorAll("p, span, label"))].some((node) => cross.optionText(node.textContent) === cross.optionText(values.shippingMethod)));
+          const inputs = [...new Set(candidates.map((option) => option.querySelector('input[type="radio"]')).filter(Boolean))];
+          const input = inputs.length === 1 ? inputs[0] : null;
+          if (input && !input.disabled) {
+            if (!input.checked) check.write(() => input.click());
+            await cross.wait(() => input.isConnected && input.checked, check, 3500);
+            const update = await waitForShippingUpdateButton();
+            check();
+            if (update && isClickableButtonLike(update)) await check.navigate("/sell/create", () => update.click());
+            else await backToForm();
+          } else await backToForm();
+        }
+      }
+      await cross.wait(() => findTitleField() && findDescriptionField(), check);
+      check();
+      const payer = select("shippingPayer");
+      if (payer) cross.selectExact(payer, values.shippingPayer);
+      cross.selectExact(select("shippingDays"), values.shippingDays);
+      cross.selectExact(select("shippingFrom"), values.shippingFrom);
+      await sleep(300);
+      check();
+      for (const key of ["condition", "shippingMethod"]) {
+        if (values[key]) {
+          try {
+            await cross.wait(() => cross.selectedExact(select(key), values[key]) || selectedLink(key, values[key]), check, 5e3);
+          } catch {
+            check();
+          }
+        }
+      }
+      if (!cross.selectedExact(select("condition"), values.condition) && !selectedLink("condition", values.condition)) warnings.push("\u5546\u54C1\u306E\u72B6\u614B");
+      if (!cross.selectedExact(select("shippingMethod"), values.shippingMethod) && !selectedLink("shippingMethod", values.shippingMethod)) warnings.push("\u914D\u9001\u65B9\u6CD5");
+      if (payer ? !cross.selectedExact(select("shippingPayer"), values.shippingPayer) : !values.shippingPayer || !selectedLink("shippingMethod", values.shippingMethod)) warnings.push("\u9001\u6599\u8CA0\u62C5");
+      if (!cross.selectedExact(select("shippingDays"), values.shippingDays)) warnings.push("\u767A\u9001\u307E\u3067\u306E\u65E5\u6570");
+      if (!cross.selectedExact(select("shippingFrom"), values.shippingFrom)) warnings.push("\u767A\u9001\u5143\u306E\u5730\u57DF\uFF08\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\uFF09");
     }
     async function waitForFormAndFill(item) {
       resetSelectionSessionIfNeeded(item);

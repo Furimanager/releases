@@ -6,7 +6,7 @@ import vm from "node:vm";
 // ビルド済みの入力本体を実行する。起動処理だけを関数公開へ置換し、
 // DOMと画像通信を制御して「待っている間に画面が変わる」を再現する。
 const code = await readFile(new URL("../src/yahoo-fleamarket.js", import.meta.url), "utf8");
-const startup = "void fillRelist().then(scan);";
+const startup = 'void (async () => {\n      if (!await cross?.receive("yahoo", fillCrossListing)) await fillRelist();\n      scan();\n    })();';
 assert.equal(code.split(startup).length, 2, "本体の起動箇所が変わったらテストも確認する");
 const instrumented = code.replace(startup,
   "globalThis.reviewFunctions = { createFormGuard, fillImages, fillPicker, pickerMatches, fillHashtags, fillRelist, errorMessage };");

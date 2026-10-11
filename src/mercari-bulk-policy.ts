@@ -69,8 +69,39 @@
     return String(cursor);
   }
 
+  // 完了件数に現在の商品で通過した段階を足す。時間だけでは先へ進めない。
+  function progress(state: any) {
+    const total = state.candidates?.length ?? 0;
+    const completed = Math.min(total, Math.max(0, state.completed ?? 0));
+    const ids = new Set((state.candidates ?? []).map((value: any) => value.id));
+    const excluded = (state.rows ?? []).filter((row: any) => row.status === "除外" && ids.has(row.id)).length;
+    const processed = Math.min(total, completed + excluded);
+    const running = state.status === "running";
+    const scanning = state.status === "scanning";
+    const work = ["running", "stopped", "error", "interrupted"].includes(state.status)
+      && !["waiting", "break"].includes(state.progressTiming?.phase) && Number.isFinite(state.workProgress)
+      ? Math.max(0, Math.min(0.9, state.workProgress)) : 0;
+    const ratio = !scanning && total ? Math.min(total, processed + (processed < total ? work : 0)) / total : 0;
+    const lit = Math.min(running ? 9 : 10, Math.floor(ratio * 10));
+    const current = scanning ? 0 : running ? lit : -1;
+    const timing = state.progressTiming;
+    let remainingMs: number | null = null;
+    if (running && total > processed) {
+      // 最初の3件までは仮の作業時間。それ以降は実測（ランダム待機を除く）の平均。
+      const measured = timing?.samples >= 3 && Number.isFinite(timing.workMs) && timing.workMs > 0;
+      const unit = measured ? timing.workMs / timing.samples : 12_000;
+      const inFlight = Math.max(0, timing?.currentWorkMs ?? 0);
+      const remaining = total - processed;
+      remainingMs = Math.max(unit, inFlight) * remaining - inFlight + Math.max(0, timing?.waitRemainingMs ?? 0);
+      // 残り商品の間に挟む待機も含める。最後の1件の後には足さない。
+      for (let index = 1; index < remaining; index++) remainingMs += (completed + index) % 20 === 0 ? 25_000 : 5000;
+      remainingMs = Math.max(1000, remainingMs);
+    }
+    return { total, completed, processed, lit, current, percent: Math.floor(ratio * 100), remainingMs };
+  }
+
   (globalThis as any).FurimaneBulkPolicy = {
     AGE_MS, ORIGIN, PREFIX, STATE_KEY, LEDGER_KEY,
-    timestamp, item, reason, unchanged, listingsPage, nextPage,
+    timestamp, item, reason, unchanged, listingsPage, nextPage, progress,
   };
 })();

@@ -1,6 +1,7 @@
 (() => {
   // 手動の一括値下げは既存の個別操作・定期処理から分離する。
   importScripts("src/mercari-bulk-policy.js", "src/mercari-bulk-background.js");
+  importScripts("src/cross-listing.js", "src/cross-listing-background.js");
   try {
     importScripts("config.js");
   } catch {
@@ -47,7 +48,7 @@
   const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
   // 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
   // manifest.json の version と揃えて更新する。
-  const EXTENSION_FALLBACK_VERSION = "0.2.7";
+  const EXTENSION_FALLBACK_VERSION = "0.2.10";
   const EXTENSION_API_SCHEMA = "research-v1";
   const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
   const authState: {
@@ -67,6 +68,7 @@
   if (!chromeApi?.runtime?.onMessage) {
     return;
   }
+  (globalThis as any).installFurimanagerCrossListing?.(fetchImageAsDataUrl);
 
   chromeApi.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response: any) => void) => {
     const respond = (response: any) => {
@@ -121,6 +123,11 @@
     }
 
     if (message?.type === "OPEN_INVENTORY_LINK") {
+      if (message.payload?.platform === "paypay_flea") {
+        void openYahooInventoryLink(message.payload, sender).then(respond).catch(() =>
+          respond({ success: false, message: "連携元のYahoo商品を確認できませんでした。" }));
+        return true;
+      }
       void handleOpenInventoryLink(message.payload, respond);
       return true;
     }
@@ -1268,6 +1275,7 @@
     const params: Record<string, string | null> = {
       platform: payload.platform ?? "mercari",
       mercari_item_id: payload.mercariItemId ?? null,
+      yahoo_item_id: payload.platform === "paypay_flea" ? payload.yahooItemId ?? null : null,
       listing_url: payload.listingUrl ?? null,
       listing_title: payload.listingTitle ?? null,
       listing_price: typeof payload.listingPrice === "number" ? String(payload.listingPrice) : null,
@@ -1360,6 +1368,21 @@
         reject(error instanceof Error ? error : new Error("新規出品ページを開けませんでした"));
       }
     });
+  }
+
+  async function openYahooInventoryLink(payload: any, sender: any) {
+    if (!isAllowedYahooSender(sender) || (sender.frameId != null && sender.frameId !== 0) ||
+      !Number.isInteger(sender.tab?.id) || typeof payload.yahooItemId !== "string" || !/^z\d{6,16}$/.test(payload.yahooItemId)) return { success: false };
+    const tab = await new Promise<{ url?: string }>((resolve, reject) => {
+      chromeApi.tabs.get(sender.tab.id, (current: { url?: string }) => {
+        if (chromeApi.runtime.lastError || !current) reject(new Error("商品ページを確認できませんでした"));
+        else resolve(current);
+      });
+    });
+    const source = new URL(tab.url || "");
+    if (source.origin !== "https://paypayfleamarket.yahoo.co.jp" || source.pathname !== `/item/${payload.yahooItemId}`) return { success: false };
+    await openInventoryLink({ ...payload, mercariItemId: null, listingUrl: `${source.origin}${source.pathname}` });
+    return { success: true };
   }
 
   async function openYahooRelist(token: unknown, sender: any) {

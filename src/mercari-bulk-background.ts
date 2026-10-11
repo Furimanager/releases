@@ -21,8 +21,14 @@
   function summary() {
     if (!job) return { status: "idle" };
     // トークン・実行権限・タブ情報を保存データや表示データに含めない。
-    const { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab } = job;
-    return { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab };
+    const { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab, workProgress } = job;
+    // 表示専用の計測。対象判定に使うサーバー時刻とは混ぜない。
+    const progressTiming = status === "running" ? {
+      samples: job.workSamples ?? 0, workMs: job.workMs ?? 0, phase: job.phase ?? "working",
+      currentWorkMs: job.workStarted == null ? 0 : Math.max(0, performance.now() - job.workStarted),
+      waitRemainingMs: job.waitUntil == null ? 0 : Math.max(0, job.waitUntil - performance.now()),
+    } : null;
+    return { id, status, message, startedAt, seller, scanned, rows, candidates, completed, skipped, attempted, ownerTab, workProgress, progressTiming };
   }
 
   async function persist() { await api.storage.local.set({ [P.STATE_KEY]: summary() }); }
@@ -182,6 +188,11 @@
     const account = await profile(current.token);
     if (account.seller !== current.seller) throw new Error("ログイン中のアカウントが変わったため停止しました。");
     for (const candidate of current.candidates) {
+      current.phase = "working";
+      // 表示専用。実際に通過した段階だけ進め、保存確認前には1件完了にしない。
+      current.workProgress = 0;
+      current.workStarted = performance.now();
+      current.waitUntil = null;
       await assertOwner(current);
       const row = current.rows.find((value: any) => value.id === candidate.id);
       const fresh = await detail(current, candidate.id);
@@ -189,21 +200,27 @@
       const reason = P.reason(fresh.item, current.seller, current.startedAt, ledger[`${current.seller}/${candidate.id}`]);
       if (reason || !P.unchanged(candidate, fresh.item)) {
         row.status = "除外"; row.reason = reason ?? "確認後に商品情報が変わった"; current.skipped++;
+        current.workStarted = null;
         await persist();
         continue;
       }
       current.current = candidate;
+      current.workProgress = 0.1;
       current.authorized = false;
       current.authorizing = false;
       current.message = `値下げ中… ${current.completed + 1} / ${current.candidates.length}件`;
       const tab = await api.tabs.create({ url: `${P.ORIGIN}/item/${candidate.id}`, active: false });
       current.workerTab = tab.id;
+      current.workProgress = 0.2;
       await readyPage(current, "ITEM");
+      current.workProgress = 0.35;
       await assertOwner(current);
       // 商品ページの実リンクから編集へ進む。商品ごとにこの順序を完了させる。
       const opened = await api.tabs.sendMessage(current.workerTab, { type: `${P.PREFIX}ITEM_OPEN_EDIT`, itemId: candidate.id });
       if (!opened?.opened) throw new Error(opened?.error ?? "商品の編集へ進めませんでした。");
+      current.workProgress = 0.45;
       await readyPage(current, "EDITOR");
+      current.workProgress = 0.6;
       await assertOwner(current);
       // 個別の−100円と同じ入力処理を再利用する。入力も保存も1回だけ。
       const prepared = await api.tabs.sendMessage(current.workerTab, {
@@ -213,6 +230,7 @@
       if (!prepared?.success || prepared.currentPrice !== candidate.price || prepared.nextPrice !== candidate.price - 100) {
         throw new Error(prepared?.reason ?? "−100円の入力を確認できませんでした。");
       }
+      current.workProgress = 0.7;
       await assertOwner(current);
       // 保存メッセージは1回だけ。応答が失われても同じ操作を再送しない。
       let reply: any;
@@ -223,6 +241,7 @@
       } catch { reply = null; }
       if (reply?.error) throw new Error(reply.error);
       if (!current.authorized) throw new Error("保存前の最終確認が完了しなかったため停止しました。");
+      current.workProgress = 0.9;
       let verified = false;
       // 保存済みの可能性がある1件は、停止要求後も結果だけを確認する。
       for (let check = 0; check < 6; check++) {
@@ -237,11 +256,22 @@
       }
       if (!verified) throw new Error("保存結果を確認できませんでした。該当商品の価格を手動で確認してください。自動再送はしません。");
       row.status = "完了"; row.reason = null; current.completed++;
+      current.workProgress = 0;
+      current.workMs = (current.workMs ?? 0) + performance.now() - current.workStarted;
+      current.workSamples = (current.workSamples ?? 0) + 1;
+      current.workStarted = null;
       await persist();
       await closeWorker(current);
       if (candidate !== current.candidates.at(-1)) {
-        current.message = `次の商品まで待機中… 完了 ${current.completed}件`;
-        await pause(current, 15_000 + Math.random() * 10_000);
+        // 保存できた件数で区切る。20件ごとの休憩は通常待機に置き換え、二重に待たない。
+        const batchBreak = current.completed % 20 === 0;
+        const waitMs = batchBreak ? 20_000 + Math.random() * 10_000 : 3000 + Math.random() * 4000;
+        current.phase = batchBreak ? "break" : "waiting";
+        current.waitUntil = performance.now() + waitMs;
+        current.message = batchBreak
+          ? `${current.completed}件完了。20〜30秒休憩してから続けます…`
+          : `次の商品まで待機中… 完了 ${current.completed}件`;
+        await pause(current, waitMs);
       }
     }
     assertActive(current);

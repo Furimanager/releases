@@ -51,6 +51,86 @@ test("対象ページの完全一致とページングの終端・欠落を確�
   assert.throws(() => P.nextPage({}, Array(30).fill({})));
 });
 
+test("進捗10目盛りは処理件数で進み、現在の1個だけを点滅対象にする", () => {
+  const candidates = Array.from({ length: 100 }, (_, index) => ({ id: `m${1000 + index}` }));
+  for (const completed of [0, 9, 10, 19, 20, 50, 99]) {
+    const result = P.progress({ status: "running", candidates, completed });
+    assert.equal(result.lit, Math.floor(completed / 10));
+    assert.equal(result.current, result.lit);
+    assert.equal(result.percent, completed);
+  }
+  const done = P.progress({ status: "done", candidates, completed: 100 });
+  assert.equal(done.lit, 10); assert.equal(done.current, -1); assert.equal(done.remainingMs, null);
+  for (const status of ["stopped", "error", "interrupted"]) {
+    const stopped = P.progress({ status, candidates, completed: 20 });
+    assert.equal(stopped.lit, 2); assert.equal(stopped.current, -1); assert.equal(stopped.remainingMs, null);
+  }
+});
+
+test("対象確認中と対象0件では進捗を100%にせず、途中除外だけ処理済みに含める", () => {
+  const candidates = Array.from({ length: 10 }, (_, index) => ({ id: `m${1000 + index}` }));
+  const scanning = P.progress({ status: "scanning", candidates, completed: 0, scanned: 100 });
+  assert.equal(scanning.lit, 0); assert.equal(scanning.current, 0); assert.equal(scanning.remainingMs, null);
+  const empty = P.progress({ status: "done", candidates: [], completed: 0, skipped: 100 });
+  assert.equal(empty.lit, 0); assert.equal(empty.percent, 0);
+  const result = P.progress({ status: "running", candidates, completed: 2, skipped: 90,
+    rows: [{ id: "m1002", status: "除外" }, { id: "m1003", status: "確認中" }, { id: "m9999", status: "対象外" }] });
+  assert.equal(result.processed, 3); assert.equal(result.lit, 3);
+});
+
+for (const total of [1, 3, 5]) test(`${total}件でも商品内の作業段階で進み、保存確認までは完了にならない`, () => {
+  const candidates = Array.from({ length: total }, (_, index) => ({ id: `m${1000 + index}` }));
+  const percents = [];
+  for (let completed = 0; completed < total; completed++) {
+    for (const workProgress of [0, 0.1, 0.2, 0.35, 0.45, 0.6, 0.7, 0.9]) {
+      const state = { status: "running", candidates, completed, workProgress };
+      const view = P.progress(state);
+      assert.equal(view.processed, completed, "作業中の1件を完了件数に足さない");
+      assert.ok(view.percent < 100); assert.ok(view.lit < 10);
+      assert.equal(P.progress({ ...state, progressTiming: { currentWorkMs: 300_000 } }).percent, view.percent,
+        "読み込みや保存確認が遅くても時間だけで進めない");
+      percents.push(view.percent);
+    }
+  }
+  assert.ok(percents.every((value, index) => index === 0 || value >= percents[index - 1]));
+  assert.ok(new Set(percents).size > total + 1, "完了件数の段階より細かく進む");
+  const done = P.progress({ status: "done", candidates, completed: total, workProgress: 0 });
+  assert.equal(done.lit, 10); assert.equal(done.percent, 100); assert.equal(done.current, -1);
+});
+
+test("停止は作業中の位置で点滅を止め、待機・確認中・空データでは作業進捗を足さない", () => {
+  const candidates = [{ id: "m123" }];
+  for (const status of ["stopped", "error", "interrupted"]) {
+    const view = P.progress({ status, candidates, completed: 0, workProgress: 0.7 });
+    assert.equal(view.percent, 70); assert.equal(view.current, -1); assert.equal(view.processed, 0);
+  }
+  for (const phase of ["waiting", "break"]) {
+    assert.equal(P.progress({ status: "running", candidates, workProgress: 0.9, progressTiming: { phase } }).percent, 0);
+  }
+  for (const workProgress of [NaN, Infinity, "0.9", -1]) {
+    assert.equal(P.progress({ status: "running", candidates, workProgress }).percent, 0);
+  }
+  assert.equal(P.progress({ status: "running", candidates, workProgress: 1 }).percent, 90);
+  assert.equal(P.progress({ status: "scanning", candidates, workProgress: 0.9 }).percent, 0);
+});
+
+test("残り時間は実測の作業時間と通常/20件休憩を合算し、最後の待機は足さない", () => {
+  const candidates = Array.from({ length: 25 }, (_, index) => ({ id: `m${1000 + index}` }));
+  const state = { status: "running", candidates, completed: 19,
+    progressTiming: { samples: 19, workMs: 19 * 4000, currentWorkMs: 1000, waitRemainingMs: 0 } };
+  // 残り6件の作業24秒−進行中1秒、20件目後25秒＋通常待機4回20秒。
+  assert.equal(P.progress(state).remainingMs, 68_000);
+  const duringBreak = { ...state, completed: 20,
+    progressTiming: { samples: 20, workMs: 80_000, currentWorkMs: 0, waitRemainingMs: 12_000 } };
+  assert.equal(P.progress(duringBreak).remainingMs, 52_000);
+  const final = { ...state, completed: 24 };
+  assert.equal(P.progress(final).remainingMs, 3000);
+  assert.ok(P.progress({ ...final, progressTiming: { ...final.progressTiming, currentWorkMs: 6000 } }).remainingMs > 0);
+  assert.ok(P.progress({ ...state, progressTiming: { samples: 0 } }).remainingMs > 0);
+  assert.equal(P.progress({ ...state, progressTiming: { ...state.progressTiming, currentWorkMs: 2000 } }).lit, 7,
+    "時間が経っても四角は件数に同期する");
+});
+
 function fixture(options = {}) {
   let elapsed = 0;
   let uuid = 0;
@@ -70,8 +150,12 @@ function fixture(options = {}) {
   });
   context = vm.createContext({
     console, URL, AbortSignal, Date: class extends Date { static now() { return NOW + (options.clockOffset ?? 0); } },
+    Math: Object.assign(Object.create(Math), { random: () => options.random ?? 0.5 }),
     performance: { now: () => elapsed }, crypto: { randomUUID: () => `job-${++uuid}` },
-    setTimeout(callback, ms) { log.pauses.push(ms); elapsed += ms; queueMicrotask(callback); },
+    setTimeout(callback, ms) {
+      log.pauses.push(ms); elapsed += ms;
+      queueMicrotask(async () => { await options.onSleep?.({ send, log, ms }); callback(); });
+    },
     fetch: async (url, init) => {
       url = new URL(url);
       log.reads.push({ path: url.pathname, cursor: url.searchParams.get("max_pager_id"), init });
@@ -109,6 +193,7 @@ function fixture(options = {}) {
         onRemoved: { addListener: listener => removed.push(listener) },
         onUpdated: { addListener: listener => updated.push(listener) },
         sendMessage: async (tabId, message) => {
+          await options.onWorkerMessage?.({ send, message });
           if (message.type.endsWith("ITEM_READY") || message.type === "FURIMANE_PRICE_ADJUST_READY") return { ready: true };
           if (message.type.endsWith("ITEM_OPEN_EDIT")) {
             assert.equal(tabs.get(tabId).url, `${ORIGIN}/item/${message.itemId}`);
@@ -152,10 +237,26 @@ function fixture(options = {}) {
     }
     throw new Error("state wait timeout");
   };
-  return { send, settle, log, storage, items, tabs, updated };
+  return { send, settle, log, storage, items, tabs, updated, getElapsed: () => elapsed };
 }
 
-test("続きのページを全件取得し、重複IDは各1回だけ値下げ・商品間15秒以上", async () => {
+test("実処理が商品読込・編集・入力・保存確認の段階を公開し、件数は保存確認後だけ増える", async () => {
+  const stages = [];
+  const capture = async send => {
+    const { state } = await send("STATUS");
+    if (state.status === "running") stages.push({ work: state.workProgress, completed: state.completed });
+  };
+  const f = fixture({ onWorkerMessage: ({ send }) => capture(send), onSleep: ({ send }) => capture(send) });
+  await f.send("START");
+  const end = await f.settle(["done", "error"]);
+  for (const work of [0.2, 0.35, 0.45, 0.6, 0.7, 0.9]) {
+    assert.ok(stages.some(value => value.work === work && value.completed === 0), `stage=${work}`);
+  }
+  assert.equal(end.status, "done"); assert.equal(end.completed, 1); assert.equal(end.workProgress, 0);
+  assert.equal(f.log.saves.length, 1);
+});
+
+test("続きのページを全件取得し、重複IDは各1回だけ値下げ・商品間3〜7秒待機", async () => {
   const a = makeItem(), b = makeItem("m456");
   const f = fixture({ items: [a, b], pages: {
     first: { data: [a], meta: { has_next: true, next_pager_id: "two" } },
@@ -172,13 +273,179 @@ test("続きのページを全件取得し、重複IDは各1回だけ値下げ�
   assert.deepEqual(f.log.creates.map(value => value.url), [`${ORIGIN}/item/m123`, `${ORIGIN}/item/m456`]);
   assert.deepEqual(f.log.opens, ["m123", "m456"]);
   assert.deepEqual(f.log.prepares.map(value => value.itemId), ["m123", "m456"]);
-  assert.ok(f.log.saves[1].elapsed - f.log.saves[0].elapsed >= 15_000);
+  const interval = f.log.saves[1].elapsed - f.log.saves[0].elapsed;
+  assert.ok(interval >= 5000 && interval <= 9000, "保存確認の2秒＋3〜7秒待機");
   assert.equal(f.tabs.size, 1, "専用タブのみ閉じる");
   assert.equal(JSON.stringify(f.storage).includes("test-secret-token"), false);
   assert.ok(f.log.reads.every(value => value.init.cache === "no-store" && value.init.method === "GET"));
   await f.send("START");
   const second = await f.settle(["done"]);
   assert.equal(second.candidates.length, 0, "同日再実行で値下げしない");
+});
+
+// 実商品を変更せず、30件ずつの一覧と100商品の処理を再現する。
+function hundredItems(options = {}) {
+  const items = Array.from({ length: 100 }, (_, index) => makeItem(`m${1000 + index}`));
+  const pages = {};
+  for (let offset = 0; offset < items.length; offset += 30) {
+    const next = offset + 30;
+    pages[offset === 0 ? "first" : String(offset)] = {
+      data: items.slice(offset, next),
+      meta: { has_next: next < items.length, ...(next < items.length ? { next_pager_id: String(next) } : {}) },
+    };
+  }
+  return fixture({ items, pages, ...options });
+}
+
+test("進捗用計測は実処理だけを平均し、待機残秒を別に返して完了後は終了する", async () => {
+  let snapshot;
+  const f = fixture({
+    clockOffset: 3 * DAY,
+    items: Array.from({ length: 5 }, (_, index) => makeItem(`m${1000 + index}`)),
+    onSleep: async ({ send, log }) => {
+      if (snapshot || log.saves.length !== 3) return;
+      const reply = await send("STATUS");
+      if (reply.state.progressTiming?.phase === "waiting") snapshot = reply.state;
+    },
+  });
+  await f.send("START"); await f.settle(["done"]);
+  assert.equal(snapshot.completed, 3);
+  assert.equal(snapshot.progressTiming.samples, 3);
+  assert.equal(snapshot.progressTiming.workMs, 6000, "2秒の保存確認×3件。商品間の5秒は含めない");
+  assert.equal(snapshot.progressTiming.currentWorkMs, 0);
+  assert.equal(snapshot.progressTiming.waitRemainingMs, 4500);
+  assert.equal(P.progress(snapshot).remainingMs, 13_500);
+  assert.equal((await f.send("STATUS")).state.progressTiming, null);
+});
+
+test("100件を4ページから取得し、専用タブ1枚で順番に各100円だけ値下げする", async () => {
+  const f = hundredItems({ beforeApply: ({ tabs }) => assert.equal(tabs.size, 2, "一覧と専用タブ1枚だけ") });
+  await f.send("START");
+  const end = await f.settle(["done", "error", "stopped"]);
+  assert.equal(end.status, "done", end.message);
+  assert.equal(end.scanned, 100);
+  assert.equal(end.completed, 100);
+  assert.equal(end.skipped, 0);
+  assert.equal(end.rows.filter(row => row.status === "完了").length, 100);
+  assert.deepEqual(f.log.reads.filter(read => read.path.endsWith("get_items")).map(read => read.cursor), [null, "30", "60", "90"]);
+  assert.deepEqual(f.log.saves.map(save => save.id), [...f.items.keys()]);
+  assert.ok(f.log.saves.every(save => save.price === 900));
+  for (let index = 1; index < f.log.saves.length; index++) {
+    const interval = f.log.saves[index].elapsed - f.log.saves[index - 1].elapsed;
+    // 20/40/60/80件後だけ長く休む。保存確認の2秒は休憩とは別。
+    assert.equal(interval, index % 20 === 0 ? 27_000 : 7000, `${index + 1}件目の間隔`);
+  }
+  assert.equal(f.getElapsed() - f.log.saves.at(-1).elapsed, 2000, "100件目の保存確認後は休憩せず完了");
+  assert.equal(f.log.creates.length, 100);
+  assert.equal(f.tabs.size, 1);
+  await f.send("START");
+  assert.equal((await f.settle(["done"])).candidates.length, 0);
+  assert.equal(f.log.saves.length, 100, "再度押しても同じ100件を二重に値下げしない");
+});
+
+test("ランダム待機の下限と上限付近でも、通常3〜7秒・20件ごと20〜30秒", async () => {
+  for (const random of [0, 0.999]) {
+    const f = fixture({ random, items: Array.from({ length: 21 }, (_, index) => makeItem(`m${2000 + index}`)) });
+    await f.send("START");
+    const end = await f.settle(["done", "error"]);
+    assert.equal(end.status, "done", end.message);
+    const intervals = f.log.saves.slice(1).map((save, index) => save.elapsed - f.log.saves[index].elapsed - 2000);
+    assert.ok(intervals.slice(0, 19).every(ms => ms >= 3000 && ms < 7000));
+    assert.ok(intervals[19] >= 20_000 && intervals[19] < 30_000);
+    assert.equal(f.getElapsed() - f.log.saves.at(-1).elapsed, 2000);
+  }
+});
+
+test("ちょうど20件で完了するときは最後の長い休憩を入れない", async () => {
+  const f = fixture({ items: Array.from({ length: 20 }, (_, index) => makeItem(`m${2000 + index}`)) });
+  await f.send("START");
+  const end = await f.settle(["done", "error"]);
+  assert.equal(end.status, "done", end.message);
+  assert.equal(end.completed, 20);
+  assert.equal(f.getElapsed() - f.log.saves.at(-1).elapsed, 2000);
+});
+
+test("途中で除外した商品は20件休憩の件数に含めない", async () => {
+  const f = fixture({
+    items: Array.from({ length: 26 }, (_, index) => makeItem(`m${2000 + index}`)),
+    onRunning: ({ items }) => [...items.values()].slice(0, 5).forEach(item => { item.updated = NOW / 1000; }),
+  });
+  await f.send("START");
+  const end = await f.settle(["done", "error"]);
+  assert.equal(end.status, "done", end.message);
+  assert.equal(end.completed, 21);
+  assert.equal(end.skipped, 5);
+  const intervals = f.log.saves.slice(1).map((save, index) => save.elapsed - f.log.saves[index].elapsed);
+  assert.ok(intervals.slice(0, 19).every(ms => ms === 7000));
+  assert.equal(intervals[19], 27_000);
+});
+
+test("20件ごとの休憩中も停止を受け付け、21件目を開かない", async () => {
+  let cancelled = false;
+  const f = hundredItems({ onSleep: async ({ send, log, ms }) => {
+    if (!cancelled && log.saves.length === 20 && ms === 500) {
+      const { state } = await send("STATUS");
+      assert.match(state.message, /20件完了。20〜30秒休憩/);
+      cancelled = true;
+      await send("CANCEL", { jobId: state.id });
+    }
+  } });
+  await f.send("START");
+  const end = await f.settle(["done", "error", "stopped"]);
+  assert.equal(end.status, "stopped");
+  assert.equal(end.completed, 20);
+  assert.equal(f.log.saves.length, 20);
+  assert.equal(f.log.creates.length, 20);
+});
+
+test("100件中の直近更新・停止中・下限価格は除外し、残り25件だけ値下げする", async () => {
+  const f = hundredItems();
+  [...f.items.values()].forEach((item, index) => {
+    if (index < 25) item.updated = (NOW - 8 * 3600_000) / 1000;
+    else if (index < 50) item.status = "stop";
+    else if (index < 75) item.price = 300;
+  });
+  await f.send("START");
+  const end = await f.settle(["done", "error"]);
+  assert.equal(end.status, "done", end.message);
+  assert.equal(end.scanned, 100);
+  assert.equal(end.completed, 25);
+  assert.equal(end.skipped, 75);
+  assert.deepEqual(f.log.saves.map(save => save.id), [...f.items.keys()].slice(75));
+  assert.ok(f.log.saves.every(save => save.price === 900));
+});
+
+test("100件の途中で429なら50件で停止し、手動再実行は未実施の50件だけ処理する", async () => {
+  const f = hundredItems({ failRead: (url, log) => log.saves.length === 50 && url.searchParams.get("id") === "m1050" });
+  await f.send("START");
+  const end = await f.settle(["done", "error"]);
+  assert.equal(end.status, "error");
+  assert.match(end.message, /429/);
+  assert.equal(end.completed, 50);
+  assert.equal(f.log.saves.length, 50);
+  assert.equal(f.log.creates.length, 50, "制限応答後に次の商品画面を開かない");
+
+  // 拡張再起動後、利用者がもう一度押すケース。保存済みの商品は記録で除外する。
+  const resumed = hundredItems({ items: [...f.items.values()], storage: f.storage });
+  await resumed.send("START");
+  const second = await resumed.settle(["done", "error"]);
+  assert.equal(second.status, "done", second.message);
+  assert.equal(second.completed, 50);
+  assert.equal(second.skipped, 50);
+  assert.deepEqual(resumed.log.saves.map(save => save.id), [...f.items.keys()].slice(50));
+  assert.ok([...resumed.items.values()].every(item => item.price === 900));
+});
+
+test("100件の途中で停止ボタンを押すと50件で止まり、残りを保存しない", async () => {
+  const f = hundredItems({ beforeApply: async ({ send, message }) => {
+    if (message.itemId === "m1050") await send("CANCEL", { jobId: message.jobId });
+  } });
+  await f.send("START");
+  const end = await f.settle(["done", "error", "stopped"]);
+  assert.equal(end.status, "stopped");
+  assert.equal(end.completed, 50);
+  assert.deepEqual(f.log.saves.map(save => save.id), [...f.items.keys()].slice(0, 50));
+  assert.ok([...f.items.values()].slice(50).every(item => item.price === 1000));
 });
 
 test("2つの開始が重なっても1回、取引中や他のタブから実行不可", async () => {
