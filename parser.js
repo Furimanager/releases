@@ -1,5 +1,15 @@
 (function attachFurimanagerParser(globalObject) {
   const SYNC_ANCHOR_EXTERNAL_ID_LIMIT = 50;
+  // フリマネ自身が差し込んだボタンやパネル。表のセルを読むときに混ぜない
+  // （デスクトップ版で「ニット再出品在庫連携」のような商品名が保存された不具合の再発防止）。
+  const FURIMANAGER_INJECTED_UI_SELECTOR = [
+    "[data-furimanager-action-toolbar]",
+    "[data-furimanager-listing-date-panel]",
+    "[data-furimanager-listing-seller-panel]",
+    "[class*='furimanager-']",
+    "[class*='furimane-']",
+    "[class*='fm-bulk']"
+  ].join(",");
 
   function normalizeVisibleText(value) {
     return String(value || "")
@@ -37,6 +47,20 @@
     } catch {
       return [];
     }
+  }
+
+  function getTextWithoutInjectedUi(element) {
+    if (!element) {
+      return "";
+    }
+
+    if (safeQuerySelectorAll(element, FURIMANAGER_INJECTED_UI_SELECTOR).length === 0) {
+      return element.textContent || "";
+    }
+
+    const clone = element.cloneNode(true);
+    safeQuerySelectorAll(clone, FURIMANAGER_INJECTED_UI_SELECTOR).forEach((injected) => injected.remove());
+    return clone.textContent || "";
   }
 
   function getSalesRoot(doc, recipe) {
@@ -101,7 +125,7 @@
       headerTexts: getSalesTableHeaders(table, recipe),
       rows: rows.map((row, index) => ({
         rowIndex: index + 1,
-        cellTexts: Array.from(row.querySelectorAll("td"), (cell) => normalizeVisibleText(cell.textContent)),
+        cellTexts: Array.from(row.querySelectorAll("td"), (cell) => normalizeVisibleText(getTextWithoutInjectedUi(cell))),
         linkHrefs: getRowLinkHrefs(row)
       }))
     };
