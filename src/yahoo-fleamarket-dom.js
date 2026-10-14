@@ -34,6 +34,17 @@
         (link) => itemId(link.href) === id && new URL(link.href).pathname === `/item/${id}/edit` && text(link.textContent) === "\u7DE8\u96C6\u3059\u308B"
       ) ?? null;
     }
+    function sellerTradeLink(root, id) {
+      const links = Array.from(root.querySelectorAll("a[href]")).filter((link) => {
+        try {
+          const url = new URL(link.href);
+          return url.origin === SELL_ORIGIN && url.pathname === `/item/${id}/trade/seller`;
+        } catch {
+          return false;
+        }
+      });
+      return links.find((link) => link.getClientRects().length > 0) ?? null;
+    }
     function collectItem(root, url) {
       const id = itemId(url);
       const title = root.querySelector("h1")?.textContent?.trim() ?? "";
@@ -110,6 +121,7 @@
       adjustedPrice,
       imageUrl,
       editLink,
+      sellerTradeLink,
       collectItem,
       unique,
       priceField,

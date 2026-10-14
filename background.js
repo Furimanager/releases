@@ -43,7 +43,7 @@
     const EXTENSION_CONNECT_RATE_ERROR = "\u9023\u643A\u306E\u64CD\u4F5C\u304C\u7D9A\u3044\u3066\u3044\u307E\u3059\u3002\u5C11\u3057\u6642\u9593\u3092\u304A\u3044\u3066\u3001\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002";
     const EXTENSION_CONNECT_EXPIRED_ERROR = "\u30ED\u30B0\u30A4\u30F3\u60C5\u5831\u306E\u6709\u52B9\u671F\u9650\u304C\u5207\u308C\u307E\u3057\u305F\u3002\u62E1\u5F35\u6A5F\u80FD\u304B\u3089\u3082\u3046\u4E00\u5EA6\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
     const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
-    const EXTENSION_FALLBACK_VERSION = "0.2.11";
+    const EXTENSION_FALLBACK_VERSION = "0.2.12";
     const EXTENSION_API_SCHEMA = "research-v1";
     const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
     const authState = {
@@ -96,6 +96,10 @@
       }
       if (message?.type === "FETCH_MERCARI_USER_IDENTITY_BADGE") {
         void handleFetchMercariUserIdentityBadge(message, respond);
+        return true;
+      }
+      if (message?.type === "FETCH_MERCARI_OWN_USER_ID") {
+        void handleFetchMercariOwnUserId(message, respond);
         return true;
       }
       if (message?.type === "SET_RELIST_PENDING") {
@@ -224,6 +228,43 @@
         respond({ success: true, data: await response.json() });
       } catch {
         console.warn("[furimanager-extension] mercari user profile fetch failed");
+        respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u30E6\u30FC\u30B6\u30FC\u60C5\u5831\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" });
+      }
+    }
+    async function handleFetchMercariOwnUserId(message, respond) {
+      try {
+        const accessToken = typeof message?.accessToken === "string" ? message.accessToken.trim() : "";
+        if (!accessToken) {
+          respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u306E\u30ED\u30B0\u30A4\u30F3\u72B6\u614B\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F" });
+          return;
+        }
+        const url = new URL("https://api.mercari.jp/users/get_profile");
+        url.searchParams.set("_user_format", "profile");
+        const response = await fetch(url.toString(), {
+          method: "GET",
+          headers: {
+            accept: "application/json",
+            authorization: accessToken,
+            "x-platform": "web"
+          },
+          cache: "no-store",
+          credentials: "omit",
+          signal: AbortSignal.timeout(15e3)
+        });
+        if (!response.ok) {
+          respond({ success: false, message: `\u30E1\u30EB\u30AB\u30EA\u30E6\u30FC\u30B6\u30FC\u60C5\u5831\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F (${response.status})` });
+          return;
+        }
+        const payload = await response.json();
+        const source = payload?.data ?? payload;
+        const userId = String(source?.id ?? source?.profile?.id ?? "");
+        if (!/^\d+$/.test(userId)) {
+          respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u30E6\u30FC\u30B6\u30FCID\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F" });
+          return;
+        }
+        respond({ success: true, userId });
+      } catch {
+        console.warn("[furimanager-extension] mercari own user fetch failed");
         respond({ success: false, message: "\u30E1\u30EB\u30AB\u30EA\u30E6\u30FC\u30B6\u30FC\u60C5\u5831\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F" });
       }
     }

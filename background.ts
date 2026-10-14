@@ -48,7 +48,7 @@
   const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
   // 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
   // manifest.json の version と揃えて更新する。
-  const EXTENSION_FALLBACK_VERSION = "0.2.11";
+  const EXTENSION_FALLBACK_VERSION = "0.2.12";
   const EXTENSION_API_SCHEMA = "research-v1";
   const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
   const authState: {
@@ -114,6 +114,11 @@
 
     if (message?.type === "FETCH_MERCARI_USER_IDENTITY_BADGE") {
       void handleFetchMercariUserIdentityBadge(message, respond);
+      return true;
+    }
+
+    if (message?.type === "FETCH_MERCARI_OWN_USER_ID") {
+      void handleFetchMercariOwnUserId(message, respond);
       return true;
     }
 
@@ -279,6 +284,52 @@
       respond({ success: true, data: await response.json() });
     } catch {
       console.warn("[furimanager-extension] mercari user profile fetch failed");
+      respond({ success: false, message: "メルカリユーザー情報の取得に失敗しました" });
+    }
+  }
+
+  // ID指定なしのプロフィール取得は、トークンの持ち主（ログイン中の本人）を返す。一括値下げの出品者確認と同じ呼び方。
+  async function handleFetchMercariOwnUserId(message: any, respond: (response: any) => void) {
+    try {
+      const accessToken = typeof message?.accessToken === "string" ? message.accessToken.trim() : "";
+
+      if (!accessToken) {
+        respond({ success: false, message: "メルカリのログイン状態を確認できませんでした" });
+        return;
+      }
+
+      const url = new URL("https://api.mercari.jp/users/get_profile");
+      url.searchParams.set("_user_format", "profile");
+
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          authorization: accessToken,
+          "x-platform": "web"
+        },
+        cache: "no-store",
+        credentials: "omit",
+        signal: AbortSignal.timeout(15_000)
+      });
+
+      if (!response.ok) {
+        respond({ success: false, message: `メルカリユーザー情報の取得に失敗しました (${response.status})` });
+        return;
+      }
+
+      const payload = await response.json();
+      const source = payload?.data ?? payload;
+      const userId = String(source?.id ?? source?.profile?.id ?? "");
+
+      if (!/^\d+$/.test(userId)) {
+        respond({ success: false, message: "メルカリユーザーIDを確認できませんでした" });
+        return;
+      }
+
+      respond({ success: true, userId });
+    } catch {
+      console.warn("[furimanager-extension] mercari own user fetch failed");
       respond({ success: false, message: "メルカリユーザー情報の取得に失敗しました" });
     }
   }

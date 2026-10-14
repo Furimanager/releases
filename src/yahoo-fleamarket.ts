@@ -9,6 +9,10 @@
   const MAX_AGE_MS = 120000;
   type Action = "relist" | "draft" | "decrease" | "increase" | "stop" | "delete" | "inventory";
   type Navigation = { itemId: string; action: Action; savedAt: number };
+  const ACTIVE_ACTIONS: Action[] = ["inventory", "relist", "decrease", "increase", "draft", "stop", "delete"];
+  // 売れた商品は価格変更・停止・削除ができないため、在庫連携と再出品・下書きだけを出す。
+  const SOLD_ACTIONS: Action[] = ["inventory", "relist", "draft"];
+  const LABELS: Record<Action, string> = { inventory: "在庫連携", relist: "再出品", decrease: "-100", increase: "+100", draft: "下書き", stop: "停止", delete: "削除" };
   let running = false;
   let queued = false;
   let lastUrl = location.href;
@@ -93,19 +97,20 @@
     throw new Error("対象の入力欄が見つかりませんでした。画面の内容を確認してください。");
   }
 
-  function toolbar(mount: HTMLElement, id: string): void {
+  function toolbar(mount: HTMLElement, id: string, actions = ACTIVE_ACTIONS, after: Element | null = null): void {
     const existing = mount.querySelector<HTMLElement>(".furimanager-yahoo-toolbar");
-    if (existing?.dataset.itemId === id) return;
+    const key = `${id}:${actions.join(",")}`;
+    if (existing?.dataset.toolbarKey === key) return;
     existing?.remove();
     const bar = document.createElement("div");
     bar.className = "furimanager-yahoo-toolbar";
     bar.dataset.itemId = id;
+    bar.dataset.toolbarKey = key;
     bar.setAttribute("aria-label", "フリマネ 商品操作");
-    const definitions: [Action, string][] = [["inventory", "在庫連携"], ["relist", "再出品"], ["decrease", "-100"], ["increase", "+100"], ["draft", "下書き"], ["stop", "停止"], ["delete", "削除"]];
-    for (const [action, label] of definitions) {
+    for (const action of actions) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = label;
+      button.textContent = LABELS[action];
       button.dataset.furimanagerYahooAction = action;
       button.addEventListener("click", event => {
         event.preventDefault();
@@ -118,7 +123,8 @@
       });
       bar.append(button);
     }
-    mount.append(bar);
+    if (after) after.insertAdjacentElement("afterend", bar);
+    else mount.append(bar);
   }
 
   function scan(): void {
@@ -136,12 +142,15 @@
     if (pending && pending.itemId !== id) { sessionStorage.removeItem(NAV_KEY); return; }
     if (location.pathname === `/item/${id}`) {
       const edit = dom.editLink(document, id);
-      if (edit) toolbar(edit.parentElement, id);
+      // 売れた商品は「コピーして出品する／取引ページへ」の2列の直後へ置く（2列の中に入れると崩れる）。
+      const soldGrid = edit ? null : dom.sellerTradeLink(document, id)?.parentElement ?? null;
+      const mount: HTMLElement | null = edit?.parentElement ?? soldGrid?.parentElement ?? null;
+      if (mount) toolbar(mount, id, edit ? ACTIVE_ACTIONS : SOLD_ACTIONS, soldGrid);
       // 他サービスへのコピーは元商品を変更しない。画像の下へ文字リンクを置く。
       const gallery = document.querySelector("main .slick-slider");
-      const copyAnchor = edit?.parentElement?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
+      const copyAnchor = mount?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
       if (copyAnchor) (globalThis as any).FurimanagerCrossListing?.mount(copyAnchor, () => dom.collectItem(document, location.href), location.href);
-      if (!edit) return; // 自分の商品であることを編集リンクで確認。
+      if (!mount) return; // 自分の商品であることを編集リンク・出品者用の取引リンクで確認。
       if (pending) void runNavigation(pending);
     } else if (location.pathname === `/item/${id}/edit` && pending && document.querySelector("main form")) {
       void runNavigation(pending);
@@ -155,12 +164,14 @@
       if (dom.itemId(location.href) !== pending.itemId) throw new Error("商品が切り替わったため処理を止めました。");
       if (location.pathname === `/item/${pending.itemId}`) {
         const edit = dom.editLink(document, pending.itemId);
-        if (!edit) throw new Error("自分の商品の編集リンクを確認できませんでした。");
+        const sold = !edit && dom.sellerTradeLink(document, pending.itemId) !== null;
+        if (sold && !SOLD_ACTIONS.includes(pending.action)) throw new Error("売れた商品のため、価格の変更・停止・削除はできません。");
+        if (!edit && !sold) throw new Error("自分の商品であることを確認できませんでした。");
         if (pending.action === "inventory") {
           const item = await waitFor(() => dom.collectItem(document, location.href));
           const response = await chromeApi.runtime.sendMessage({ type: "OPEN_INVENTORY_LINK", payload: {
             platform: "paypay_flea", yahooItemId: item.itemId, listingUrl: item.itemUrl,
-            listingTitle: item.title, listingPrice: item.price, listingStatus: "active",
+            listingTitle: item.title, listingPrice: item.price, listingStatus: sold ? "sold" : "active",
             imageUrl: item.imageUrls[0] ?? null, capturedAt: new Date().toISOString()
           } });
           if (!response?.success) throw new Error(response?.message || "在庫連携ページを開けませんでした。");
@@ -178,7 +189,7 @@
           }
           sessionStorage.removeItem(NAV_KEY);
           notify("新しいタブで出品内容を入力します。最後の確定は画面で確認してください。");
-        } else {
+        } else if (edit) {
           location.assign(edit.href);
         }
       } else {

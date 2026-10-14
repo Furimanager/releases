@@ -116,6 +116,7 @@
     success?: boolean;
     message?: string;
     data?: unknown;
+    userId?: string;
   };
 
   type ChromeLike = {
@@ -257,6 +258,7 @@
   const MERCARI_ITEM_DETAIL_MESSAGE_TYPE = "FETCH_MERCARI_ITEM_DETAIL";
   const MERCARI_USER_PROFILE_MESSAGE_TYPE = "FETCH_MERCARI_USER_PROFILE";
   const MERCARI_USER_IDENTITY_BADGE_MESSAGE_TYPE = "FETCH_MERCARI_USER_IDENTITY_BADGE";
+  const MERCARI_OWN_USER_ID_MESSAGE_TYPE = "FETCH_MERCARI_OWN_USER_ID";
   const LISTING_DATE_API_CACHE_MS = 5 * 60 * 1000;
   const LISTING_DATE_API_EMPTY_CACHE_MS = 10 * 1000;
   const LISTING_SELLER_API_CACHE_MS = 10 * 60 * 1000;
@@ -273,6 +275,11 @@
   const listingSellerApiRequests = new Map<string, Promise<SellerInfo | null>>();
   const sellerIdentityBadgeApiCache = new Map<string, { savedAt: number; data: SellerIdentityBadgeInfo | null }>();
   const sellerIdentityBadgeApiRequests = new Map<string, Promise<SellerIdentityBadgeInfo | null>>();
+  // 照合できなかった（通信失敗・未ログインなど）ときは、少し待ってから確認し直す。
+  const OWN_SOLD_CHECK_RETRY_MS = 30 * 1000;
+  const ownSoldItemChecks = new Map<string, { own: boolean | null; checkedAt: number }>();
+  const ownSoldItemCheckRequests = new Set<string>();
+  let ownMercariUserIdRequest: Promise<string | null> | null = null;
 
   const PRODUCT_PATH_PATTERN = /^\/item\//;
   const TRANSACTION_PATH_PATTERN = /^\/transaction\//;
@@ -327,8 +334,9 @@
   const RELIST_ONLY_BUTTONS: ActionButtonDefinition[] = [
     { id: "relist", label: "再出品", action: "relist" },
     { id: "save-draft", label: "下書き", action: "saveDraft" },
-    INVENTORY_LINK_BUTTON,
   ];
+  // 在庫連携は、ログイン中の本人が出品者の売り切れ商品にだけ出す（他人の商品・購入した商品には出さない）。
+  const OWN_SOLD_BUTTONS: ActionButtonDefinition[] = [...RELIST_ONLY_BUTTONS, INVENTORY_LINK_BUTTON];
 
   const BUTTONS_BY_KIND: Record<Exclude<MercariPageKind, "unknown" | "browsingHistory">, ActionButtonDefinition[]> = {
     otherProduct: [
@@ -2616,11 +2624,108 @@
       return [];
     }
 
-    if ((pageKind === "ownProduct" || pageKind === "otherProduct") && isSoldProductPage()) {
-      return RELIST_ONLY_BUTTONS;
+    if ((pageKind === "ownProduct" || pageKind === "otherProduct") && isSoldItemPage()) {
+      return isOwnSoldProductPage() ? OWN_SOLD_BUTTONS : RELIST_ONLY_BUTTONS;
     }
 
     return BUTTONS_BY_KIND[pageKind];
+  }
+
+  // 出品中の自分の商品には「商品の編集」がある。本文の「SOLD」などの文字で売り切れと取り違えない。
+  function isSoldItemPage(): boolean {
+    return isSoldProductPage() && !document.querySelector('a[href*="/sell/edit/"]');
+  }
+
+  // 売り切れ商品の「取引画面を表示する」は出品者にも購入者にも出る。
+  // 取引画面のリンクがあるときだけ、商品の出品者IDとログイン中の本人IDを照合する（他人の売り切れ商品では通信しない）。
+  function isOwnSoldProductPage(): boolean {
+    const itemId = extractMercariItemId(window.location.href);
+
+    if (!itemId || !hasTransactionLinkForItem(itemId)) {
+      return false;
+    }
+
+    const checked = ownSoldItemChecks.get(itemId);
+
+    if (!checked || (checked.own === null && Date.now() - checked.checkedAt >= OWN_SOLD_CHECK_RETRY_MS)) {
+      void checkOwnSoldItem(itemId);
+    }
+
+    return checked?.own === true;
+  }
+
+  function hasTransactionLinkForItem(itemId: string): boolean {
+    return safeQuerySelectorAll(document, `a[href*="/transaction/${itemId}"]`)
+      .some((link) => link instanceof HTMLAnchorElement && extractMercariTransactionItemId(link.href) === itemId);
+  }
+
+  async function checkOwnSoldItem(itemId: string): Promise<void> {
+    if (ownSoldItemCheckRequests.has(itemId)) {
+      return;
+    }
+
+    ownSoldItemCheckRequests.add(itemId);
+    let own: boolean | null = null;
+
+    try {
+      const [ownUserId, itemPayload] = await Promise.all([getOwnMercariUserId(), requestMercariItemDetail(itemId)]);
+      const sellerId = extractSellerInfoFromApiPayload(itemPayload, itemId)?.sellerId ?? null;
+      // どちらかが取れなければ判定を保留し、在庫連携は出さない。
+      own = ownUserId && sellerId ? ownUserId === sellerId : null;
+    } catch (error) {
+      console.debug("[furimanager] own sold item check skipped", error);
+    } finally {
+      ownSoldItemCheckRequests.delete(itemId);
+    }
+
+    ownSoldItemChecks.set(itemId, { own, checkedAt: Date.now() });
+
+    if (own) {
+      scheduleInjection();
+    }
+  }
+
+  function getOwnMercariUserId(): Promise<string | null> {
+    if (ownMercariUserIdRequest) {
+      return ownMercariUserIdRequest;
+    }
+
+    const request = new Promise<string | null>((resolve) => {
+      if (!chromeApi?.runtime?.sendMessage) {
+        resolve(null);
+        return;
+      }
+
+      try {
+        chromeApi.runtime.sendMessage(
+          {
+            type: MERCARI_OWN_USER_ID_MESSAGE_TYPE,
+            accessToken: readMercariAccessToken(),
+          },
+          (response) => {
+            if (chromeApi.runtime?.lastError || !response?.success || typeof response.userId !== "string") {
+              resolve(null);
+              return;
+            }
+
+            resolve(response.userId);
+          }
+        );
+      } catch {
+        // 拡張を更新した直後は、古いページから送れない。
+        resolve(null);
+      }
+    });
+
+    ownMercariUserIdRequest = request;
+    // 失敗は覚えず、次の売り切れ商品で取り直す。
+    void request.then((userId) => {
+      if (!userId && ownMercariUserIdRequest === request) {
+        ownMercariUserIdRequest = null;
+      }
+    });
+
+    return request;
   }
 
   function getProductPageTarget(pageKind: MercariPageKind): ActionContext | null {
@@ -3487,7 +3592,7 @@
   }
 
   function getInventoryListingStatus(pageKind: MercariPageKind) {
-    if (pageKind === "history" || isSoldProductPage()) {
+    if (pageKind === "history" || isSoldItemPage()) {
       return "sold";
     }
 

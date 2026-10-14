@@ -39,6 +39,19 @@
     ) ?? null;
   }
 
+  // 2026-10-13実DOM: 売れた自分の商品は「編集する」が消え、出品者用の取引ページへのリンクが出る。
+  // 購入した商品は購入者用（/trade/buyer）になるため、出品者用だけを自分の商品の目印にする。
+  function sellerTradeLink(root: ParentNode, id: string): HTMLAnchorElement | null {
+    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(link => {
+      try {
+        const url = new URL(link.href);
+        return url.origin === SELL_ORIGIN && url.pathname === `/item/${id}/trade/seller`;
+      } catch { return false; }
+    });
+    // PC用とスマホ用の2つが同居する。表示中の方の近くへ操作欄を置く。
+    return links.find(link => link.getClientRects().length > 0) ?? null;
+  }
+
   function collectItem(root: ParentNode, url: string) {
     const id = itemId(url);
     // 商品名の全角スペース・連続スペースも出品者が入力した内容として保つ。
@@ -118,7 +131,7 @@
   }
 
   (globalThis as any).FurimanagerYahooDom = {
-    ORIGIN, SELL_ORIGIN, text, itemId, price, adjustedPrice, imageUrl, editLink, collectItem,
+    ORIGIN, SELL_ORIGIN, text, itemId, price, adjustedPrice, imageUrl, editLink, sellerTradeLink, collectItem,
     unique, priceField, fieldSection, setValue, setPriceValue, selectText, exactButton,
   };
 })();

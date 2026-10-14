@@ -120,6 +120,7 @@
     const MERCARI_ITEM_DETAIL_MESSAGE_TYPE = "FETCH_MERCARI_ITEM_DETAIL";
     const MERCARI_USER_PROFILE_MESSAGE_TYPE = "FETCH_MERCARI_USER_PROFILE";
     const MERCARI_USER_IDENTITY_BADGE_MESSAGE_TYPE = "FETCH_MERCARI_USER_IDENTITY_BADGE";
+    const MERCARI_OWN_USER_ID_MESSAGE_TYPE = "FETCH_MERCARI_OWN_USER_ID";
     const LISTING_DATE_API_CACHE_MS = 5 * 60 * 1e3;
     const LISTING_DATE_API_EMPTY_CACHE_MS = 10 * 1e3;
     const LISTING_SELLER_API_CACHE_MS = 10 * 60 * 1e3;
@@ -136,6 +137,10 @@
     const listingSellerApiRequests = /* @__PURE__ */ new Map();
     const sellerIdentityBadgeApiCache = /* @__PURE__ */ new Map();
     const sellerIdentityBadgeApiRequests = /* @__PURE__ */ new Map();
+    const OWN_SOLD_CHECK_RETRY_MS = 30 * 1e3;
+    const ownSoldItemChecks = /* @__PURE__ */ new Map();
+    const ownSoldItemCheckRequests = /* @__PURE__ */ new Set();
+    let ownMercariUserIdRequest = null;
     const PRODUCT_PATH_PATTERN = /^\/item\//;
     const TRANSACTION_PATH_PATTERN = /^\/transaction\//;
     const HISTORY_PATH_MARKERS = [
@@ -186,9 +191,9 @@
     const INVENTORY_LINK_BUTTON = { id: "link-inventory", label: "\u5728\u5EAB\u9023\u643A", action: "linkInventory" };
     const RELIST_ONLY_BUTTONS = [
       { id: "relist", label: "\u518D\u51FA\u54C1", action: "relist" },
-      { id: "save-draft", label: "\u4E0B\u66F8\u304D", action: "saveDraft" },
-      INVENTORY_LINK_BUTTON
+      { id: "save-draft", label: "\u4E0B\u66F8\u304D", action: "saveDraft" }
     ];
+    const OWN_SOLD_BUTTONS = [...RELIST_ONLY_BUTTONS, INVENTORY_LINK_BUTTON];
     const BUTTONS_BY_KIND = {
       otherProduct: [
         { id: "copy-listing", label: "\u30B3\u30D4\u30FC\u51FA\u54C1", action: "copyListing" },
@@ -2051,10 +2056,82 @@
       if (pageKind === "history") {
         return [];
       }
-      if ((pageKind === "ownProduct" || pageKind === "otherProduct") && isSoldProductPage()) {
-        return RELIST_ONLY_BUTTONS;
+      if ((pageKind === "ownProduct" || pageKind === "otherProduct") && isSoldItemPage()) {
+        return isOwnSoldProductPage() ? OWN_SOLD_BUTTONS : RELIST_ONLY_BUTTONS;
       }
       return BUTTONS_BY_KIND[pageKind];
+    }
+    function isSoldItemPage() {
+      return isSoldProductPage() && !document.querySelector('a[href*="/sell/edit/"]');
+    }
+    function isOwnSoldProductPage() {
+      const itemId = extractMercariItemId(window.location.href);
+      if (!itemId || !hasTransactionLinkForItem(itemId)) {
+        return false;
+      }
+      const checked = ownSoldItemChecks.get(itemId);
+      if (!checked || checked.own === null && Date.now() - checked.checkedAt >= OWN_SOLD_CHECK_RETRY_MS) {
+        void checkOwnSoldItem(itemId);
+      }
+      return checked?.own === true;
+    }
+    function hasTransactionLinkForItem(itemId) {
+      return safeQuerySelectorAll(document, `a[href*="/transaction/${itemId}"]`).some((link) => link instanceof HTMLAnchorElement && extractMercariTransactionItemId(link.href) === itemId);
+    }
+    async function checkOwnSoldItem(itemId) {
+      if (ownSoldItemCheckRequests.has(itemId)) {
+        return;
+      }
+      ownSoldItemCheckRequests.add(itemId);
+      let own = null;
+      try {
+        const [ownUserId, itemPayload] = await Promise.all([getOwnMercariUserId(), requestMercariItemDetail(itemId)]);
+        const sellerId = extractSellerInfoFromApiPayload(itemPayload, itemId)?.sellerId ?? null;
+        own = ownUserId && sellerId ? ownUserId === sellerId : null;
+      } catch (error) {
+        console.debug("[furimanager] own sold item check skipped", error);
+      } finally {
+        ownSoldItemCheckRequests.delete(itemId);
+      }
+      ownSoldItemChecks.set(itemId, { own, checkedAt: Date.now() });
+      if (own) {
+        scheduleInjection();
+      }
+    }
+    function getOwnMercariUserId() {
+      if (ownMercariUserIdRequest) {
+        return ownMercariUserIdRequest;
+      }
+      const request = new Promise((resolve) => {
+        if (!chromeApi?.runtime?.sendMessage) {
+          resolve(null);
+          return;
+        }
+        try {
+          chromeApi.runtime.sendMessage(
+            {
+              type: MERCARI_OWN_USER_ID_MESSAGE_TYPE,
+              accessToken: readMercariAccessToken()
+            },
+            (response) => {
+              if (chromeApi.runtime?.lastError || !response?.success || typeof response.userId !== "string") {
+                resolve(null);
+                return;
+              }
+              resolve(response.userId);
+            }
+          );
+        } catch {
+          resolve(null);
+        }
+      });
+      ownMercariUserIdRequest = request;
+      void request.then((userId) => {
+        if (!userId && ownMercariUserIdRequest === request) {
+          ownMercariUserIdRequest = null;
+        }
+      });
+      return request;
     }
     function getProductPageTarget(pageKind) {
       const imageContainer = findProductImageContainer();
@@ -2711,7 +2788,7 @@
       });
     }
     function getInventoryListingStatus(pageKind) {
-      if (pageKind === "history" || isSoldProductPage()) {
+      if (pageKind === "history" || isSoldItemPage()) {
         return "sold";
       }
       if (pageKind === "activeListings" || pageKind === "ownProduct") {

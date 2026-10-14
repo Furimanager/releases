@@ -6,6 +6,9 @@
     const NAV_KEY = "furimanager_yahoo_navigation";
     const JOB_PREFIX = "furimanager_yahoo_relist_";
     const MAX_AGE_MS = 12e4;
+    const ACTIVE_ACTIONS = ["inventory", "relist", "decrease", "increase", "draft", "stop", "delete"];
+    const SOLD_ACTIONS = ["inventory", "relist", "draft"];
+    const LABELS = { inventory: "\u5728\u5EAB\u9023\u643A", relist: "\u518D\u51FA\u54C1", decrease: "-100", increase: "+100", draft: "\u4E0B\u66F8\u304D", stop: "\u505C\u6B62", delete: "\u524A\u9664" };
     let running = false;
     let queued = false;
     let lastUrl = location.href;
@@ -86,19 +89,20 @@ ${message}`;
       }
       throw new Error("\u5BFE\u8C61\u306E\u5165\u529B\u6B04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u753B\u9762\u306E\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
     }
-    function toolbar(mount, id) {
+    function toolbar(mount, id, actions = ACTIVE_ACTIONS, after = null) {
       const existing = mount.querySelector(".furimanager-yahoo-toolbar");
-      if (existing?.dataset.itemId === id) return;
+      const key = `${id}:${actions.join(",")}`;
+      if (existing?.dataset.toolbarKey === key) return;
       existing?.remove();
       const bar = document.createElement("div");
       bar.className = "furimanager-yahoo-toolbar";
       bar.dataset.itemId = id;
+      bar.dataset.toolbarKey = key;
       bar.setAttribute("aria-label", "\u30D5\u30EA\u30DE\u30CD \u5546\u54C1\u64CD\u4F5C");
-      const definitions = [["inventory", "\u5728\u5EAB\u9023\u643A"], ["relist", "\u518D\u51FA\u54C1"], ["decrease", "-100"], ["increase", "+100"], ["draft", "\u4E0B\u66F8\u304D"], ["stop", "\u505C\u6B62"], ["delete", "\u524A\u9664"]];
-      for (const [action, label] of definitions) {
+      for (const action of actions) {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = label;
+        button.textContent = LABELS[action];
         button.dataset.furimanagerYahooAction = action;
         button.addEventListener("click", (event) => {
           event.preventDefault();
@@ -111,7 +115,8 @@ ${message}`;
         });
         bar.append(button);
       }
-      mount.append(bar);
+      if (after) after.insertAdjacentElement("afterend", bar);
+      else mount.append(bar);
     }
     function scan() {
       if (running) return;
@@ -131,11 +136,13 @@ ${message}`;
       }
       if (location.pathname === `/item/${id}`) {
         const edit = dom.editLink(document, id);
-        if (edit) toolbar(edit.parentElement, id);
+        const soldGrid = edit ? null : dom.sellerTradeLink(document, id)?.parentElement ?? null;
+        const mount = edit?.parentElement ?? soldGrid?.parentElement ?? null;
+        if (mount) toolbar(mount, id, edit ? ACTIVE_ACTIONS : SOLD_ACTIONS, soldGrid);
         const gallery = document.querySelector("main .slick-slider");
-        const copyAnchor = edit?.parentElement?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
+        const copyAnchor = mount?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
         if (copyAnchor) globalThis.FurimanagerCrossListing?.mount(copyAnchor, () => dom.collectItem(document, location.href), location.href);
-        if (!edit) return;
+        if (!mount) return;
         if (pending) void runNavigation(pending);
       } else if (location.pathname === `/item/${id}/edit` && pending && document.querySelector("main form")) {
         void runNavigation(pending);
@@ -148,7 +155,9 @@ ${message}`;
         if (dom.itemId(location.href) !== pending.itemId) throw new Error("\u5546\u54C1\u304C\u5207\u308A\u66FF\u308F\u3063\u305F\u305F\u3081\u51E6\u7406\u3092\u6B62\u3081\u307E\u3057\u305F\u3002");
         if (location.pathname === `/item/${pending.itemId}`) {
           const edit = dom.editLink(document, pending.itemId);
-          if (!edit) throw new Error("\u81EA\u5206\u306E\u5546\u54C1\u306E\u7DE8\u96C6\u30EA\u30F3\u30AF\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+          const sold = !edit && dom.sellerTradeLink(document, pending.itemId) !== null;
+          if (sold && !SOLD_ACTIONS.includes(pending.action)) throw new Error("\u58F2\u308C\u305F\u5546\u54C1\u306E\u305F\u3081\u3001\u4FA1\u683C\u306E\u5909\u66F4\u30FB\u505C\u6B62\u30FB\u524A\u9664\u306F\u3067\u304D\u307E\u305B\u3093\u3002");
+          if (!edit && !sold) throw new Error("\u81EA\u5206\u306E\u5546\u54C1\u3067\u3042\u308B\u3053\u3068\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
           if (pending.action === "inventory") {
             const item = await waitFor(() => dom.collectItem(document, location.href));
             const response = await chromeApi.runtime.sendMessage({ type: "OPEN_INVENTORY_LINK", payload: {
@@ -157,7 +166,7 @@ ${message}`;
               listingUrl: item.itemUrl,
               listingTitle: item.title,
               listingPrice: item.price,
-              listingStatus: "active",
+              listingStatus: sold ? "sold" : "active",
               imageUrl: item.imageUrls[0] ?? null,
               capturedAt: (/* @__PURE__ */ new Date()).toISOString()
             } });
@@ -176,7 +185,7 @@ ${message}`;
             }
             sessionStorage.removeItem(NAV_KEY);
             notify("\u65B0\u3057\u3044\u30BF\u30D6\u3067\u51FA\u54C1\u5185\u5BB9\u3092\u5165\u529B\u3057\u307E\u3059\u3002\u6700\u5F8C\u306E\u78BA\u5B9A\u306F\u753B\u9762\u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
-          } else {
+          } else if (edit) {
             location.assign(edit.href);
           }
         } else {
