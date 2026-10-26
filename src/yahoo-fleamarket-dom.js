@@ -45,6 +45,17 @@
       });
       return links.find((link) => link.getClientRects().length > 0) ?? null;
     }
+    function orderLink(root, id) {
+      const links = Array.from(root.querySelectorAll("a[href]")).filter((link) => {
+        try {
+          const url = new URL(link.href);
+          return url.origin === SELL_ORIGIN && url.pathname === `/item/${id}/order`;
+        } catch {
+          return false;
+        }
+      });
+      return links.find((link) => link.getClientRects().length > 0) ?? null;
+    }
     function collectItem(root, url) {
       const id = itemId(url);
       const title = root.querySelector("h1")?.textContent?.trim() ?? "";
@@ -122,6 +133,7 @@
       imageUrl,
       editLink,
       sellerTradeLink,
+      orderLink,
       collectItem,
       unique,
       priceField,

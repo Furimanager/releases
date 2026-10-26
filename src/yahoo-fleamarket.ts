@@ -7,12 +7,14 @@
   const NAV_KEY = "furimanager_yahoo_navigation";
   const JOB_PREFIX = "furimanager_yahoo_relist_";
   const MAX_AGE_MS = 120000;
-  type Action = "relist" | "draft" | "decrease" | "increase" | "stop" | "delete" | "inventory";
+  type Action = "relist" | "draft" | "decrease" | "increase" | "stop" | "delete" | "inventory" | "copy";
   type Navigation = { itemId: string; action: Action; savedAt: number };
   const ACTIVE_ACTIONS: Action[] = ["inventory", "relist", "decrease", "increase", "draft", "stop", "delete"];
   // 売れた商品は価格変更・停止・削除ができないため、在庫連携と再出品・下書きだけを出す。
   const SOLD_ACTIONS: Action[] = ["inventory", "relist", "draft"];
-  const LABELS: Record<Action, string> = { inventory: "在庫連携", relist: "再出品", decrease: "-100", increase: "+100", draft: "下書き", stop: "停止", delete: "削除" };
+  // 人の商品は元の商品に触れないコピー出品だけ（メルカリの人の商品と同じ。2026-10-25 オーナー）。
+  const OTHERS_ACTIONS: Action[] = ["copy"];
+  const LABELS: Record<Action, string> = { inventory: "在庫連携", relist: "再出品", decrease: "-100", increase: "+100", draft: "下書き", stop: "停止", delete: "削除", copy: "コピー出品" };
   let running = false;
   let queued = false;
   let lastUrl = location.href;
@@ -78,7 +80,7 @@
   function readNavigation(): Navigation | null {
     try {
       const value = JSON.parse(sessionStorage.getItem(NAV_KEY) || "null");
-      if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete", "inventory"].includes(value.action) &&
+      if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete", "inventory", "copy"].includes(value.action) &&
         typeof value.savedAt === "number" && Date.now() >= value.savedAt && Date.now() - value.savedAt <= MAX_AGE_MS) return value;
     } catch { /* 壊れた一時データは引き継がない。 */ }
     sessionStorage.removeItem(NAV_KEY);
@@ -144,13 +146,16 @@
       const edit = dom.editLink(document, id);
       // 売れた商品は「コピーして出品する／取引ページへ」の2列の直後へ置く（2列の中に入れると崩れる）。
       const soldGrid = edit ? null : dom.sellerTradeLink(document, id)?.parentElement ?? null;
-      const mount: HTMLElement | null = edit?.parentElement ?? soldGrid?.parentElement ?? null;
-      if (mount) toolbar(mount, id, edit ? ACTIVE_ACTIONS : SOLD_ACTIONS, soldGrid);
+      // 人の出品中の商品は「まとめ買い／購入手続きへ」の2列の直後（自分の商品の操作欄と同じ高さ）へ置く。
+      const orderGrid = edit || soldGrid ? null : dom.orderLink(document, id)?.parentElement ?? null;
+      const grid = soldGrid ?? orderGrid;
+      const mount: HTMLElement | null = edit?.parentElement ?? grid?.parentElement ?? null;
+      if (mount) toolbar(mount, id, edit ? ACTIVE_ACTIONS : soldGrid ? SOLD_ACTIONS : OTHERS_ACTIONS, grid);
       // 他サービスへのコピーは元商品を変更しない。画像の下へ文字リンクを置く。
       const gallery = document.querySelector("main .slick-slider");
       const copyAnchor = mount?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
       if (copyAnchor) (globalThis as any).FurimanagerCrossListing?.mount(copyAnchor, () => dom.collectItem(document, location.href), location.href);
-      if (!mount) return; // 自分の商品であることを編集リンク・出品者用の取引リンクで確認。
+      if (!mount) return; // 自分の商品（編集リンク・出品者用の取引リンク）か、人の出品中の商品（購入手続きリンク）だけ。
       if (pending) void runNavigation(pending);
     } else if (location.pathname === `/item/${id}/edit` && pending && document.querySelector("main form")) {
       void runNavigation(pending);
@@ -166,7 +171,8 @@
         const edit = dom.editLink(document, pending.itemId);
         const sold = !edit && dom.sellerTradeLink(document, pending.itemId) !== null;
         if (sold && !SOLD_ACTIONS.includes(pending.action)) throw new Error("売れた商品のため、価格の変更・停止・削除はできません。");
-        if (!edit && !sold) throw new Error("自分の商品であることを確認できませんでした。");
+        // コピー出品は新しいタブで新規出品画面を開くだけで、元の商品は変更しない。誰の商品でもよい。
+        if (!edit && !sold && pending.action !== "copy") throw new Error("自分の商品であることを確認できませんでした。");
         if (pending.action === "inventory") {
           const item = await waitFor(() => dom.collectItem(document, location.href));
           const response = await chromeApi.runtime.sendMessage({ type: "OPEN_INVENTORY_LINK", payload: {
@@ -177,11 +183,12 @@
           if (!response?.success) throw new Error(response?.message || "在庫連携ページを開けませんでした。");
           sessionStorage.removeItem(NAV_KEY);
           notify("在庫連携ページを開きました。");
-        } else if (pending.action === "relist" || pending.action === "draft") {
+        } else if (pending.action === "relist" || pending.action === "draft" || pending.action === "copy") {
           const item = await waitFor(() => dom.collectItem(document, location.href));
           if (!item.imageUrls.length || !item.categoryPath.length) throw new Error("画像またはカテゴリを取得できないため、新規出品画面を開きませんでした。");
           const token = crypto.randomUUID();
-          await chromeApi.storage.local.set({ [JOB_PREFIX + token]: { item, mode: pending.action, savedAt: Date.now() } });
+          // 新規出品画面での入力は再出品と同じ（最後の「出品する」は本人）。
+          await chromeApi.storage.local.set({ [JOB_PREFIX + token]: { item, mode: pending.action === "draft" ? "draft" : "relist", savedAt: Date.now() } });
           const response = await chromeApi.runtime.sendMessage({ type: "OPEN_YAHOO_RELIST", token });
           if (!response?.success) {
             await chromeApi.storage.local.remove(JOB_PREFIX + token);

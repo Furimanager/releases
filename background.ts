@@ -48,7 +48,7 @@
   const EXTENSION_CONNECT_AUTO_CLOSE_DELAY_MS = 1200;
   // 拡張ハートビート用。サーバー側の拡張バージョン検証に必要なヘッダ値。
   // manifest.json の version と揃えて更新する。
-  const EXTENSION_FALLBACK_VERSION = "0.2.12";
+  const EXTENSION_FALLBACK_VERSION = "0.2.13";
   const EXTENSION_API_SCHEMA = "research-v1";
   const MERCARI_DPOP_ANONYMOUS_UUID = "00000000-0000-0000-0000-000000000000";
   const authState: {

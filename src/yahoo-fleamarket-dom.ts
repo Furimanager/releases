@@ -52,6 +52,18 @@
     return links.find(link => link.getClientRects().length > 0) ?? null;
   }
 
+  // 2026-10-25実DOM: 人の出品中の商品は「まとめ買い／購入手続きへ」の2列になり、購入手続きは /item/<id>/order。
+  // こちらも画面下の固定バー用（非表示）が同居するので、表示中の方だけを返す。
+  function orderLink(root: ParentNode, id: string): HTMLAnchorElement | null {
+    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(link => {
+      try {
+        const url = new URL(link.href);
+        return url.origin === SELL_ORIGIN && url.pathname === `/item/${id}/order`;
+      } catch { return false; }
+    });
+    return links.find(link => link.getClientRects().length > 0) ?? null;
+  }
+
   function collectItem(root: ParentNode, url: string) {
     const id = itemId(url);
     // 商品名の全角スペース・連続スペースも出品者が入力した内容として保つ。
@@ -131,7 +143,7 @@
   }
 
   (globalThis as any).FurimanagerYahooDom = {
-    ORIGIN, SELL_ORIGIN, text, itemId, price, adjustedPrice, imageUrl, editLink, sellerTradeLink, collectItem,
+    ORIGIN, SELL_ORIGIN, text, itemId, price, adjustedPrice, imageUrl, editLink, sellerTradeLink, orderLink, collectItem,
     unique, priceField, fieldSection, setValue, setPriceValue, selectText, exactButton,
   };
 })();

@@ -8,7 +8,8 @@
     const MAX_AGE_MS = 12e4;
     const ACTIVE_ACTIONS = ["inventory", "relist", "decrease", "increase", "draft", "stop", "delete"];
     const SOLD_ACTIONS = ["inventory", "relist", "draft"];
-    const LABELS = { inventory: "\u5728\u5EAB\u9023\u643A", relist: "\u518D\u51FA\u54C1", decrease: "-100", increase: "+100", draft: "\u4E0B\u66F8\u304D", stop: "\u505C\u6B62", delete: "\u524A\u9664" };
+    const OTHERS_ACTIONS = ["copy"];
+    const LABELS = { inventory: "\u5728\u5EAB\u9023\u643A", relist: "\u518D\u51FA\u54C1", decrease: "-100", increase: "+100", draft: "\u4E0B\u66F8\u304D", stop: "\u505C\u6B62", delete: "\u524A\u9664", copy: "\u30B3\u30D4\u30FC\u51FA\u54C1" };
     let running = false;
     let queued = false;
     let lastUrl = location.href;
@@ -72,7 +73,7 @@ ${message}`;
     function readNavigation() {
       try {
         const value = JSON.parse(sessionStorage.getItem(NAV_KEY) || "null");
-        if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete", "inventory"].includes(value.action) && typeof value.savedAt === "number" && Date.now() >= value.savedAt && Date.now() - value.savedAt <= MAX_AGE_MS) return value;
+        if (value && /^z\d+$/.test(value.itemId) && ["relist", "draft", "decrease", "increase", "stop", "delete", "inventory", "copy"].includes(value.action) && typeof value.savedAt === "number" && Date.now() >= value.savedAt && Date.now() - value.savedAt <= MAX_AGE_MS) return value;
       } catch {
       }
       sessionStorage.removeItem(NAV_KEY);
@@ -137,8 +138,10 @@ ${message}`;
       if (location.pathname === `/item/${id}`) {
         const edit = dom.editLink(document, id);
         const soldGrid = edit ? null : dom.sellerTradeLink(document, id)?.parentElement ?? null;
-        const mount = edit?.parentElement ?? soldGrid?.parentElement ?? null;
-        if (mount) toolbar(mount, id, edit ? ACTIVE_ACTIONS : SOLD_ACTIONS, soldGrid);
+        const orderGrid = edit || soldGrid ? null : dom.orderLink(document, id)?.parentElement ?? null;
+        const grid = soldGrid ?? orderGrid;
+        const mount = edit?.parentElement ?? grid?.parentElement ?? null;
+        if (mount) toolbar(mount, id, edit ? ACTIVE_ACTIONS : soldGrid ? SOLD_ACTIONS : OTHERS_ACTIONS, grid);
         const gallery = document.querySelector("main .slick-slider");
         const copyAnchor = mount?.querySelector(".furimanager-yahoo-toolbar") ?? gallery;
         if (copyAnchor) globalThis.FurimanagerCrossListing?.mount(copyAnchor, () => dom.collectItem(document, location.href), location.href);
@@ -157,7 +160,7 @@ ${message}`;
           const edit = dom.editLink(document, pending.itemId);
           const sold = !edit && dom.sellerTradeLink(document, pending.itemId) !== null;
           if (sold && !SOLD_ACTIONS.includes(pending.action)) throw new Error("\u58F2\u308C\u305F\u5546\u54C1\u306E\u305F\u3081\u3001\u4FA1\u683C\u306E\u5909\u66F4\u30FB\u505C\u6B62\u30FB\u524A\u9664\u306F\u3067\u304D\u307E\u305B\u3093\u3002");
-          if (!edit && !sold) throw new Error("\u81EA\u5206\u306E\u5546\u54C1\u3067\u3042\u308B\u3053\u3068\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+          if (!edit && !sold && pending.action !== "copy") throw new Error("\u81EA\u5206\u306E\u5546\u54C1\u3067\u3042\u308B\u3053\u3068\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
           if (pending.action === "inventory") {
             const item = await waitFor(() => dom.collectItem(document, location.href));
             const response = await chromeApi.runtime.sendMessage({ type: "OPEN_INVENTORY_LINK", payload: {
@@ -173,11 +176,11 @@ ${message}`;
             if (!response?.success) throw new Error(response?.message || "\u5728\u5EAB\u9023\u643A\u30DA\u30FC\u30B8\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
             sessionStorage.removeItem(NAV_KEY);
             notify("\u5728\u5EAB\u9023\u643A\u30DA\u30FC\u30B8\u3092\u958B\u304D\u307E\u3057\u305F\u3002");
-          } else if (pending.action === "relist" || pending.action === "draft") {
+          } else if (pending.action === "relist" || pending.action === "draft" || pending.action === "copy") {
             const item = await waitFor(() => dom.collectItem(document, location.href));
             if (!item.imageUrls.length || !item.categoryPath.length) throw new Error("\u753B\u50CF\u307E\u305F\u306F\u30AB\u30C6\u30B4\u30EA\u3092\u53D6\u5F97\u3067\u304D\u306A\u3044\u305F\u3081\u3001\u65B0\u898F\u51FA\u54C1\u753B\u9762\u3092\u958B\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
             const token = crypto.randomUUID();
-            await chromeApi.storage.local.set({ [JOB_PREFIX + token]: { item, mode: pending.action, savedAt: Date.now() } });
+            await chromeApi.storage.local.set({ [JOB_PREFIX + token]: { item, mode: pending.action === "draft" ? "draft" : "relist", savedAt: Date.now() } });
             const response = await chromeApi.runtime.sendMessage({ type: "OPEN_YAHOO_RELIST", token });
             if (!response?.success) {
               await chromeApi.storage.local.remove(JOB_PREFIX + token);
