@@ -1,0 +1,123 @@
+/* フリマネ部品の色（2026-10-31）。ポップアップで選んだ値を html の data-furimane-theme に付ける。
+   メルカリの画面になじむよう、商品ごとのボタンは淡い地＋色文字。色を強く出すのは一括ボタンと進み具合だけ。
+   未設定・読み込み前は紫。 */
+:root {
+  --fm-strong: #6d28d9;
+  --fm-soft-bg: #f5f0ff;
+  --fm-soft-line: #ddd6fe;
+  --fm-surface: #faf7ff;
+  --fm-surface-line: #eee6fb;
+  --fm-panel-line: #d8c8f5;
+  --fm-chip-bg: #ede5ff;
+  --fm-primary-bg: linear-gradient(135deg, #7c3aed, #ec4899);
+  --fm-primary-text: #ffffff;
+  --fm-meter: linear-gradient(135deg, #7c3aed, #ec4899);
+  --fm-meter-empty: #ece6f2;
+}
+
+:root[data-furimane-theme="pink"] {
+  --fm-strong: #be185d;
+  --fm-soft-bg: #fff0f6;
+  --fm-soft-line: #f7c4d9;
+  --fm-surface: #fff7fa;
+  --fm-surface-line: #fbe4ee;
+  --fm-panel-line: #f3bdd4;
+  --fm-chip-bg: #fde4ef;
+  --fm-primary-bg: linear-gradient(135deg, #d34080, #ec6ea4);
+  --fm-meter: linear-gradient(135deg, #d34080, #ec90b6);
+  --fm-meter-empty: #f5e6ee;
+}
+
+:root[data-furimane-theme="indigo"] {
+  --fm-strong: #4338ca;
+  --fm-soft-bg: #f0f1ff;
+  --fm-soft-line: #c7d2fe;
+  --fm-surface: #f7f7ff;
+  --fm-surface-line: #e5e7fd;
+  --fm-panel-line: #c9cefb;
+  --fm-chip-bg: #e4e6ff;
+  --fm-primary-bg: linear-gradient(135deg, #4f46e5, #7c83f7);
+  --fm-meter: linear-gradient(135deg, #4f46e5, #818cf8);
+  --fm-meter-empty: #e7e8f6;
+}
+
+/* トラ柄は Web の主ボタン（web/app/globals.css の data-tora="primary"）と同じ柄の大きさ・位置・膜。
+   柄を入れるのは一括ボタンだけで、小さいボタンは淡い色にする。 */
+:root[data-furimane-theme^="tora-"] {
+  --fm-primary-bg:
+    linear-gradient(100deg,
+      color-mix(in srgb, var(--fm-tora-start) 55%, transparent) 0%,
+      color-mix(in srgb, color-mix(in srgb, var(--fm-tora-start) 80%, var(--fm-tora-end)) 69.5%, transparent) 20%,
+      color-mix(in srgb, color-mix(in srgb, var(--fm-tora-start) 64%, var(--fm-tora-end)) 82%, transparent) 36%,
+      color-mix(in srgb, color-mix(in srgb, var(--fm-tora-start) 50%, var(--fm-tora-end)) 84%, transparent) 50%,
+      color-mix(in srgb, color-mix(in srgb, var(--fm-tora-start) 36%, var(--fm-tora-end)) 80%, transparent) 64%,
+      color-mix(in srgb, color-mix(in srgb, var(--fm-tora-start) 16%, var(--fm-tora-end)) 58%, transparent) 84%,
+      color-mix(in srgb, var(--fm-tora-end) 32%, transparent) 100%) center / 100% 100% no-repeat border-box,
+    var(--fm-tora-pattern) right center / 112px 84px repeat border-box,
+    linear-gradient(100deg, var(--fm-tora-start), var(--fm-tora-end)) center / 100% 100% no-repeat border-box var(--fm-tora-end);
+  --fm-primary-text: var(--fm-tora-text);
+}
+
+:root[data-furimane-theme="tora-pink"] {
+  --fm-tora-start: #fce5ed;
+  --fm-tora-end: #f4bfd1;
+  --fm-tora-text: #50303f;
+  --fm-tora-pattern: url("chrome-extension://__MSG_@@extension_id__/icons/tora-rosettes.svg#pink");
+  --fm-strong: #9e4468;
+  --fm-soft-bg: #fdeef3;
+  --fm-soft-line: #f2c6d6;
+  --fm-surface: #fef6f9;
+  --fm-surface-line: #f8e1ea;
+  --fm-panel-line: #f0c3d4;
+  --fm-chip-bg: #fce5ed;
+  --fm-meter: linear-gradient(135deg, #bd5b82, #e99eb7);
+  --fm-meter-empty: #f3e6ec;
+}
+
+:root[data-furimane-theme="tora-brown"] {
+  --fm-tora-start: #f4e5ce;
+  --fm-tora-end: #dfbe91;
+  --fm-tora-text: #4b3525;
+  --fm-tora-pattern: url("chrome-extension://__MSG_@@extension_id__/icons/tora-rosettes.svg#brown");
+  --fm-strong: #7a5631;
+  --fm-soft-bg: #faf3e9;
+  --fm-soft-line: #e8d4b8;
+  --fm-surface: #fcf8f2;
+  --fm-surface-line: #f2e6d4;
+  --fm-panel-line: #e6d2b5;
+  --fm-chip-bg: #f4e5ce;
+  --fm-meter: linear-gradient(135deg, #956b40, #c49b6c);
+  --fm-meter-empty: #efe7dc;
+}
+
+:root[data-furimane-theme="tora-purple"] {
+  --fm-tora-start: #f2e8f7;
+  --fm-tora-end: #dec5ea;
+  --fm-tora-text: #483453;
+  --fm-tora-pattern: url("chrome-extension://__MSG_@@extension_id__/icons/tora-rosettes.svg#purple");
+  --fm-strong: #7a4d94;
+  --fm-soft-bg: #f7f1fa;
+  --fm-soft-line: #e0cdea;
+  --fm-surface: #fbf8fd;
+  --fm-surface-line: #efe4f4;
+  --fm-panel-line: #dccbe7;
+  --fm-chip-bg: #f2e8f7;
+  --fm-meter: linear-gradient(135deg, #9262ad, #c2a2d3);
+  --fm-meter-empty: #ece4f1;
+}
+
+:root[data-furimane-theme="tora-blue"] {
+  --fm-tora-start: #eaf6fd;
+  --fm-tora-end: #c8e5f7;
+  --fm-tora-text: #29475c;
+  --fm-tora-pattern: url("chrome-extension://__MSG_@@extension_id__/icons/tora-rosettes.svg#blue");
+  --fm-strong: #356d94;
+  --fm-soft-bg: #eff7fd;
+  --fm-soft-line: #c6e0f2;
+  --fm-surface: #f6fbfe;
+  --fm-surface-line: #e2f0f9;
+  --fm-panel-line: #c4def0;
+  --fm-chip-bg: #e2f1fb;
+  --fm-meter: linear-gradient(135deg, #4484b1, #91c1e1);
+  --fm-meter-empty: #e3eef5;
+}

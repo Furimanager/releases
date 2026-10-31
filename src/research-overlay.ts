@@ -6,6 +6,9 @@ const FURIMANE_CLOSED_STORAGE_KEY = "furimane-research-closed";
 const FURIMANE_MAX_RETRY_COUNT = 3;
 const FURIMANE_DEFAULT_FETCH_STRATEGY: "api" | "dom" = "api";
 const FURIMANE_DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
+const FURIMANE_RESEARCH_OFFER_ID = "furimane-research-offer";
+/** web のリサーチ画面で申込みの確認シートを開く（web/src/lib/research-checkout-link.ts と同じ値）。 */
+const FURIMANE_RESEARCH_CHECKOUT_PATH = "/dashboard/research?offer=research";
 const FURIMANE_READY_DELAY_MS = 250;
 const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
 const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
@@ -127,15 +130,25 @@ type ResearchErrorKind =
   | "mapping"
   | "unknown";
 
+/** 無料枠を使い切ったときの案内に使う、無料体験の情報（web の check-access が返す。2026-10-31）。 */
+type ResearchTrialInfo = {
+  kind: "eligible" | "active" | "used";
+  days: number;
+  hasStandardFeatures: boolean;
+};
+
+type ResearchAccessResult = {
+  canUse?: boolean;
+  canUseResearch?: boolean;
+  hasAddon?: boolean;
+  usage?: ResearchUsageState;
+  trial?: ResearchTrialInfo | null;
+};
+
 type ResearchOverlayWindow = Window & {
   FurimanagerResearchApi?: {
     getAppUrl?: () => string;
-    checkAccess: (options?: { signal?: AbortSignal }) => Promise<{
-      canUse?: boolean;
-      canUseResearch?: boolean;
-      hasAddon?: boolean;
-      usage?: ResearchUsageState;
-    }>;
+    checkAccess: (options?: { signal?: AbortSignal }) => Promise<ResearchAccessResult>;
     checkCache: (
       sellerId: string,
       platform: string,
@@ -190,7 +203,7 @@ let currentResearchPageKey: string | null = null;
 let routeSyncTimerId: number | null = null;
 let lastObservedUrl = window.location.href;
 let overlayInsertRetryCount = 0;
-let cachedResearchAccess: { savedAt: number; value: { canUse?: boolean; canUseResearch?: boolean; usage?: ResearchUsageState } } | null = null;
+let cachedResearchAccess: { savedAt: number; value: ResearchAccessResult } | null = null;
 let currentResearchUsage: ResearchUsageState | null = null;
 
 function showResearchNotice(message: string) {
@@ -706,7 +719,7 @@ function getResearchRetryAfter(error: unknown) {
 }
 
 function isRetryableResearchErrorKind(kind: ResearchErrorKind) {
-  return !["auth", "plan", "limit", "rate_limit", "payload_too_large", "update_required", "maintenance"].includes(kind);
+  return !["auth", "limit", "rate_limit", "payload_too_large", "update_required", "maintenance"].includes(kind);
 }
 
 function canContinueResearchWithoutAccessCheck(
@@ -750,7 +763,7 @@ async function checkResearchAccessWithCache(
   return normalizedAccess;
 }
 
-function normalizeResearchAccess(access: { canUse?: boolean; canUseResearch?: boolean; hasAddon?: boolean; usage?: ResearchUsageState }) {
+function normalizeResearchAccess(access: ResearchAccessResult): ResearchAccessResult {
   if (access.usage || access.hasAddon !== true) {
     return access;
   }
@@ -834,10 +847,12 @@ function getResearchErrorCopy(kind: ResearchErrorKind) {
         actionLabel: "拡張のログイン画面を開く"
       };
     case "plan":
+      // 今は全員に月の無料枠があり、使い切りは "limit" で返る。ここに来るのは利用状況を読めなかったときだけなので、
+      // 「追加プランで使えます」とは書かず、もう一度試してもらう（2026-10-31 オーナー指示）。
       return {
-        title: "リサーチ追加プランでご利用いただけます",
-        description: "この機能はリサーチ追加プラン加入後に利用できます。",
-        actionLabel: "プランを確認する"
+        title: "リサーチの利用状況を確認できませんでした",
+        description: "時間をおいて、もう一度お試しください。",
+        actionLabel: "再試行する"
       };
     case "limit":
       return {
@@ -915,6 +930,167 @@ function openExtensionLoginPage() {
   });
 }
 
+// ------------------------------------------------------------------
+// 無料枠を使い切ったときの横長の案内（2026-10-31 オーナー指示）。
+// 見た目は web の料金ページの横長バナー（research-offer-banner.tsx）と同じ素材・同じ構成。
+// メルカリの画面の上に浮かせて出し、×・Escで閉じる。次に取得を試したときはまた出す。
+// 申込みは web のリサーチ画面（?offer=research）で、無料体験の対象かどうかを web 側でも確かめてから進む。
+// ------------------------------------------------------------------
+let researchOfferKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
+
+const OFFER_ICON_PATHS = {
+  chart: '<path d="M5 21v-6"/><path d="M12 21V9"/><path d="M19 21V3"/>',
+  trend: '<path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/>',
+  bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+  arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'
+} as const;
+
+function createOfferElement<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
+  const element = document.createElement(tag);
+  element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function createOfferIcon(name: keyof typeof OFFER_ICON_PATHS) {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  icon.classList.add("furimane-offer__icon");
+  icon.innerHTML = OFFER_ICON_PATHS[name];
+  return icon;
+}
+
+function getExtensionAssetUrl(path: string) {
+  return (globalThis as { chrome?: { runtime?: { getURL?: (value: string) => string } } }).chrome?.runtime?.getURL?.(path) ?? path;
+}
+
+/**
+ * 体験をまだ使っていない人に添える一文（web/src/components/research/research-trial-note.ts と同じ文）。
+ * 前半（何日間無料か）を目立たせるため、前半と後半に分けて返す。
+ */
+function getResearchOfferTrialNote(trial: ResearchTrialInfo | null) {
+  if (!trial || trial.kind !== "eligible") {
+    return null;
+  }
+
+  const days = trial.days;
+  return trial.hasStandardFeatures
+    ? { lead: `無料体験（${days}日間）が使用できます。リサーチは${days}日間0円`, rest: "、その後は月額2,480円で毎月自動更新です。" }
+    : { lead: `無料体験（${days}日間）が使用できます。体験中はスタンダードの全機能も0円`, rest: "。終了後はリサーチ（月額2,480円）だけが続きます。" };
+}
+
+function closeResearchOffer() {
+  document.getElementById(FURIMANE_RESEARCH_OFFER_ID)?.remove();
+
+  if (researchOfferKeydownHandler) {
+    document.removeEventListener("keydown", researchOfferKeydownHandler, true);
+    researchOfferKeydownHandler = null;
+  }
+}
+
+function showResearchOffer(trial: ResearchTrialInfo | null) {
+  closeResearchOffer();
+
+  const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? FURIMANE_DEFAULT_APP_URL;
+  const trialNote = getResearchOfferTrialNote(trial);
+  const root = createOfferElement("section", "furimane-offer");
+  root.id = FURIMANE_RESEARCH_OFFER_ID;
+  root.setAttribute("role", "dialog");
+  root.setAttribute("aria-labelledby", "furimane-offer-title");
+  root.style.backgroundImage = `url("${getExtensionAssetUrl("icons/research-offer/card-background-wide.webp")}")`;
+
+  const bar = createOfferElement("div", "furimane-offer__bar");
+  bar.append(createOfferElement("p", "furimane-offer__bar-text", "今月の無料枠を使い切りました"));
+  const close = createOfferElement("button", "furimane-offer__close", "×");
+  close.type = "button";
+  close.setAttribute("aria-label", "閉じる");
+  close.addEventListener("click", closeResearchOffer);
+  bar.append(close);
+
+  const top = createOfferElement("div", "furimane-offer__top");
+  const copy = createOfferElement("div", "furimane-offer__copy");
+  const eyebrow = createOfferElement("p", "furimane-offer__eyebrow");
+  eyebrow.append(createOfferElement("span", "furimane-offer__eyebrow-label", "セラーレーダー"), createOfferElement("span", "furimane-offer__pill", "無制限"));
+  const title = createOfferElement("h2", "furimane-offer__title");
+  title.id = "furimane-offer-title";
+  const titleSecond = createOfferElement("span", "furimane-offer__title-line", "回数");
+  titleSecond.append(createOfferElement("span", "furimane-offer__underline", "無制限に"), "。");
+  title.append(createOfferElement("span", "furimane-offer__title-line", "リサーチを、"), titleSecond);
+  const chips = createOfferElement("ul", "furimane-offer__chips");
+  for (const [icon, label] of [["chart", "90日分の売れ行き"], ["trend", "利益シミュレーション"], ["bookmark", "商品を保存"]] as const) {
+    const chip = createOfferElement("li", "furimane-offer__chip");
+    chip.append(createOfferIcon(icon), label);
+    chips.append(chip);
+  }
+  copy.append(eyebrow, title, createOfferElement("p", "furimane-offer__lead", "気になる出品者を、次々リサーチ。"), chips);
+  const phone = createOfferElement("img", "furimane-offer__phone");
+  phone.src = getExtensionAssetUrl("icons/research-offer/phone-glow-wide.webp");
+  phone.alt = "";
+  phone.setAttribute("aria-hidden", "true");
+  top.append(copy, phone);
+
+  const value = createOfferElement("div", "furimane-offer__value");
+  const term = (label: string, strong: string) => {
+    const box = createOfferElement("div", "furimane-offer__term");
+    const labelElement = createOfferElement("p", "furimane-offer__term-label", label);
+    labelElement.append(createOfferElement("strong", "", strong));
+    const amount = createOfferElement("p", "furimane-offer__term-value", "2,480");
+    amount.append(createOfferElement("small", "", "円"));
+    box.append(labelElement, amount);
+    return box;
+  };
+  // 折り返し位置は web のバナーと同じ（「、」のあとで改行）。
+  const valueNote = createOfferElement("p", "furimane-offer__value-note", "利益2,480円の商品を1点販売できれば、");
+  valueNote.append(document.createElement("br"), "月額料金分に。");
+  value.append(term("商品1点の", "利益"), createOfferElement("span", "furimane-offer__equals", "＝"), term("リサーチ", "月額"), valueNote);
+
+  const action = createOfferElement("div", "furimane-offer__action");
+  const price = createOfferElement("div", "furimane-offer__price");
+  const priceMain = createOfferElement("p", "furimane-offer__price-main", "2,480");
+  priceMain.append(createOfferElement("small", "", "円 / 月"));
+  price.append(priceMain, createOfferElement("p", "furimane-offer__price-sub", "税込・追加オプション"));
+  const ctaArea = createOfferElement("div", "furimane-offer__cta-area");
+  const cta = createOfferElement("a", "furimane-offer__cta", trial?.kind === "used" ? "無制限でリサーチを続ける" : "リサーチを追加する");
+  cta.href = `${appUrl}${FURIMANE_RESEARCH_CHECKOUT_PATH}`;
+  cta.target = "_blank";
+  cta.rel = "noopener noreferrer";
+  cta.append(createOfferIcon("arrow"));
+  cta.addEventListener("click", closeResearchOffer);
+  ctaArea.append(cta);
+  if (trialNote) {
+    // 体験をまだ使っていない人には、何日間無料かを下線のグラデーションで目立たせる（2026-10-31 オーナー指示）。
+    const note = createOfferElement("p", "furimane-offer__trial-note");
+    note.append(createOfferElement("span", "furimane-offer__underline furimane-offer__trial-lead", trialNote.lead), trialNote.rest);
+    ctaArea.append(note);
+  } else {
+    ctaArea.append(createOfferElement("p", "furimane-offer__trial-note furimane-offer__trial-note--plain", "毎月自動更新です。いつでも解約できます。"));
+  }
+  action.append(createOfferElement("p", "furimane-offer__brand", "セラーレーダー"), price, ctaArea);
+
+  const foot = createOfferElement("div", "furimane-offer__foot");
+  const referral = createOfferElement("a", "furimane-offer__referral", "友達紹介でリサーチ回数を増やす");
+  referral.href = `${appUrl}/referral`;
+  referral.target = "_blank";
+  referral.rel = "noopener noreferrer";
+  foot.append(referral, createOfferElement("p", "furimane-offer__foot-note", "無料枠は翌月1日にリセット。※画像はイメージです"));
+
+  root.append(
+    bar,
+    top,
+    value,
+    action,
+    foot,
+    createOfferElement("p", "furimane-offer__stop", "この案内の自動表示を止めたい場合は、Chrome拡張の「リサーチを自動起動」をOFFにしてください。")
+  );
+  document.body.append(root);
+
+  researchOfferKeydownHandler = (event) => {
+    if (event.key === "Escape") closeResearchOffer();
+  };
+  document.addEventListener("keydown", researchOfferKeydownHandler, true);
+}
+
 function renderResearchError(container: HTMLElement, error: unknown, retry: () => void, retryCount = 0) {
   const kind = getResearchErrorKind(error);
 
@@ -945,11 +1121,15 @@ function renderResearchError(container: HTMLElement, error: unknown, retry: () =
   }
 
   if (kind === "auth") {
-    wrapper.appendChild(createButton(copy.actionLabel, openExtensionLoginPage, "secondary"));
-  } else if (kind === "plan" || kind === "limit") {
+    // ログインへの入口はポップアップのログインボタンと同じく目立つ主ボタンにする（2026-10-31）。
+    wrapper.appendChild(createButton(copy.actionLabel, openExtensionLoginPage, "primary"));
+  } else if (kind === "limit") {
+    // 無料枠（＋紹介チケット）を使い切ったときは、取得を試すたびに横長の案内を重ねて出す（2026-10-31 オーナー指示）。
+    // 体験の情報は使い切りを返した check-access にだけ入っている。取得の途中で使い切った場合は無いので、案内は体験に触れない。
+    showResearchOffer(cachedResearchAccess?.value.trial ?? null);
     const link = document.createElement("a");
     link.className = "furimane-research-overlay__link-button";
-    link.href = `${appUrl}/dashboard/research`;
+    link.href = `${appUrl}${FURIMANE_RESEARCH_CHECKOUT_PATH}`;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.textContent = copy.actionLabel;
@@ -1107,7 +1287,7 @@ async function runResearchFlow(container: HTMLElement, options: ResearchFlowOpti
 
     const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
 
-    let access: { canUse?: boolean; canUseResearch?: boolean; usage?: ResearchUsageState };
+    let access: ResearchAccessResult;
     try {
       access = await checkResearchAccessWithCache(api, signal);
     } catch (error) {
@@ -1249,7 +1429,7 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
 
     const localCachedData = options.forceRefresh ? null : readLocalResearchCache(seller);
 
-    let access: { canUse?: boolean; canUseResearch?: boolean; usage?: ResearchUsageState };
+    let access: ResearchAccessResult;
     try {
       access = await checkResearchAccessWithCache(api, signal);
     } catch (error) {
@@ -1288,6 +1468,7 @@ async function runResearchFlowSafe(container: HTMLElement, options: ResearchFlow
         retry,
         retryCount
       );
+
       return;
     }
 
@@ -1551,6 +1732,7 @@ function removeResearchOverlayUi() {
   currentAbortController?.abort();
   currentAbortController = null;
   document.getElementById(FURIMANE_OVERLAY_ID)?.remove();
+  closeResearchOffer();
   removeOpenButton();
 }
 

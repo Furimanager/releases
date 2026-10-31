@@ -121,6 +121,8 @@ type ResearchAccessResponse = {
   hasAddon?: boolean;
   expiresAt?: string | null;
   usage?: ResearchUsageState;
+  /** 無料枠を使い切ったときだけ入る、無料体験の情報（web の check-access。2026-10-31）。 */
+  trial?: { kind: "eligible" | "active" | "used"; days: number; hasStandardFeatures: boolean } | null;
 };
 
 type ResearchUsageState = {

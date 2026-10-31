@@ -63,6 +63,12 @@ const signupLink = document.getElementById("signupLink");
 const researchFeatureState = document.getElementById("researchFeatureState");
 const researchFeatureToggle = document.getElementById("researchFeatureToggle");
 const researchFeatureMessage = document.getElementById("researchFeatureMessage");
+const themePanel = document.getElementById("themePanel");
+const themeToggleButton = document.getElementById("themeToggleButton");
+const themeApplyButton = document.getElementById("themeApplyButton");
+const themeOptions = document.getElementById("themeOptions");
+const themeCurrent = document.getElementById("themeCurrent");
+const extensionTheme = globalThis.FurimaneExtensionTheme;
 const rakurakuTaskState = document.getElementById("rakurakuTaskState");
 const rakurakuModeText = document.getElementById("rakurakuModeText");
 const rakurakuModeBadge = document.getElementById("rakurakuModeBadge");
@@ -89,6 +95,8 @@ let currentRakurakuApprovalCandidate = null;
 let rakurakuAutoPollEnabled = false;
 let currentRakurakuMode = null;
 let researchFeatureEnabled = false;
+let currentThemeKey = extensionTheme?.DEFAULT_THEME ?? "purple";
+let pendingThemeKey = currentThemeKey;
 let authRequestVersion = 0;
 const RAKURAKU_EXECUTION_MODE_KEY = "rakurakuExecutionMode";
 const USER_FACING_SYSTEM_CODE_MESSAGES = {
@@ -559,6 +567,109 @@ async function handleResearchFeatureToggleChange() {
   await setLocalStorage({
     [RESEARCH_FEATURE_ENABLED_KEY]: researchFeatureEnabled
   });
+}
+
+function themeLabel(theme) {
+  return theme.group === "tora" ? `トラ柄・${theme.label}` : theme.label;
+}
+
+function renderThemeOptions() {
+  if (!themeOptions || !extensionTheme) {
+    return;
+  }
+
+  const groups = extensionTheme.GROUPS.map((group) => {
+    const wrapper = document.createElement("div");
+    const label = document.createElement("p");
+    label.className = "theme-options__group-label";
+    label.textContent = group.label;
+    const list = document.createElement("div");
+    list.className = "theme-options__list";
+
+    for (const theme of extensionTheme.THEMES.filter((item) => item.group === group.key)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "theme-option";
+      button.dataset.theme = theme.key;
+      button.setAttribute("aria-label", themeLabel(theme));
+      button.setAttribute("aria-pressed", String(theme.key === pendingThemeKey));
+      const swatch = document.createElement("span");
+      swatch.className = "theme-option__swatch";
+      swatch.style.background = theme.swatch;
+      swatch.setAttribute("aria-hidden", "true");
+      button.append(swatch, theme.label);
+      button.addEventListener("click", () => {
+        handleThemeSelect(theme.key);
+      });
+      list.append(button);
+    }
+
+    wrapper.append(label, list);
+    return wrapper;
+  });
+
+  themeOptions.replaceChildren(...groups);
+  const current = extensionTheme.THEMES.find((theme) => theme.key === pendingThemeKey);
+  if (themeCurrent && current) {
+    themeCurrent.textContent = themeLabel(current);
+  }
+}
+
+async function loadThemeSetting() {
+  if (!extensionTheme) {
+    return;
+  }
+
+  const storage = await getLocalStorage([extensionTheme.STORAGE_KEY]);
+  currentThemeKey = extensionTheme.normalize(storage[extensionTheme.STORAGE_KEY]);
+  pendingThemeKey = currentThemeKey;
+  renderThemeOptions();
+}
+
+// 選んでいる途中の色は、このポップアップにだけ試しに当てる（メルカリ等のタブは「適用」まで変えない）。
+function previewTheme(themeKey) {
+  document.documentElement.setAttribute(extensionTheme.ATTRIBUTE, themeKey);
+}
+
+// パレットを押すと色の選択が上に重なって開き、もう一度押すと閉じる。適用せずに閉じたら元の色に戻す。
+function toggleThemePanel() {
+  if (!themePanel || !themeToggleButton || !extensionTheme) {
+    return;
+  }
+
+  if (themePanel.hidden) {
+    pendingThemeKey = currentThemeKey;
+    renderThemeOptions();
+    themePanel.hidden = false;
+    themeToggleButton.setAttribute("aria-expanded", "true");
+    themeOptions?.querySelector('[aria-pressed="true"]')?.focus();
+    return;
+  }
+
+  closeThemePanel();
+}
+
+function closeThemePanel() {
+  pendingThemeKey = currentThemeKey;
+  previewTheme(currentThemeKey);
+  renderThemeOptions();
+  themePanel.hidden = true;
+  themeToggleButton.setAttribute("aria-expanded", "false");
+}
+
+function handleThemeSelect(themeKey) {
+  pendingThemeKey = extensionTheme.normalize(themeKey);
+  renderThemeOptions();
+  themeOptions?.querySelector(`[data-theme="${pendingThemeKey}"]`)?.focus();
+  previewTheme(pendingThemeKey);
+}
+
+async function applyTheme() {
+  currentThemeKey = pendingThemeKey;
+  closeThemePanel();
+  themeToggleButton?.focus();
+  // 開いているメルカリ・Yahoo!フリマのタブは storage の変更を受けてすぐ色が変わる。
+  await setLocalStorage({ [extensionTheme.STORAGE_KEY]: currentThemeKey });
 }
 
 function setRakurakuEmptyState(text) {
@@ -1293,7 +1404,10 @@ function getExtensionConnectUrl() {
 
 function handleGoogleLoginClick() {
   try {
-    chrome.tabs.create({ url: getExtensionConnectUrl(), active: true });
+    // ?auto=google: Web にまだログインしていない人は、いつものログイン画面からそのまま Google の画面へ進む（2026-10-31）。
+    const connectUrl = new URL(getExtensionConnectUrl());
+    connectUrl.searchParams.set("auto", "google");
+    chrome.tabs.create({ url: connectUrl.toString(), active: true });
     setAuthMessage(
       "idle",
       "開いたページで、使用するアカウントを確認してください。"
@@ -1794,6 +1908,9 @@ async function initializePopup() {
     setAuthMessage("error", getUserFacingErrorMessage(error, "config.js を確認してください"));
   }
 
+  // 色の選択はログイン状態と関係なく先に出す。
+  void loadThemeSetting().catch(() => renderThemeOptions());
+
   try {
     await loadResearchFeatureSetting();
     await restoreAuthState();
@@ -1833,6 +1950,17 @@ if (chrome.storage?.onChanged) {
 loginForm.addEventListener("submit", (event) => {
   void handleLoginSubmit(event);
 });
+themeToggleButton?.addEventListener("click", toggleThemePanel);
+themeApplyButton?.addEventListener("click", () => {
+  void applyTheme();
+});
+themePanel?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !themePanel.hidden) {
+    closeThemePanel();
+    themeToggleButton?.focus();
+  }
+});
+
 logoutButton.addEventListener("click", () => {
   void handleLogout();
 });

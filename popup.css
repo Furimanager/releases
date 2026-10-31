@@ -22,6 +22,112 @@
   --danger: #be123c;
   --success: #4ade80;
   --error: #fb7185;
+  /* 「ボタンの色」で変わるのはグラデのボタンと紫の文字・印だけ。背景はどのテーマでも同じ（2026-10-31）。 */
+  --theme-button: linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%);
+  --theme-button-send: linear-gradient(135deg, rgba(124, 58, 237, 0.98), rgba(249, 115, 22, 0.94));
+  --theme-button-text: #f8fafc;
+  --theme-glow: rgba(124, 58, 237, 0.3);
+  --theme-send-glow: rgba(249, 115, 22, 0.2);
+  --theme-text: #d8b4fe;
+  --theme-text-soft: #c4b5fd;
+  --theme-text-pale: #ddd6fe;
+  /* 背景・ガラスに差す光の2色目。紫は今と同じオレンジ、ほかのテーマはテーマ色1色（1色目は --accent）。 */
+  --theme-light-2: #f97316;
+  /* ログイン画面の入口マーク。Web の「申告準備CSV出力」のアイコン（main→accent 58%→coral）と同じ鮮やかなグラデ。 */
+  --theme-mark: linear-gradient(135deg, #7c3aed 0%, #ec4899 58%, #f97316 100%);
+  --theme-mark-shadow: rgba(124, 58, 237, 0.28);
+}
+
+:root[data-furimane-theme="pink"] {
+  --theme-mark: linear-gradient(135deg, #d34080 0%, #ec90b6 58%, #ec90b6 100%);
+  --theme-mark-shadow: color-mix(in srgb, #d34080 28%, transparent);
+  --accent: #d34080;
+  --theme-button: linear-gradient(135deg, #be185d 0%, #d34080 50%, #ec6ea4 100%);
+  --theme-text: #f9a8d4;
+  --theme-text-soft: #f7b6d2;
+  --theme-text-pale: #fce7f3;
+}
+
+:root[data-furimane-theme="indigo"] {
+  --theme-mark: linear-gradient(135deg, #4f46e5 0%, #818cf8 58%, #818cf8 100%);
+  --theme-mark-shadow: color-mix(in srgb, #4f46e5 28%, transparent);
+  --accent: #4f46e5;
+  --theme-button: linear-gradient(135deg, #4338ca 0%, #4f46e5 50%, #7c83f7 100%);
+  --theme-text: #a5b4fc;
+  --theme-text-soft: #b4bffd;
+  --theme-text-pale: #e0e7ff;
+}
+
+/* トラ柄は Web の主ボタン（web/app/globals.css の data-tora="primary"）と同じ柄の大きさ・位置・膜。文字は濃い色。 */
+:root[data-furimane-theme^="tora-"] {
+  --theme-button:
+    linear-gradient(100deg,
+      color-mix(in srgb, var(--theme-tora-start) 55%, transparent) 0%,
+      color-mix(in srgb, color-mix(in srgb, var(--theme-tora-start) 80%, var(--theme-tora-end)) 69.5%, transparent) 20%,
+      color-mix(in srgb, color-mix(in srgb, var(--theme-tora-start) 64%, var(--theme-tora-end)) 82%, transparent) 36%,
+      color-mix(in srgb, color-mix(in srgb, var(--theme-tora-start) 50%, var(--theme-tora-end)) 84%, transparent) 50%,
+      color-mix(in srgb, color-mix(in srgb, var(--theme-tora-start) 36%, var(--theme-tora-end)) 80%, transparent) 64%,
+      color-mix(in srgb, color-mix(in srgb, var(--theme-tora-start) 16%, var(--theme-tora-end)) 58%, transparent) 84%,
+      color-mix(in srgb, var(--theme-tora-end) 32%, transparent) 100%) center / 100% 100% no-repeat border-box,
+    var(--theme-tora-pattern) right center / 112px 84px repeat border-box,
+    linear-gradient(100deg, var(--theme-tora-start), var(--theme-tora-end)) center / 100% 100% no-repeat border-box var(--theme-tora-end);
+  --theme-button-text: var(--theme-tora-text);
+  --theme-text-pale: var(--theme-tora-start);
+}
+
+:root[data-furimane-theme="tora-pink"] {
+  --theme-mark: linear-gradient(135deg, #bd5b82 0%, #e99eb7 58%, #e99eb7 100%);
+  --theme-mark-shadow: color-mix(in srgb, #bd5b82 28%, transparent);
+  --theme-tora-start: #fce5ed;
+  --theme-tora-end: #f4bfd1;
+  --theme-tora-text: #50303f;
+  --theme-tora-pattern: url("icons/tora-rosettes.svg#pink");
+  --accent: #d77a9c;
+  --theme-text: #f4bfd1;
+  --theme-text-soft: #f8d3e0;
+}
+
+:root[data-furimane-theme="tora-brown"] {
+  --theme-mark: linear-gradient(135deg, #956b40 0%, #c49b6c 58%, #c49b6c 100%);
+  --theme-mark-shadow: color-mix(in srgb, #956b40 28%, transparent);
+  --theme-tora-start: #f4e5ce;
+  --theme-tora-end: #dfbe91;
+  --theme-tora-text: #4b3525;
+  --theme-tora-pattern: url("icons/tora-rosettes.svg#brown");
+  --accent: #b98a5a;
+  --theme-text: #dfbe91;
+  --theme-text-soft: #ead2b0;
+}
+
+:root[data-furimane-theme="tora-purple"] {
+  --theme-mark: linear-gradient(135deg, #9262ad 0%, #c2a2d3 58%, #c2a2d3 100%);
+  --theme-mark-shadow: color-mix(in srgb, #9262ad 28%, transparent);
+  --theme-tora-start: #f2e8f7;
+  --theme-tora-end: #dec5ea;
+  --theme-tora-text: #483453;
+  --theme-tora-pattern: url("icons/tora-rosettes.svg#purple");
+  --accent: #a77bc0;
+  --theme-text: #dec5ea;
+  --theme-text-soft: #e9d8f1;
+}
+
+:root[data-furimane-theme="tora-blue"] {
+  --theme-mark: linear-gradient(135deg, #4484b1 0%, #91c1e1 58%, #91c1e1 100%);
+  --theme-mark-shadow: color-mix(in srgb, #4484b1 28%, transparent);
+  --theme-tora-start: #eaf6fd;
+  --theme-tora-end: #c8e5f7;
+  --theme-tora-text: #29475c;
+  --theme-tora-pattern: url("icons/tora-rosettes.svg#blue");
+  --accent: #5a9ccc;
+  --theme-text: #a9d6f2;
+  --theme-text-soft: #c8e5f7;
+}
+
+:root[data-furimane-theme]:not([data-furimane-theme="purple"]) {
+  --theme-button-send: var(--theme-button);
+  --theme-light-2: var(--accent);
+  --theme-glow: color-mix(in srgb, var(--accent) 30%, transparent);
+  --theme-send-glow: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 body {
@@ -31,18 +137,19 @@ body {
   color: var(--text);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background:
-    radial-gradient(circle at 8% 0%, rgba(124, 58, 237, 0.32), transparent 30%),
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--accent) 32%, transparent), transparent 30%),
     radial-gradient(circle at 92% 34%, rgba(236, 72, 153, 0.11), transparent 30%),
-    radial-gradient(circle at 2% 56%, rgba(124, 58, 237, 0.16), transparent 34%),
-    radial-gradient(circle at 96% 72%, rgba(124, 58, 237, 0.12), transparent 32%),
-    radial-gradient(circle at 18% 94%, rgba(124, 58, 237, 0.14), transparent 34%),
-    radial-gradient(circle at 100% 98%, rgba(249, 115, 22, 0.08), transparent 32%),
+    radial-gradient(circle at 2% 56%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 34%),
+    radial-gradient(circle at 96% 72%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 32%),
+    radial-gradient(circle at 18% 94%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%),
+    radial-gradient(circle at 100% 98%, color-mix(in srgb, var(--theme-light-2) 8%, transparent), transparent 32%),
     linear-gradient(180deg, #111827 0%, #0d1220 38%, #0b1020 68%, #090c17 100%);
   background-repeat: no-repeat;
   background-size: 100% 100%;
 }
 
 .popup {
+  position: relative;
   padding: 18px;
   display: grid;
   gap: 14px;
@@ -68,8 +175,8 @@ body {
   border-radius: 24px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, var(--glass-sheen-start)), rgba(255, 255, 255, var(--glass-sheen-mid)) 42%, rgba(255, 255, 255, var(--glass-sheen-end)) 100%),
-    radial-gradient(circle at var(--glass-purple-x) var(--glass-purple-y), rgba(124, 58, 237, var(--glass-purple-alpha)), transparent 42%),
-    radial-gradient(circle at var(--glass-orange-x) var(--glass-orange-y), rgba(249, 115, 22, var(--glass-orange-alpha)), transparent 38%),
+    radial-gradient(circle at var(--glass-purple-x) var(--glass-purple-y), color-mix(in srgb, var(--accent) calc(var(--glass-purple-alpha) * 100%), transparent), transparent 42%),
+    radial-gradient(circle at var(--glass-orange-x) var(--glass-orange-y), color-mix(in srgb, var(--theme-light-2) calc(var(--glass-orange-alpha) * 100%), transparent), transparent 38%),
     var(--panel-bg);
   box-shadow: var(--panel-shadow);
   backdrop-filter: blur(18px) saturate(1.18);
@@ -120,22 +227,38 @@ body {
   display: none;
 }
 
+/* 「アカウントを新規作成」はログインの入口マークと同じ鮮やかなグラデの文字（テーマで変わる）。 */
 .auth-card__signup a {
-  color: #c4b5fd;
+  background: var(--theme-mark);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   font-size: 12px;
   font-weight: 700;
   text-decoration: none;
-  transition: color 0.18s ease;
+  transition: filter 0.18s ease;
 }
 
 .auth-card__signup a:hover {
-  color: white;
+  filter: brightness(1.25);
+}
+
+/* 紫（既定）だけは紫→ピンク→オレンジが派手すぎるので、前の淡い紫の文字にする（2026-10-31 オーナー指示）。 */
+:root:not([data-furimane-theme]) .auth-card__signup a,
+:root[data-furimane-theme="purple"] .auth-card__signup a {
+  background: none;
+  color: var(--theme-text-soft);
+}
+
+:root:not([data-furimane-theme]) body.login-view .auth-card__signup a,
+:root[data-furimane-theme="purple"] body.login-view .auth-card__signup a {
+  color: var(--theme-text-pale);
 }
 
 .hero-card__eyebrow,
 .panel__eyebrow {
   margin: 0;
-  color: #d8b4fe;
+  color: var(--theme-text);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.16em;
@@ -162,6 +285,58 @@ body {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.65;
+}
+
+/* ボタンの色を開くパレット。見出しと同じくらいの大きさで、ふだんはうっすら見せる。 */
+.hero-card__theme-button {
+  position: absolute;
+  z-index: 1;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  min-width: 44px;
+  padding: 5px 6px 4px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--theme-text-pale);
+  opacity: 0.55;
+  cursor: pointer;
+  transition:
+    opacity 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.hero-card__theme-button svg {
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hero-card__theme-button path {
+  fill: none;
+}
+
+.hero-card__theme-label {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+}
+
+.hero-card__theme-button:hover,
+.hero-card__theme-button[aria-expanded="true"] {
+  opacity: 0.92;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.hero-card__theme-button:focus-visible {
+  outline: 2px solid var(--theme-text-soft);
+  outline-offset: 2px;
+  opacity: 0.92;
 }
 
 .panel {
@@ -199,6 +374,114 @@ body {
   --glass-purple-y: 0%;
   --glass-orange-x: 100%;
   --glass-orange-y: 96%;
+}
+
+/* 色の選択はブロックの間に挟まず、ほかの欄の上に重ねて出す。右上のパレットは隠さず、もう一度押して閉じられる。 */
+.theme-card {
+  --glass-purple-x: 6%;
+  --glass-purple-y: 0%;
+  --glass-orange-x: 100%;
+  --glass-orange-y: 92%;
+  --panel-bg: rgba(15, 20, 35, 0.97);
+  position: absolute;
+  z-index: 30;
+  /* 「フリマネージャー」の文字のすぐ下から重ねる（文字の途中にかからない・右上のパレットは押せる）。 */
+  top: 100px;
+  left: 12px;
+  right: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 28px 70px rgba(2, 6, 23, 0.72);
+}
+
+.theme-card__apply {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 14px;
+  border: 0.5px solid #8f879d;
+  border-radius: 12px;
+  background: var(--theme-button);
+  background-clip: padding-box;
+  color: var(--theme-button-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 24px var(--theme-glow);
+}
+
+.theme-card__apply:hover {
+  border-color: #9b93aa;
+}
+
+.theme-card__apply:focus-visible {
+  outline: 2px solid var(--theme-text-soft);
+  outline-offset: 2px;
+}
+
+.theme-options {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.theme-options__group-label {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.theme-options__list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.theme-option {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 4px 8px;
+  border: 1px solid rgba(199, 210, 254, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.theme-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.theme-option:focus-visible {
+  outline: 2px solid var(--theme-text-soft);
+  outline-offset: 2px;
+}
+
+.theme-option[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--theme-text) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: #f8fafc;
+}
+
+.theme-option__swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
 
 .status-card {
@@ -308,7 +591,7 @@ body {
   border: 1px solid rgba(199, 210, 254, 0.14);
   border-radius: 18px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016) 48%, rgba(124, 58, 237, 0.055)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016) 48%, color-mix(in srgb, var(--accent) 5.5%, transparent)),
     rgba(255, 255, 255, 0.03);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
@@ -345,9 +628,9 @@ body {
 
 .auth-form .field__input:focus,
 .auth-form input:focus {
-  border-color: rgba(216, 180, 254, 0.42);
+  border-color: color-mix(in srgb, var(--theme-text) 42%, transparent);
   box-shadow:
-    0 0 0 1px rgba(216, 180, 254, 0.12),
+    0 0 0 1px color-mix(in srgb, var(--theme-text) 12%, transparent),
     0 10px 24px rgba(2, 6, 23, 0.18);
   outline: none;
   background: rgba(255, 255, 255, 0.034);
@@ -361,7 +644,7 @@ body {
 
 .account-panel__label {
   margin: 0;
-  color: #c4b5fd;
+  color: var(--theme-text-soft);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -454,7 +737,7 @@ body {
   z-index: 1;
   display: inline-flex;
   margin-top: 14px;
-  color: #d8b4fe;
+  color: var(--theme-text);
   font-size: 12px;
   font-weight: 700;
   text-decoration: underline;
@@ -476,8 +759,8 @@ body {
   padding: 7px 12px;
   border: 1px solid rgba(199, 210, 254, 0.16);
   border-radius: 999px;
-  background: rgba(124, 58, 237, 0.1);
-  color: #ddd6fe;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--theme-text-pale);
   font-size: 11px;
   font-weight: 700;
   text-decoration: none;
@@ -487,7 +770,7 @@ body {
 }
 
 .panel__link:hover {
-  background: rgba(124, 58, 237, 0.22);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: white;
 }
 
@@ -497,9 +780,9 @@ body {
   border: 1px solid rgba(199, 210, 254, 0.16);
   border-radius: 999px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(124, 58, 237, 0.18)),
-    rgba(124, 58, 237, 0.1);
-  color: #ddd6fe;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), color-mix(in srgb, var(--accent) 18%, transparent)),
+    color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--theme-text-pale);
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
@@ -541,7 +824,7 @@ body {
   border: 1px solid rgba(196, 181, 253, 0.26);
   border-radius: 14px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016) 48%, rgba(124, 58, 237, 0.075)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016) 48%, color-mix(in srgb, var(--accent) 7.5%, transparent)),
     rgba(255, 255, 255, 0.03);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
@@ -551,15 +834,30 @@ body {
   display: block;
 }
 
+/* 虫眼鏡（Lucide search）。見出しを大きく、補足は小さく（2026-10-31）。 */
+.research-toggle-row__icon {
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--theme-text);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.research-toggle-row__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .research-toggle-row strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .research-toggle-row small {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -615,7 +913,7 @@ body {
 .action-button--logout {
   border-color: rgba(199, 210, 254, 0.14);
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.016) 52%, rgba(124, 58, 237, 0.065)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.016) 52%, color-mix(in srgb, var(--accent) 6.5%, transparent)),
     rgba(255, 255, 255, 0.032);
   color: var(--text);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -624,17 +922,17 @@ body {
 .action-button--ghost:hover,
 .action-button--logout:hover {
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.026) 52%, rgba(124, 58, 237, 0.085)),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.026) 52%, color-mix(in srgb, var(--accent) 8.5%, transparent)),
     rgba(255, 255, 255, 0.045);
   border-color: rgba(216, 180, 254, 0.22);
 }
 
 .action-button--auth {
   position: relative;
-  border: 0.5px solid transparent;
-  background:
-    linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%) padding-box,
-    linear-gradient(#8f879d, #8f879d) border-box;
+  border: 0.5px solid #8f879d;
+  background: var(--theme-button);
+  background-clip: padding-box;
+  color: var(--theme-button-text);
   box-shadow: 0 4px 10px rgba(2, 6, 23, 0.14);
   filter: none;
 }
@@ -646,21 +944,17 @@ body {
 
 .action-button--auth:hover,
 .action-button--send:hover {
-  box-shadow: 0 18px 34px rgba(124, 58, 237, 0.28);
+  box-shadow: 0 18px 34px var(--theme-glow);
 }
 
 .action-button--auth:hover {
-  background:
-    linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%) padding-box,
-    linear-gradient(#9b93aa, #9b93aa) border-box;
+  border-color: #9b93aa;
   box-shadow: 0 5px 12px rgba(2, 6, 23, 0.16);
 }
 
 .auth-card .action-button--auth:focus,
 .auth-card .action-button--auth:focus-visible {
-  background:
-    linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%) padding-box,
-    linear-gradient(#a69eb5, #a69eb5) border-box;
+  border-color: #a69eb5;
   box-shadow: 0 5px 12px rgba(2, 6, 23, 0.16);
   outline: none;
 }
@@ -668,9 +962,9 @@ body {
 .action-button--send {
   border: none;
   outline: none;
-  background:
-    linear-gradient(135deg, rgba(124, 58, 237, 0.98), rgba(249, 115, 22, 0.94));
-  box-shadow: 0 18px 34px rgba(249, 115, 22, 0.2);
+  background: var(--theme-button-send);
+  color: var(--theme-button-text);
+  box-shadow: 0 18px 34px var(--theme-send-glow);
 }
 
 .action-button--reset {
@@ -695,8 +989,8 @@ body.login-view {
   width: auto;
   min-width: 320px;
   background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 30%),
-    radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.18), transparent 28%),
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 28%, transparent), transparent 30%),
+    radial-gradient(circle at bottom right, color-mix(in srgb, var(--theme-light-2) 18%, transparent), transparent 28%),
     linear-gradient(180deg, #150c2b 0%, #0a0e1a 100%);
 }
 
@@ -709,7 +1003,8 @@ body.login-view .popup {
   gap: 20px;
 }
 
-body.login-view .panel {
+body.login-view .panel,
+body.login-view .hero-card__theme-button {
   display: none;
 }
 
@@ -735,11 +1030,11 @@ body.login-view .hero-card__logo {
   flex: 0 0 auto;
   border-radius: 16px;
   object-fit: cover;
-  box-shadow: 0 14px 34px rgba(124, 58, 237, 0.32);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
 body.login-view .hero-card__eyebrow {
-  color: #ddd6fe;
+  color: var(--theme-text-pale);
   font-size: 12px;
   letter-spacing: 0.22em;
 }
@@ -788,9 +1083,10 @@ body.login-view .auth-card__login-mark {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #7c3aed 0%, #f97316 100%);
+  border-radius: 18px;
+  background: var(--theme-mark);
   color: white;
+  box-shadow: 0 12px 30px var(--theme-mark-shadow);
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -846,9 +1142,9 @@ body.login-view .auth-form input {
 
 body.login-view .auth-form .field__input:focus,
 body.login-view .auth-form input:focus {
-  border-color: #7c3aed;
+  border-color: var(--accent);
   background: #1a1a2e;
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.3);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 body.login-view .action-button--auth {
@@ -856,9 +1152,9 @@ body.login-view .action-button--auth {
   padding: 16px 20px;
   border: 0;
   border-radius: 12px;
-  background: linear-gradient(135deg, #7c3aed 0%, #ec4899 55%, #f97316 100%);
+  background: var(--theme-button);
   font-size: 16px;
-  box-shadow: 0 12px 32px rgba(124, 58, 237, 0.32);
+  box-shadow: 0 12px 32px var(--theme-glow);
 }
 
 body.login-view .account-panel {
@@ -913,7 +1209,7 @@ body.login-view .auth-card__signup p {
 
 body.login-view .auth-card__signup a {
   flex: 0 0 auto;
-  color: #ddd6fe;
+  color: transparent;
   font-size: 14px;
   font-weight: 700;
   text-decoration: none;

@@ -21,11 +21,12 @@
 
   const style = document.createElement("style");
   style.textContent = `
-    .furimanager-yahoo-toolbar {display:flex;flex-wrap:wrap;gap:6px;padding:10px;margin:6px 0;background:#ffd8eb;border-radius:10px;box-sizing:border-box;max-width:100%}
-    .furimanager-yahoo-toolbar button {min-height:34px;padding:0 10px;border:0;border-radius:10px;background:#ff4fa3;color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
-    .furimanager-yahoo-toolbar button:hover {background:#f13d94}
+    .furimanager-yahoo-toolbar {display:flex;flex-wrap:wrap;gap:6px;padding:10px;margin:6px 0;background:var(--fm-surface,#faf7ff);border:1px solid var(--fm-surface-line,#eee6fb);border-radius:10px;box-sizing:border-box;max-width:100%}
+    .furimanager-yahoo-toolbar button {min-height:34px;padding:0 10px;border:1px solid var(--fm-soft-line,#ddd6fe);border-radius:10px;background:var(--fm-soft-bg,#f5f0ff);color:var(--fm-strong,#6d28d9);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+    .furimanager-yahoo-toolbar button:hover {background:var(--fm-chip-bg,#ede5ff)}
     .furimanager-yahoo-toolbar button:disabled {opacity:.55;cursor:wait}
-    #furimanager-yahoo-status {position:fixed;bottom:16px;right:16px;z-index:2147483646;max-width:min(460px,calc(100vw - 32px));max-height:50vh;overflow:auto;box-sizing:border-box;padding:14px 18px;background:#150c2b;color:white;border:1px solid #ec4899;border-radius:12px;font-size:14px;line-height:1.65;white-space:pre-wrap}
+    #furimanager-yahoo-status {position:fixed;bottom:16px;right:16px;z-index:2147483646;max-width:min(460px,calc(100vw - 32px));max-height:50vh;overflow:auto;box-sizing:border-box;padding:12px 16px;background:#fff;color:#303038;border:1px solid var(--fm-panel-line,#d8c8f5);border-radius:10px;box-shadow:0 10px 30px #0000001f;font-size:14px;line-height:1.65;white-space:pre-wrap;cursor:pointer}
+    #furimanager-yahoo-status::first-line {color:var(--fm-strong,#6d28d9);font-weight:700}
     @media(max-width:640px){.furimanager-yahoo-toolbar button{min-height:40px;font-size:13px}}
   `;
   document.head.append(style);

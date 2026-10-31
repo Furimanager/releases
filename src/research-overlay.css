@@ -144,8 +144,15 @@
   color: #ffffff;
 }
 
+/* ログイン・プランの入口はポップアップの「ボタンの色」に合わせる。紫（既定）は上の色のまま。 */
+:root[data-furimane-theme]:not([data-furimane-theme="purple"]) .furimane-research-overlay__button--primary,
+:root[data-furimane-theme]:not([data-furimane-theme="purple"]) .furimane-research-overlay__link-button {
+  background: var(--fm-primary-bg);
+  color: var(--fm-primary-text);
+}
+
 .furimane-research-overlay__button--secondary {
-  border: 1px solid #7c3aed;
+  border: 1px solid var(--fm-strong, #7c3aed);
   background: transparent;
   color: #111827;
 }
@@ -1310,5 +1317,428 @@
   .furimane-research-overlay__body {
     min-height: auto;
     padding: 14px;
+  }
+}
+
+/* ------------------------------------------------------------------
+   無料枠を使い切ったときの横長の案内（2026-10-31）。
+   web の料金ページの横長バナー（research-offer-banner.module.css）と同じ素材・配色・寸法の比率。
+   寸法は --u（案内の幅の1%）の倍数。メルカリの画面の上に浮かせ、周りの画面は残す。
+   ------------------------------------------------------------------ */
+.furimane-offer {
+  container-type: inline-size;
+  position: fixed;
+  z-index: 2147483000;
+  top: 50%;
+  left: 50%;
+  width: min(800px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(190, 170, 255, 0.35);
+  border-radius: 24px;
+  background: #1c0f45 center / cover no-repeat;
+  box-shadow: 0 28px 80px rgba(20, 8, 60, 0.45);
+  color: #ffffff;
+  font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif;
+  text-align: left;
+  isolation: isolate;
+}
+
+.furimane-offer,
+.furimane-offer * {
+  box-sizing: border-box;
+}
+
+.furimane-offer > * {
+  --u: min(1cqi, 8.4px);
+}
+
+.furimane-offer :is(p, h2, ul, li) {
+  margin: 0;
+  padding: 0;
+}
+
+.furimane-offer ul {
+  list-style: none;
+}
+
+.furimane-offer a {
+  text-decoration: none;
+}
+
+.furimane-offer__icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.furimane-offer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(1.3 * var(--u)) calc(2.6 * var(--u)) calc(1.3 * var(--u)) calc(4 * var(--u));
+  border-bottom: 1px solid rgba(190, 170, 255, 0.28);
+  background: rgba(16, 8, 46, 0.5);
+}
+
+.furimane-offer__bar-text {
+  font-size: max(13px, calc(1.7 * var(--u)));
+  font-weight: 800;
+  color: #e9e2ff;
+}
+
+.furimane-offer__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(190, 170, 255, 0.35);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.furimane-offer__close:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.furimane-offer__top {
+  position: relative;
+  min-height: calc(30 * var(--u));
+  padding: calc(2.6 * var(--u)) calc(4 * var(--u)) calc(2 * var(--u));
+  overflow: hidden;
+}
+
+.furimane-offer__copy {
+  position: relative;
+  z-index: 2;
+  max-width: calc(58 * var(--u));
+}
+
+.furimane-offer__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: calc(1.4 * var(--u));
+}
+
+.furimane-offer__eyebrow-label {
+  font-size: max(12px, calc(1.75 * var(--u)));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #cdbdff;
+}
+
+.furimane-offer__pill {
+  padding: calc(0.3 * var(--u)) calc(1.5 * var(--u));
+  border: 1.5px solid #f05bc6;
+  border-radius: 999px;
+  background: rgba(240, 91, 198, 0.08);
+  font-size: max(12px, calc(1.6 * var(--u)));
+  font-weight: 800;
+  line-height: 1.5;
+  color: #ff77d3;
+}
+
+.furimane-offer__title {
+  margin-top: calc(1.6 * var(--u)) !important;
+  font-size: calc(5.6 * var(--u));
+  font-weight: 900;
+  line-height: 1.15;
+  letter-spacing: -0.005em;
+  color: #ffffff;
+  text-shadow: 0 4px 24px rgba(20, 6, 60, 0.45);
+}
+
+.furimane-offer__title-line {
+  display: block;
+  white-space: nowrap;
+}
+
+/* いつもの紫→ピンク→オレンジの下線（10/9 の見本と同じ）。 */
+.furimane-offer__underline {
+  padding-bottom: 0.08em;
+  background: linear-gradient(90deg, #7c3aed 0%, #ec4899 55%, #f97316 100%) left bottom / 100% 0.12em no-repeat;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.furimane-offer__lead {
+  margin-top: calc(0.8 * var(--u)) !important;
+  font-size: calc(2.8 * var(--u));
+  font-weight: 900;
+  line-height: 1.25;
+  color: #b89dff;
+}
+
+.furimane-offer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(1 * var(--u));
+  margin-top: calc(1.7 * var(--u)) !important;
+}
+
+.furimane-offer__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(0.8 * var(--u));
+  padding: calc(0.55 * var(--u)) calc(1.2 * var(--u)) !important;
+  border: 1px solid rgba(190, 170, 255, 0.6);
+  border-radius: calc(0.8 * var(--u));
+  background: rgba(24, 12, 62, 0.55);
+  font-size: max(12px, calc(1.38 * var(--u)));
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.furimane-offer__phone {
+  position: absolute;
+  z-index: 1;
+  top: calc(-8 * var(--u));
+  left: calc(50 * var(--u));
+  width: calc(50 * var(--u));
+  max-width: none;
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+}
+
+.furimane-offer__value {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: calc(21 * var(--u)) auto calc(19 * var(--u)) minmax(0, 1fr);
+  align-items: center;
+  gap: calc(2.4 * var(--u));
+  padding: calc(1 * var(--u)) calc(4 * var(--u));
+  border-block: 1px solid rgba(190, 170, 255, 0.3);
+  background: rgba(16, 8, 46, 0.42);
+}
+
+.furimane-offer__term {
+  padding: calc(0.5 * var(--u)) calc(1 * var(--u)) calc(0.6 * var(--u));
+  border: 1px solid rgba(190, 170, 255, 0.24);
+  border-radius: calc(0.8 * var(--u));
+  background: rgba(255, 255, 255, 0.05);
+  text-align: center;
+}
+
+.furimane-offer__term-label {
+  font-size: max(12px, calc(1.42 * var(--u)));
+  font-weight: 700;
+  line-height: 1.4;
+  color: #e9e2ff;
+}
+
+.furimane-offer__term-label strong {
+  font-size: 1.22em;
+  font-weight: 900;
+}
+
+.furimane-offer__term-value {
+  font-size: calc(3.4 * var(--u));
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.furimane-offer__term-value small {
+  margin-left: calc(0.15 * var(--u));
+  font-size: 0.55em;
+  font-weight: 600;
+}
+
+.furimane-offer__equals {
+  font-size: calc(3.8 * var(--u));
+  font-weight: 900;
+  line-height: 1;
+  color: #b9a5ff;
+}
+
+.furimane-offer__value-note {
+  padding-left: calc(2.4 * var(--u)) !important;
+  border-left: 1px solid rgba(190, 170, 255, 0.4);
+  font-size: max(13px, calc(1.6 * var(--u)));
+  font-weight: 700;
+  line-height: 1.6;
+  color: #e4dcff;
+}
+
+/* 白い申込みの帯。体験の一文が詰まらないよう、ボタンの欄を広めにとる。 */
+.furimane-offer__action {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: calc(2.6 * var(--u));
+  margin: calc(1.6 * var(--u)) calc(2.6 * var(--u)) calc(1.2 * var(--u));
+  padding: calc(1.6 * var(--u)) calc(2.8 * var(--u));
+  border-radius: calc(1.4 * var(--u));
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(20, 8, 60, 0.25);
+  color: #241d36;
+}
+
+.furimane-offer__brand {
+  font-size: max(14px, calc(1.9 * var(--u)));
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  color: #7c3aed;
+  white-space: nowrap;
+}
+
+.furimane-offer__price-main {
+  font-size: calc(3.2 * var(--u));
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.furimane-offer__price-main small {
+  margin-left: calc(0.2 * var(--u));
+  font-size: 0.6em;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.furimane-offer__price-sub {
+  margin-top: calc(0.25 * var(--u)) !important;
+  font-size: max(11px, calc(1.2 * var(--u)));
+  font-weight: 700;
+  color: #5d4f73;
+  white-space: nowrap;
+}
+
+.furimane-offer__cta-area {
+  display: grid;
+  gap: calc(0.9 * var(--u));
+  min-width: 0;
+  padding-left: calc(2.6 * var(--u));
+  border-left: 1px solid #e6def3;
+}
+
+.furimane-offer__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(1 * var(--u));
+  width: 100%;
+  min-height: max(46px, calc(5.4 * var(--u)));
+  padding: calc(0.6 * var(--u)) calc(2 * var(--u));
+  border-radius: 999px;
+  background: linear-gradient(95deg, #ec28c0 0%, #f6528f 52%, #fd8b45 100%);
+  box-shadow: 0 calc(0.9 * var(--u)) calc(2.4 * var(--u)) rgba(240, 60, 170, 0.32);
+  font-size: max(15px, calc(1.9 * var(--u)));
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  color: #ffffff !important;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.furimane-offer__cta:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.furimane-offer__cta:focus-visible,
+.furimane-offer__close:focus-visible,
+.furimane-offer__referral:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 3px;
+}
+
+.furimane-offer__trial-note {
+  font-size: max(12px, calc(1.45 * var(--u)));
+  font-weight: 600;
+  line-height: 1.7;
+  color: #5b3a8f;
+}
+
+/* 何日間無料か（前半）は大きく太く、グラデーションの下線で目立たせる（2026-10-31 オーナー指示）。 */
+.furimane-offer__trial-lead {
+  font-size: 1.12em;
+  font-weight: 900;
+  color: #4c1d95;
+}
+
+.furimane-offer__trial-note--plain {
+  color: #6b5d80;
+}
+
+.furimane-offer__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 0 calc(4 * var(--u)) calc(1 * var(--u));
+}
+
+.furimane-offer__referral {
+  border-bottom: 1px solid currentColor;
+  font-size: max(12px, calc(1.4 * var(--u)));
+  font-weight: 800;
+  color: #e9e2ff !important;
+}
+
+.furimane-offer__foot-note {
+  font-size: max(11px, calc(1.2 * var(--u)));
+  color: #cbbdf0;
+}
+
+.furimane-offer__stop {
+  padding: calc(1 * var(--u)) calc(4 * var(--u)) calc(1.6 * var(--u)) !important;
+  border-top: 1px solid rgba(190, 170, 255, 0.2);
+  font-size: max(11px, calc(1.25 * var(--u)));
+  line-height: 1.6;
+  color: #d7ccf5;
+}
+
+/* 狭い画面では、スマホの画像を外して縦に積む。 */
+@container (max-width: 600px) {
+  .furimane-offer > * {
+    --u: min(1.7cqi, 9px);
+  }
+
+  .furimane-offer__phone {
+    display: none;
+  }
+
+  .furimane-offer__title-line {
+    white-space: normal;
+  }
+
+  .furimane-offer__value {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  .furimane-offer__value-note {
+    grid-column: 1 / -1;
+    padding-left: 0 !important;
+    border-left: 0;
+    text-align: center;
+  }
+
+  .furimane-offer__action {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .furimane-offer__cta-area {
+    grid-column: 1 / -1;
+    padding-left: 0;
+    border-left: 0;
   }
 }

@@ -357,7 +357,7 @@
         padding: 8px 14px 8px 104px;
         position: relative;
         z-index: 0;
-        background: #ffd8eb !important;
+        background: var(--fm-surface, #faf7ff) !important;
         border-radius: 0 !important;
         overflow: hidden;
         pointer-events: none;
@@ -384,14 +384,15 @@
       .furimanager-action-button {
         height: 34px;
         padding: 0 10px;
-        border: 0;
+        /* \u8272\u306F\u30DD\u30C3\u30D7\u30A2\u30C3\u30D7\u306E\u30C6\u30FC\u30DE\uFF08extension-theme.css\uFF09\u3002\u30E1\u30EB\u30AB\u30EA\u306B\u306A\u3058\u3080\u6DE1\u3044\u5730\uFF0B\u8272\u6587\u5B57\u3002 */
+        border: 1px solid var(--fm-soft-line, #ddd6fe);
         border-radius: 10px;
-        background: #ff4fa3;
-        color: #FFFFFF;
+        background: var(--fm-soft-bg, #f5f0ff);
+        color: var(--fm-strong, #6d28d9);
         font-size: 12px;
         font-weight: 600;
-        line-height: 34px;
-        box-shadow: 0 4px 12px rgba(255, 79, 163, 0.24);
+        line-height: 32px;
+        box-shadow: none;
         cursor: pointer;
         pointer-events: auto;
         white-space: nowrap;
@@ -399,7 +400,7 @@
       }
 
       .furimanager-action-button:hover {
-        background: #f13d94;
+        background: var(--fm-chip-bg, #ede5ff);
       }
 
       .furimanager-action-button:active {
@@ -415,7 +416,7 @@
         max-width: 100%;
         margin-top: 10px;
         overflow: hidden;
-        border: 1px solid #f6b6d5;
+        border: 1px solid var(--fm-soft-line, #ddd6fe);
         border-radius: 6px;
         background: #ffffff;
         color: #27272a;
@@ -425,7 +426,7 @@
 
       .furimanager-listing-date-panel__title {
         padding: 8px 11px;
-        background: #fdf2f8;
+        background: var(--fm-surface, #faf7ff);
         color: #27272a;
         font-size: 11px;
         font-weight: 700;
@@ -440,7 +441,7 @@
       }
 
       .furimanager-listing-date-panel__row + .furimanager-listing-date-panel__row {
-        border-top: 1px solid #fce7f3;
+        border-top: 1px solid var(--fm-surface-line, #eee6fb);
       }
 
       .furimanager-listing-date-panel__label {
@@ -484,8 +485,8 @@
         min-width: 44px;
         padding: 4px 7px;
         border-radius: 5px;
-        background: #fce7f3;
-        color: #be185d;
+        background: var(--fm-chip-bg, #ede5ff);
+        color: var(--fm-strong, #6d28d9);
         font-size: 12px;
         font-weight: 700;
         line-height: 1.25;

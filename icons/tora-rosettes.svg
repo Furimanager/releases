@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90" viewBox="0 0 120 90">
+  <!-- 柄の形・配置は共用。fragment付きURLでは色だけを切り替える。 -->
+  <view id="pink" viewBox="120 0 120 90"/>
+  <view id="brown" viewBox="240 0 120 90"/>
+  <view id="purple" viewBox="360 0 120 90"/>
+  <view id="blue" viewBox="480 0 120 90"/>
+  <defs>
+    <g id="rosette">
+      <path d="M-8 2C-12 0-10-4-11-6-11-10-6-8-4-11-1-13 3-10 2-7 1-5-2-7-4-5-5-3-7-5-7-2-5 0-5 3-8 2Z"/>
+      <path d="M5-6C8-8 11-3 10 0 12 3 9 7 7 7 5 7 4 11 1 10-2 10-3 7-1 5 2 4 4 6 5 3 8 2 6 0 6-2 4-3 3-5 5-6Z"/>
+    </g>
+    <g id="rosette-wide">
+      <path d="M-9 4C-13 2-12-2-10-4-11-8-6-10-3-8-1-10 3-9 3-6 2-3-2-5-4-4-6-5-7-2-6 0-4 3-7 6-9 4Z"/>
+      <path d="M7-5C12-5 13 0 10 2 11 6 6 9 3 7 0 10-4 8-3 5-2 3 1 4 3 3 5 5 7 3 6 1 4-2 4-5 7-5Z"/>
+    </g>
+    <g id="rosette-small">
+      <path d="M-6 5C-11 3-9-1-10-4-9-8-5-7-3-9 0-10 3-8 2-5 0-3-2-5-4-3-6-3-5 0-4 1-2 3-4 6-6 5Z"/>
+      <path d="M5-4C8-5 10-1 8 2 8 6 4 8 1 7-2 7-1 4 1 3 4 4 4 1 4-1 2-2 3-4 5-4Z"/>
+    </g>
+    <g id="small">
+      <path d="M-4-3C-1-6 3-4 4-1 6 1 3 5 0 4-4 5-6 0-4-3Z"/>
+    </g>
+    <g id="tile">
+  <use href="#rosette" transform="translate(14 14) rotate(-24) scale(.9 1)"/>
+  <use href="#rosette-wide" transform="translate(53 10) rotate(27) scale(1 .8)"/>
+  <use href="#rosette" transform="translate(94 18) rotate(-47) scale(1.1 .95)"/>
+  <use href="#rosette-small" transform="translate(33 46) rotate(39) scale(1.05 .9)"/>
+  <use href="#rosette-wide" transform="translate(75 43) rotate(-18) scale(.85 1.1)"/>
+  <use href="#rosette-small" transform="translate(112 52) rotate(17) scale(.8 .95)"/>
+  <use href="#rosette-wide" transform="translate(12 76) rotate(25) scale(.85 .8)"/>
+  <use href="#rosette" transform="translate(55 76) rotate(-35) scale(1.05 .9)"/>
+  <use href="#rosette-small" transform="translate(92 79) rotate(53) scale(.9 .75)"/>
+  <use href="#small" transform="translate(31 23) rotate(-12) scale(.6)"/>
+  <use href="#small" transform="translate(72 20) rotate(42) scale(.65)"/>
+  <use href="#small" transform="translate(8 43) rotate(12) scale(.7)"/>
+  <use href="#small" transform="translate(54 47) rotate(65) scale(.55)"/>
+  <use href="#small" transform="translate(87 59) rotate(25) scale(.6)"/>
+  <use href="#small" transform="translate(32 70) rotate(85) scale(.65)"/>
+  <use href="#small" transform="translate(112 6) rotate(34) scale(.6)"/>
+    </g>
+  </defs>
+  <use href="#tile" fill="#30232b"/>
+  <use href="#tile" fill="#df8faa" x="120"/>
+  <use href="#tile" fill="#b88d5d" x="240"/>
+  <use href="#tile" fill="#b28ac6" x="360"/>
+  <use href="#tile" fill="#88badc" x="480"/>
+</svg>

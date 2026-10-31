@@ -126,7 +126,7 @@ test("実Yahooのimage/jpgをJPEGへ正規化し、不明な形式は許可し�
 test("両manifestのYahooスクリプト順と画像権限が一致する", async () => {
   for (const name of ["manifest.json", "manifest.dev.json"]) {
     const manifest = JSON.parse(await readFile(new URL(`../${name}`, import.meta.url), "utf8"));
-    const entry = manifest.content_scripts.find(entry => entry.matches.includes("https://paypayfleamarket.yahoo.co.jp/*"));
+    const entry = manifest.content_scripts.find(entry => entry.matches.includes("https://paypayfleamarket.yahoo.co.jp/*") && entry.js?.includes("src/yahoo-fleamarket.js"));
     assert.deepEqual(entry.js, ["src/cross-listing.js", "src/yahoo-fleamarket-dom.js", "src/yahoo-fleamarket.js"]);
     assert.ok(manifest.host_permissions.includes("https://auctions.c.yimg.jp/*"));
   }

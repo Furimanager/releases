@@ -3,45 +3,48 @@
   width: 100%;
   margin: 10px 0 12px;
   padding: 0;
-  border: 1px solid #ff9fcb;
+  border: 1px solid var(--fm-panel-line);
   border-radius: 9px;
   background: white;
   color: #303038;
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif;
 }
 #furimane-bulk-price * { box-sizing: border-box; }
-#furimane-bulk-price .fm-bulk-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 18px; border-bottom: 1px solid #fce2ef; border-radius: 8px 8px 0 0; background: #fff6fa; font-size: 18px; line-height: 1.35; font-weight: 700; }
+#furimane-bulk-price .fm-bulk-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 18px; border-bottom: 1px solid var(--fm-surface-line); border-radius: 8px 8px 0 0; background: var(--fm-surface); font-size: 18px; line-height: 1.35; font-weight: 700; }
 #furimane-bulk-price .fm-bulk-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
-#furimane-bulk-price .fm-bulk-brand { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid #ffadd0; border-radius: 999px; background: #fff; color: #c82375; font-size: 11px; line-height: 1.5; font-weight: 700; white-space: nowrap; }
+/* 「フリマネ」の札は角を少しだけ丸めた四角。枠線なし・淡い地に色文字。 */
+#furimane-bulk-price .fm-bulk-brand { display: inline-flex; align-items: center; padding: 2px 7px; border: 0; border-radius: 4px; background: var(--fm-chip-bg); color: var(--fm-strong); font-size: 11px; line-height: 1.5; font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
 #furimane-bulk-price .fm-bulk-content { padding: 8px 18px; }
 #furimane-bulk-price .fm-bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
 #furimane-bulk-price p { margin: 5px 0 0; }
 #furimane-bulk-price .fm-bulk-toolbar .fm-bulk-hint { flex: 1 1 400px; margin: 0; color: #454550; font-size: 15px; overflow-wrap: anywhere; }
 #furimane-bulk-price .fm-bulk-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 #furimane-bulk-price button { min-height: 36px; border: 1px solid transparent; border-radius: 8px; padding: 5px 16px; font: inherit; font-size: 16px; font-weight: 700; white-space: nowrap; cursor: pointer; }
-#furimane-bulk-price button:focus-visible, #furimane-bulk-price summary:focus-visible { outline: 3px solid #7525bb; outline-offset: 3px; }
-#furimane-bulk-price .fm-bulk-primary { min-width: 144px; background: #ff4fa3; color: white; }
-#furimane-bulk-price .fm-bulk-primary:hover { background: #f13d94; }
-#furimane-bulk-price .fm-bulk-secondary { color: #5d3345; background: white; border-color: #e5c6d3; }
+#furimane-bulk-price button:focus-visible, #furimane-bulk-price summary:focus-visible { outline: 3px solid var(--fm-strong); outline-offset: 3px; }
+/* 透明な枠があるとグラデが枠の下で折り返して左右の端が変になるので、主ボタンは枠なし（高さは min-height のまま）。 */
+#furimane-bulk-price .fm-bulk-primary { min-width: 144px; border: 0; background: var(--fm-primary-bg); color: var(--fm-primary-text); }
+#furimane-bulk-price .fm-bulk-primary:hover { filter: brightness(.95); }
+#furimane-bulk-price .fm-bulk-secondary { color: #3f3f46; background: white; border-color: #d4d4d8; }
 #furimane-bulk-price button:disabled { opacity: .6; cursor: wait; }
 #furimane-bulk-price .fm-bulk-status { margin-top: 12px; font-weight: 700; font-size: 14px; }
 #furimane-bulk-price .fm-bulk-note { color: #67606a; font-size: 12px; }
 #furimane-bulk-price .fm-bulk-counts { font-size: 12px; font-variant-numeric: tabular-nums; }
 #furimane-bulk-price .fm-bulk-error { color: #ae1738; font-weight: 700; }
 #furimane-bulk-price details { margin-top: 8px; }
-#furimane-bulk-price summary { cursor: pointer; color: #963361; }
+#furimane-bulk-price summary { cursor: pointer; color: var(--fm-strong); }
 #furimane-bulk-price .fm-bulk-results { max-height: 300px; overflow: auto; margin-top: 8px; }
-#furimane-bulk-price .fm-bulk-result { padding: 9px 0; border-top: 1px solid #f2dce5; overflow-wrap: anywhere; }
+#furimane-bulk-price .fm-bulk-result { padding: 9px 0; border-top: 1px solid #ececf0; overflow-wrap: anywhere; }
 #furimane-bulk-price .fm-bulk-result a { color: #303038; display: block; }
-#furimane-bulk-price .fm-bulk-result span { color: #655360; font-size: 13px; }
+#furimane-bulk-price .fm-bulk-result span { color: #66666e; font-size: 13px; }
 #furimane-bulk-price [hidden] { display: none !important; }
 #furimane-bulk-price .fm-bulk-help { position: relative; flex: 0 0 auto; }
-#furimane-bulk-price .fm-bulk-help-button { display: grid; place-items: center; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid #e7c96a; border-radius: 50%; background: #fff1b8; color: #806000; }
-#furimane-bulk-price .fm-bulk-help-button:hover { background: #ffe797; }
+/* 注意書きはテーマに関係なく白とグレー。色を付けず静かにする。 */
+#furimane-bulk-price .fm-bulk-help-button { display: grid; place-items: center; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid #d4d4d8; border-radius: 50%; background: #fff; color: #71717a; }
+#furimane-bulk-price .fm-bulk-help-button:hover { background: #f4f4f5; }
 #furimane-bulk-price .fm-bulk-help-popover { position: absolute; z-index: 20; top: 100%; right: -5px; width: min(370px, calc(100vw - 68px)); padding-top: 8px; font-size: 12px; font-weight: 400; line-height: 1.7; }
 #furimane-bulk-price .fm-bulk-help-popover.opens-up { top: auto; bottom: 100%; padding-top: 0; padding-bottom: 8px; }
-#furimane-bulk-price .fm-bulk-help-panel { max-height: min(540px, var(--fm-bulk-help-height, 70vh)); overflow: auto; padding: 15px 17px; border: 1px solid #ecd996; border-radius: 12px; background: #fffdf4; color: #514a36; box-shadow: 0 8px 28px #40330d1a; }
-#furimane-bulk-price .fm-bulk-help-panel strong { color: #6e540f; font-size: inherit; font-weight: 700; }
+#furimane-bulk-price .fm-bulk-help-panel { max-height: min(540px, var(--fm-bulk-help-height, 70vh)); overflow: auto; padding: 15px 17px; border: 1px solid #e4e4e7; border-radius: 12px; background: #fff; color: #3f3f46; box-shadow: 0 10px 30px #0000001a; }
+#furimane-bulk-price .fm-bulk-help-panel strong { color: #18181b; font-size: inherit; font-weight: 700; }
 #furimane-bulk-price .fm-bulk-help-panel > strong { display: block; margin-top: 14px; font-size: 14px; }
 #furimane-bulk-price .fm-bulk-help-panel > strong:first-child { margin-top: 0; }
 #furimane-bulk-price .fm-bulk-help-panel ul { padding-left: 17px; margin: 7px 0 14px; }
@@ -52,10 +55,10 @@
 #furimane-bulk-price .fm-bulk-progress-caption span { color: #726775; font-size: 12px; font-variant-numeric: tabular-nums; }
 #furimane-bulk-price .fm-bulk-progress-track { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; }
 #furimane-bulk-price .fm-bulk-meter { display: flex; gap: 3px; }
-/* リサーチ画面のSegmentMeterと同じ12×10px・角丸3px・135度グラデーション。 */
-#furimane-bulk-price .fm-bulk-segment { display: block; width: 12px; height: 10px; border-radius: 3px; background: #ece6f2; }
+/* リサーチ画面のSegmentMeterと同じ12×10px・角丸3px・135度グラデーション。色はテーマに合わせる（紫は従来どおり）。 */
+#furimane-bulk-price .fm-bulk-segment { display: block; width: 12px; height: 10px; border-radius: 3px; background: var(--fm-meter-empty); }
 #furimane-bulk-price .fm-bulk-segment.is-complete,
-#furimane-bulk-price .fm-bulk-segment.is-current { background: linear-gradient(135deg, #7c3aed, #ec4899); }
+#furimane-bulk-price .fm-bulk-segment.is-current { background: var(--fm-meter); }
 #furimane-bulk-price .fm-bulk-segment.is-current { animation: fm-bulk-square-pulse 1.25s ease-in-out infinite; }
 #furimane-bulk-price .fm-bulk-eta { font-size: 12px; line-height: 1; color: #726775; font-variant-numeric: tabular-nums; }
 #furimane-bulk-price .fm-bulk-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -64,7 +67,7 @@
   50% { opacity: 1; transform: translateY(-2px); }
 }
 @media (prefers-reduced-motion: reduce) {
-  #furimane-bulk-price .fm-bulk-segment.is-current { animation: none; outline: 1px solid #7c3aed; outline-offset: 2px; }
+  #furimane-bulk-price .fm-bulk-segment.is-current { animation: none; outline: 1px solid var(--fm-strong); outline-offset: 2px; }
 }
 @media (max-width: 640px) {
   #furimane-bulk-price .fm-bulk-heading { padding: 6px 14px; }

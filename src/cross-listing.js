@@ -92,22 +92,33 @@
         box = document.createElement("aside");
         box.id = "furimanager-cross-status";
         box.setAttribute("role", "status");
-        box.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;max-width:min(420px,calc(100vw - 32px));max-height:45vh;overflow:auto;background:#150c2b;color:#fff;padding:16px;border:1px solid #ec4899;border-radius:12px;font:13px/1.7 sans-serif;white-space:pre-wrap;box-sizing:border-box";
+        box.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(420px,calc(100vw - 32px));max-height:45vh;overflow:auto;background:#fff;color:#303038;padding:0;border:1px solid var(--fm-panel-line,#d8c8f5);border-radius:10px;box-shadow:0 10px 30px #0000001f;font:13px/1.7 sans-serif;text-align:left;box-sizing:border-box";
         document.body.append(box);
       }
       box.replaceChildren();
+      const head = document.createElement("div");
+      head.style.cssText = "position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:10px 10px 7px 14px;background:var(--fm-meter,linear-gradient(135deg,#7c3aed,#ec4899)) top/100% 3px no-repeat,var(--fm-surface,#faf7ff);border-bottom:1px solid var(--fm-surface-line,#eee6fb);color:#18181b;font-weight:700";
+      const brand = document.createElement("span");
+      brand.textContent = "\u30D5\u30EA\u30DE\u30CD";
+      brand.style.cssText = "padding:2px 7px;border-radius:4px;background:var(--fm-chip-bg,#ede5ff);color:var(--fm-strong,#6d28d9);font-size:11px;line-height:1.5;letter-spacing:.04em";
+      const title = document.createElement("span");
+      title.textContent = "\u30B3\u30D4\u30FC\u51FA\u54C1";
       const close = document.createElement("button");
       close.type = "button";
       close.textContent = "\u9589\u3058\u308B";
-      close.style.cssText = "float:right;background:transparent;color:#fff;border:0;text-decoration:underline;cursor:pointer;margin-left:12px";
+      close.style.cssText = "margin-left:auto;padding:1px 10px;border:1px solid #d4d4d8;border-radius:6px;background:#fff;color:#52525b;font:500 12px/1.6 sans-serif;cursor:pointer";
       close.onclick = () => box?.remove();
+      head.append(brand, title, close);
       const body = document.createElement("div");
       body.textContent = message;
-      box.append(close, body);
+      body.style.cssText = "padding:10px 14px 12px;white-space:pre-wrap";
+      box.append(head, body);
       if (item) {
         const details = document.createElement("details");
+        details.style.cssText = "margin:0 14px 12px;padding-top:8px;border-top:1px solid #ececf0";
         const summary = document.createElement("summary");
         summary.textContent = "\u5143\u306E\u5546\u54C1\u60C5\u5831\u3092\u898B\u308B";
+        summary.style.cssText = "cursor:pointer;color:var(--fm-strong,#6d28d9);font-weight:600";
         const content = document.createElement("div");
         content.textContent = `\u5546\u54C1\u540D\uFF1A${item.title}
 \u4FA1\u683C\uFF1A${item.price.toLocaleString()}\u5186
@@ -121,6 +132,7 @@
 
 \u8AAC\u660E\uFF1A
 ${item.description}`;
+        content.style.cssText = "margin-top:6px;color:#3f3f46;white-space:pre-wrap";
         details.append(summary, content);
         box.append(details);
       }
@@ -144,7 +156,7 @@ ${item.description}`;
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = `${source.platform === "mercari" ? "Yahoo!\u30D5\u30EA\u30DE" : "\u30E1\u30EB\u30AB\u30EA"}\u306B\u30B3\u30D4\u30FC\u51FA\u54C1`;
-      button.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:4px 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:#e52e88;font:500 12px/1.6 sans-serif;cursor:pointer;text-align:left";
+      button.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:4px 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--fm-strong,#6d28d9);font:500 12px/1.6 sans-serif;cursor:pointer;text-align:left";
       button.insertAdjacentHTML("afterbegin", '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>');
       button.onclick = async (event) => {
         event.preventDefault();

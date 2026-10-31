@@ -88,15 +88,25 @@
     let box = document.getElementById("furimanager-cross-status");
     if (!box) {
       box = document.createElement("aside"); box.id = "furimanager-cross-status"; box.setAttribute("role", "status");
-      box.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;max-width:min(420px,calc(100vw - 32px));max-height:45vh;overflow:auto;background:#150c2b;color:#fff;padding:16px;border:1px solid #ec4899;border-radius:12px;font:13px/1.7 sans-serif;white-space:pre-wrap;box-sizing:border-box";
+      // 一括値下げの欄と同じ白地＋テーマ色の枠。色はポップアップの「ボタンの色」に合わせる（未設定は紫）。
+      box.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(420px,calc(100vw - 32px));max-height:45vh;overflow:auto;background:#fff;color:#303038;padding:0;border:1px solid var(--fm-panel-line,#d8c8f5);border-radius:10px;box-shadow:0 10px 30px #0000001f;font:13px/1.7 sans-serif;text-align:left;box-sizing:border-box";
       document.body.append(box);
     }
     box.replaceChildren();
-    const close = document.createElement("button"); close.type = "button"; close.textContent = "閉じる"; close.style.cssText = "float:right;background:transparent;color:#fff;border:0;text-decoration:underline;cursor:pointer;margin-left:12px"; close.onclick = () => box?.remove();
-    const body = document.createElement("div"); body.textContent = message; box.append(close, body);
+    const head = document.createElement("div");
+    // 上端の細い線だけ実行中ブロックと同じテーマ色にして、どのテーマか分かるようにする。
+    head.style.cssText = "position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:10px 10px 7px 14px;background:var(--fm-meter,linear-gradient(135deg,#7c3aed,#ec4899)) top/100% 3px no-repeat,var(--fm-surface,#faf7ff);border-bottom:1px solid var(--fm-surface-line,#eee6fb);color:#18181b;font-weight:700";
+    const brand = document.createElement("span"); brand.textContent = "フリマネ";
+    brand.style.cssText = "padding:2px 7px;border-radius:4px;background:var(--fm-chip-bg,#ede5ff);color:var(--fm-strong,#6d28d9);font-size:11px;line-height:1.5;letter-spacing:.04em";
+    const title = document.createElement("span"); title.textContent = "コピー出品";
+    const close = document.createElement("button"); close.type = "button"; close.textContent = "閉じる"; close.style.cssText = "margin-left:auto;padding:1px 10px;border:1px solid #d4d4d8;border-radius:6px;background:#fff;color:#52525b;font:500 12px/1.6 sans-serif;cursor:pointer"; close.onclick = () => box?.remove();
+    head.append(brand, title, close);
+    const body = document.createElement("div"); body.textContent = message; body.style.cssText = "padding:10px 14px 12px;white-space:pre-wrap"; box.append(head, body);
     if (item) {
-      const details = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = "元の商品情報を見る";
+      const details = document.createElement("details"); details.style.cssText = "margin:0 14px 12px;padding-top:8px;border-top:1px solid #ececf0";
+      const summary = document.createElement("summary"); summary.textContent = "元の商品情報を見る"; summary.style.cssText = "cursor:pointer;color:var(--fm-strong,#6d28d9);font-weight:600";
       const content = document.createElement("div"); content.textContent = `商品名：${item.title}\n価格：${item.price.toLocaleString()}円\nカテゴリ：${item.categoryPath.join(" > ")}\n状態：${item.condition}\n配送：${item.shippingMethod}\n発送元：${item.shippingFrom}\n日数：${item.shippingDays}\nブランド：${item.brand}\nサイズ：${item.size}\n\n説明：\n${item.description}`;
+      content.style.cssText = "margin-top:6px;color:#3f3f46;white-space:pre-wrap";
       details.append(summary, content); box.append(details);
     }
   }
@@ -115,7 +125,7 @@
     wrap.style.cssText = "display:block;clear:both;margin:0;padding:6px 0 10px;background:#fff;max-width:100%;line-height:1.5";
     const button = document.createElement("button"); button.type = "button";
     button.textContent = `${source.platform === "mercari" ? "Yahoo!フリマ" : "メルカリ"}にコピー出品`;
-    button.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:4px 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:#e52e88;font:500 12px/1.6 sans-serif;cursor:pointer;text-align:left";
+    button.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:4px 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--fm-strong,#6d28d9);font:500 12px/1.6 sans-serif;cursor:pointer;text-align:left";
     // Lucide Copyの線画。ブランドロゴは追加しない。
     button.insertAdjacentHTML("afterbegin", '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>');
     button.onclick = async event => {

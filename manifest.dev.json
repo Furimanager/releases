@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Furimanager (Dev)",
   "description": "Development manifest for local Furimanager testing",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7nZC0bCXq142JrzUMlqYbQx1ENnoJkXW9azOGoWbTi3cSfA65nUGnLFIap64T5cxz0YDkTrpliX8CT5kl8DdYO/EdAlMLgxhc9mSSNt9DE0nNOWxcUPwn+n3gFDqCjRvxZ492fU+J4yvLo1ENXvJBUV0/vNDGRMhthhBpOKe3otDPia+5Q2Il1AyUUxIL4pJsx3qQl0L4k5tCgZonn+CoPRENgq85luwvnMO7clzxcPOaJW/ZWj1zWeiszh+qvYDZkDPwjqI3gWr395/Q5fm7gcc8dvFwtpddskNIKGWycYtPXGPm9CXw3V5Rykq+eFAauEzpnd/v1y2XCmDfyPXyQIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",
@@ -38,6 +38,12 @@
     "https://*.vercel.app/*"
   ],
   "content_scripts": [
+    {
+      "matches": ["https://jp.mercari.com/*", "https://paypayfleamarket.yahoo.co.jp/*", "https://paypayfleamarket-sec.yahoo.co.jp/item/add*"],
+      "js": ["src/extension-theme.js"],
+      "css": ["src/extension-theme.css"],
+      "run_at": "document_start"
+    },
     {
       "matches": ["https://paypayfleamarket.yahoo.co.jp/*", "https://paypayfleamarket-sec.yahoo.co.jp/item/add*"],
       "js": ["src/cross-listing.js", "src/yahoo-fleamarket-dom.js", "src/yahoo-fleamarket.js"],
@@ -80,8 +86,12 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/research-page-fetcher.js", "icons/icon-48.png"],
+      "resources": ["src/research-page-fetcher.js", "icons/icon-48.png", "icons/research-offer/card-background-wide.webp", "icons/research-offer/phone-glow-wide.webp"],
       "matches": ["https://jp.mercari.com/*"]
+    },
+    {
+      "resources": ["icons/tora-rosettes.svg"],
+      "matches": ["https://jp.mercari.com/*", "https://paypayfleamarket.yahoo.co.jp/*", "https://paypayfleamarket-sec.yahoo.co.jp/*"]
     }
   ],
   "action": {

@@ -24,7 +24,33 @@
         <p class="hero-card__description hero-card__description--login">
           フリマの売上・利益・仕入れ管理を、見やすくまとめて確認できる管理ツールです。
         </p>
+        <!-- ボタンの色はいつも出しておくと操作の邪魔なので、パレットを押したときだけ開く（2026-10-31）。 -->
+        <button id="themeToggleButton" class="hero-card__theme-button" type="button" aria-expanded="false" aria-controls="themePanel" aria-label="ボタンの色を選ぶ" title="ボタンの色">
+          <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+            <path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" />
+            <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" />
+            <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
+            <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" />
+            <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
+          </svg>
+          <span class="hero-card__theme-label" aria-hidden="true">カラー</span>
+        </button>
       </header>
+
+      <section id="themePanel" class="panel theme-card" role="dialog" aria-label="ボタンの色" hidden>
+        <div class="panel__header">
+          <div>
+            <p class="panel__eyebrow">Theme</p>
+            <h2 class="panel__title">ボタンの色</h2>
+          </div>
+          <p id="themeCurrent" class="research-card__state">紫</p>
+        </div>
+        <p class="research-card__description">
+          メルカリ・Yahoo!フリマに出る、値下げ・再出品などのワンクリック操作ボタンの色を選べます。
+        </p>
+        <div id="themeOptions" class="theme-options"></div>
+        <button id="themeApplyButton" class="theme-card__apply" type="button">適用</button>
+      </section>
 
       <section class="auth-card" aria-live="polite">
         <div class="auth-card__login-heading">
@@ -99,7 +125,7 @@
         <div class="panel__header">
           <div>
             <p class="panel__eyebrow">Research</p>
-            <h2 class="panel__title">リサーチ機能</h2>
+            <h2 class="panel__title">セラーレーダー</h2>
           </div>
           <p id="researchFeatureState" class="research-card__state">確認中</p>
         </div>
@@ -107,7 +133,11 @@
           メルカリの出品者ページを開いた時に、リサーチを自動で起動するか切り替えます。
         </p>
         <label class="research-toggle-row">
-          <span>
+          <svg class="research-toggle-row__icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.34-4.34" />
+          </svg>
+          <span class="research-toggle-row__text">
             <strong>リサーチを自動起動</strong>
             <small>使いたい時だけONにすると、意図しない取得を防げます</small>
           </span>
@@ -152,6 +182,7 @@
     </main>
 
     <script src="config.js"></script>
+    <script src="src/extension-theme.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

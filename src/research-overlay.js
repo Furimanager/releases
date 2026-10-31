@@ -7,6 +7,8 @@
   const FURIMANE_MAX_RETRY_COUNT = 3;
   const FURIMANE_DEFAULT_FETCH_STRATEGY = "api";
   const FURIMANE_DEFAULT_APP_URL = "https://furimanager.app.furimakaikei.com";
+  const FURIMANE_RESEARCH_OFFER_ID = "furimane-research-offer";
+  const FURIMANE_RESEARCH_CHECKOUT_PATH = "/dashboard/research?offer=research";
   const FURIMANE_READY_DELAY_MS = 250;
   const FURIMANE_ROUTE_SYNC_DELAY_MS = 250;
   const FURIMANE_MAX_INLINE_INSERT_RETRY_COUNT = 12;
@@ -341,7 +343,7 @@
     return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : null;
   }
   function isRetryableResearchErrorKind(kind) {
-    return !["auth", "plan", "limit", "rate_limit", "payload_too_large", "update_required", "maintenance"].includes(kind);
+    return !["auth", "limit", "rate_limit", "payload_too_large", "update_required", "maintenance"].includes(kind);
   }
   function canContinueResearchWithoutAccessCheck(error, api) {
     const message = getResearchErrorMessage(error);
@@ -434,9 +436,9 @@
         };
       case "plan":
         return {
-          title: "\u30EA\u30B5\u30FC\u30C1\u8FFD\u52A0\u30D7\u30E9\u30F3\u3067\u3054\u5229\u7528\u3044\u305F\u3060\u3051\u307E\u3059",
-          description: "\u3053\u306E\u6A5F\u80FD\u306F\u30EA\u30B5\u30FC\u30C1\u8FFD\u52A0\u30D7\u30E9\u30F3\u52A0\u5165\u5F8C\u306B\u5229\u7528\u3067\u304D\u307E\u3059\u3002",
-          actionLabel: "\u30D7\u30E9\u30F3\u3092\u78BA\u8A8D\u3059\u308B"
+          title: "\u30EA\u30B5\u30FC\u30C1\u306E\u5229\u7528\u72B6\u6CC1\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F",
+          description: "\u6642\u9593\u3092\u304A\u3044\u3066\u3001\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002",
+          actionLabel: "\u518D\u8A66\u884C\u3059\u308B"
         };
       case "limit":
         return {
@@ -511,6 +513,135 @@
       }
     });
   }
+  let researchOfferKeydownHandler = null;
+  const OFFER_ICON_PATHS = {
+    chart: '<path d="M5 21v-6"/><path d="M12 21V9"/><path d="M19 21V3"/>',
+    trend: '<path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/>',
+    bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+    arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'
+  };
+  function createOfferElement(tag, className, text) {
+    const element = document.createElement(tag);
+    element.className = className;
+    if (text !== void 0) element.textContent = text;
+    return element;
+  }
+  function createOfferIcon(name) {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    icon.classList.add("furimane-offer__icon");
+    icon.innerHTML = OFFER_ICON_PATHS[name];
+    return icon;
+  }
+  function getExtensionAssetUrl(path) {
+    return globalThis.chrome?.runtime?.getURL?.(path) ?? path;
+  }
+  function getResearchOfferTrialNote(trial) {
+    if (!trial || trial.kind !== "eligible") {
+      return null;
+    }
+    const days = trial.days;
+    return trial.hasStandardFeatures ? { lead: `\u7121\u6599\u4F53\u9A13\uFF08${days}\u65E5\u9593\uFF09\u304C\u4F7F\u7528\u3067\u304D\u307E\u3059\u3002\u30EA\u30B5\u30FC\u30C1\u306F${days}\u65E5\u95930\u5186`, rest: "\u3001\u305D\u306E\u5F8C\u306F\u6708\u984D2,480\u5186\u3067\u6BCE\u6708\u81EA\u52D5\u66F4\u65B0\u3067\u3059\u3002" } : { lead: `\u7121\u6599\u4F53\u9A13\uFF08${days}\u65E5\u9593\uFF09\u304C\u4F7F\u7528\u3067\u304D\u307E\u3059\u3002\u4F53\u9A13\u4E2D\u306F\u30B9\u30BF\u30F3\u30C0\u30FC\u30C9\u306E\u5168\u6A5F\u80FD\u30820\u5186`, rest: "\u3002\u7D42\u4E86\u5F8C\u306F\u30EA\u30B5\u30FC\u30C1\uFF08\u6708\u984D2,480\u5186\uFF09\u3060\u3051\u304C\u7D9A\u304D\u307E\u3059\u3002" };
+  }
+  function closeResearchOffer() {
+    document.getElementById(FURIMANE_RESEARCH_OFFER_ID)?.remove();
+    if (researchOfferKeydownHandler) {
+      document.removeEventListener("keydown", researchOfferKeydownHandler, true);
+      researchOfferKeydownHandler = null;
+    }
+  }
+  function showResearchOffer(trial) {
+    closeResearchOffer();
+    const appUrl = getOverlayWindow().FurimanagerResearchApi?.getAppUrl?.() ?? FURIMANE_DEFAULT_APP_URL;
+    const trialNote = getResearchOfferTrialNote(trial);
+    const root = createOfferElement("section", "furimane-offer");
+    root.id = FURIMANE_RESEARCH_OFFER_ID;
+    root.setAttribute("role", "dialog");
+    root.setAttribute("aria-labelledby", "furimane-offer-title");
+    root.style.backgroundImage = `url("${getExtensionAssetUrl("icons/research-offer/card-background-wide.webp")}")`;
+    const bar = createOfferElement("div", "furimane-offer__bar");
+    bar.append(createOfferElement("p", "furimane-offer__bar-text", "\u4ECA\u6708\u306E\u7121\u6599\u67A0\u3092\u4F7F\u3044\u5207\u308A\u307E\u3057\u305F"));
+    const close = createOfferElement("button", "furimane-offer__close", "\xD7");
+    close.type = "button";
+    close.setAttribute("aria-label", "\u9589\u3058\u308B");
+    close.addEventListener("click", closeResearchOffer);
+    bar.append(close);
+    const top = createOfferElement("div", "furimane-offer__top");
+    const copy = createOfferElement("div", "furimane-offer__copy");
+    const eyebrow = createOfferElement("p", "furimane-offer__eyebrow");
+    eyebrow.append(createOfferElement("span", "furimane-offer__eyebrow-label", "\u30BB\u30E9\u30FC\u30EC\u30FC\u30C0\u30FC"), createOfferElement("span", "furimane-offer__pill", "\u7121\u5236\u9650"));
+    const title = createOfferElement("h2", "furimane-offer__title");
+    title.id = "furimane-offer-title";
+    const titleSecond = createOfferElement("span", "furimane-offer__title-line", "\u56DE\u6570");
+    titleSecond.append(createOfferElement("span", "furimane-offer__underline", "\u7121\u5236\u9650\u306B"), "\u3002");
+    title.append(createOfferElement("span", "furimane-offer__title-line", "\u30EA\u30B5\u30FC\u30C1\u3092\u3001"), titleSecond);
+    const chips = createOfferElement("ul", "furimane-offer__chips");
+    for (const [icon, label] of [["chart", "90\u65E5\u5206\u306E\u58F2\u308C\u884C\u304D"], ["trend", "\u5229\u76CA\u30B7\u30DF\u30E5\u30EC\u30FC\u30B7\u30E7\u30F3"], ["bookmark", "\u5546\u54C1\u3092\u4FDD\u5B58"]]) {
+      const chip = createOfferElement("li", "furimane-offer__chip");
+      chip.append(createOfferIcon(icon), label);
+      chips.append(chip);
+    }
+    copy.append(eyebrow, title, createOfferElement("p", "furimane-offer__lead", "\u6C17\u306B\u306A\u308B\u51FA\u54C1\u8005\u3092\u3001\u6B21\u3005\u30EA\u30B5\u30FC\u30C1\u3002"), chips);
+    const phone = createOfferElement("img", "furimane-offer__phone");
+    phone.src = getExtensionAssetUrl("icons/research-offer/phone-glow-wide.webp");
+    phone.alt = "";
+    phone.setAttribute("aria-hidden", "true");
+    top.append(copy, phone);
+    const value = createOfferElement("div", "furimane-offer__value");
+    const term = (label, strong) => {
+      const box = createOfferElement("div", "furimane-offer__term");
+      const labelElement = createOfferElement("p", "furimane-offer__term-label", label);
+      labelElement.append(createOfferElement("strong", "", strong));
+      const amount = createOfferElement("p", "furimane-offer__term-value", "2,480");
+      amount.append(createOfferElement("small", "", "\u5186"));
+      box.append(labelElement, amount);
+      return box;
+    };
+    const valueNote = createOfferElement("p", "furimane-offer__value-note", "\u5229\u76CA2,480\u5186\u306E\u5546\u54C1\u30921\u70B9\u8CA9\u58F2\u3067\u304D\u308C\u3070\u3001");
+    valueNote.append(document.createElement("br"), "\u6708\u984D\u6599\u91D1\u5206\u306B\u3002");
+    value.append(term("\u5546\u54C11\u70B9\u306E", "\u5229\u76CA"), createOfferElement("span", "furimane-offer__equals", "\uFF1D"), term("\u30EA\u30B5\u30FC\u30C1", "\u6708\u984D"), valueNote);
+    const action = createOfferElement("div", "furimane-offer__action");
+    const price = createOfferElement("div", "furimane-offer__price");
+    const priceMain = createOfferElement("p", "furimane-offer__price-main", "2,480");
+    priceMain.append(createOfferElement("small", "", "\u5186 / \u6708"));
+    price.append(priceMain, createOfferElement("p", "furimane-offer__price-sub", "\u7A0E\u8FBC\u30FB\u8FFD\u52A0\u30AA\u30D7\u30B7\u30E7\u30F3"));
+    const ctaArea = createOfferElement("div", "furimane-offer__cta-area");
+    const cta = createOfferElement("a", "furimane-offer__cta", trial?.kind === "used" ? "\u7121\u5236\u9650\u3067\u30EA\u30B5\u30FC\u30C1\u3092\u7D9A\u3051\u308B" : "\u30EA\u30B5\u30FC\u30C1\u3092\u8FFD\u52A0\u3059\u308B");
+    cta.href = `${appUrl}${FURIMANE_RESEARCH_CHECKOUT_PATH}`;
+    cta.target = "_blank";
+    cta.rel = "noopener noreferrer";
+    cta.append(createOfferIcon("arrow"));
+    cta.addEventListener("click", closeResearchOffer);
+    ctaArea.append(cta);
+    if (trialNote) {
+      const note = createOfferElement("p", "furimane-offer__trial-note");
+      note.append(createOfferElement("span", "furimane-offer__underline furimane-offer__trial-lead", trialNote.lead), trialNote.rest);
+      ctaArea.append(note);
+    } else {
+      ctaArea.append(createOfferElement("p", "furimane-offer__trial-note furimane-offer__trial-note--plain", "\u6BCE\u6708\u81EA\u52D5\u66F4\u65B0\u3067\u3059\u3002\u3044\u3064\u3067\u3082\u89E3\u7D04\u3067\u304D\u307E\u3059\u3002"));
+    }
+    action.append(createOfferElement("p", "furimane-offer__brand", "\u30BB\u30E9\u30FC\u30EC\u30FC\u30C0\u30FC"), price, ctaArea);
+    const foot = createOfferElement("div", "furimane-offer__foot");
+    const referral = createOfferElement("a", "furimane-offer__referral", "\u53CB\u9054\u7D39\u4ECB\u3067\u30EA\u30B5\u30FC\u30C1\u56DE\u6570\u3092\u5897\u3084\u3059");
+    referral.href = `${appUrl}/referral`;
+    referral.target = "_blank";
+    referral.rel = "noopener noreferrer";
+    foot.append(referral, createOfferElement("p", "furimane-offer__foot-note", "\u7121\u6599\u67A0\u306F\u7FCC\u67081\u65E5\u306B\u30EA\u30BB\u30C3\u30C8\u3002\u203B\u753B\u50CF\u306F\u30A4\u30E1\u30FC\u30B8\u3067\u3059"));
+    root.append(
+      bar,
+      top,
+      value,
+      action,
+      foot,
+      createOfferElement("p", "furimane-offer__stop", "\u3053\u306E\u6848\u5185\u306E\u81EA\u52D5\u8868\u793A\u3092\u6B62\u3081\u305F\u3044\u5834\u5408\u306F\u3001Chrome\u62E1\u5F35\u306E\u300C\u30EA\u30B5\u30FC\u30C1\u3092\u81EA\u52D5\u8D77\u52D5\u300D\u3092OFF\u306B\u3057\u3066\u304F\u3060\u3055\u3044\u3002")
+    );
+    document.body.append(root);
+    researchOfferKeydownHandler = (event) => {
+      if (event.key === "Escape") closeResearchOffer();
+    };
+    document.addEventListener("keydown", researchOfferKeydownHandler, true);
+  }
   function renderResearchError(container, error, retry, retryCount = 0) {
     const kind = getResearchErrorKind(error);
     if (kind === "limit") {
@@ -534,11 +665,12 @@
       wrapper.appendChild(detail);
     }
     if (kind === "auth") {
-      wrapper.appendChild(createButton(copy.actionLabel, openExtensionLoginPage, "secondary"));
-    } else if (kind === "plan" || kind === "limit") {
+      wrapper.appendChild(createButton(copy.actionLabel, openExtensionLoginPage, "primary"));
+    } else if (kind === "limit") {
+      showResearchOffer(cachedResearchAccess?.value.trial ?? null);
       const link = document.createElement("a");
       link.className = "furimane-research-overlay__link-button";
-      link.href = `${appUrl}/dashboard/research`;
+      link.href = `${appUrl}${FURIMANE_RESEARCH_CHECKOUT_PATH}`;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = copy.actionLabel;
@@ -886,6 +1018,7 @@
     currentAbortController?.abort();
     currentAbortController = null;
     document.getElementById(FURIMANE_OVERLAY_ID)?.remove();
+    closeResearchOffer();
     removeOpenButton();
   }
   async function syncResearchOverlayForCurrentPage() {
